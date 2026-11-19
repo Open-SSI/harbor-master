@@ -264,7 +264,7 @@ Little, and all of it readable. The rule is that nothing is stored twice, and no
     tasks/registry.json                    which benchmarks are registered here
     sources/<benchmark>/                   the benchmarks, cloned at their pinned release
     store/                                 a copy of each accepted task's archive, and the ones unpacked for a benchmark run
-    stats/                                 what hm stats wrote: stats.md and a CSV per table. stats/simulated/ for simulated runs
+    stats/                                 what hm stats wrote: stats.md, and tables/ with a CSV per table. stats/simulated/ for simulated runs
     simulated/                             what simulated runs recorded: its own ledger/ and index.toml. Never in the index
     runs/<run id>/
       run.json                               counts per stage, cost per tier, calls
@@ -838,28 +838,28 @@ Everything a paper needs about how the system performed is computed from the led
 - **`usage`**: what the model tiers were called for. Every model call is counted under the benchmark and the stage it was made in (adapt, triage, rank, probe, audit, fix, report, or the session for typed questions), with its tier, its model, its tokens and its cost. A run writes the counts as it goes, so one that is cut short loses at most its last stretch. Without this, ranking left no trace of what it cost.
 - **`skip`**: a benchmark that a run left out, with the reason. The same reason from the same person twice in a row is one record.
 
-**`hm stats`** writes `stats.md` and one CSV per table into `.hm/stats/`, which git ignores and nothing uploads.
+**`hm stats`** writes a report and its data into `.hm/stats/`, which git ignores and nothing uploads:
 
-- **It covers everyone.** The ledger in a clone holds every person's records, so the tables are totals over all people, benchmarks and tasks. In a shared index it pulls first, so that what others pushed is in. `--no-pull` uses the ledger as it is on the machine, and a pull that fails falls back to that and says so.
-- **It says what it read.** The report opens with a source table, also written as `source.csv`: the commit of the index's repository that holds exactly these records, where the index is shared, whether it pulled, how many local commits are not pushed, a checksum over every ledger file, whether the ledger passes `hm ledger verify`, the protocols covered, the number of records and of people, and the tool's version. With the commit, anyone can make the same tables again: check that commit out and run `hm stats --no-pull`. Two copies of a ledger with the same checksum hold the same records.
+```
+.hm/stats/
+  stats.md            the report: four sections, totals only
+  tables/             one CSV per table, in full
+```
+
+- **It covers everyone.** The ledger in a clone holds every person's records, so the figures are totals over all people, benchmarks and tasks. In a shared index it pulls first, so that what others pushed is in. `--no-pull` uses the ledger as it is on the machine, and a pull that fails falls back to that and says so.
+- **It says what it read.** The last section, also written as `tables/source.csv`, gives the commit of the index's repository that holds exactly these records, where the index is shared, whether it pulled, how many local commits are not pushed, a checksum over every ledger file, whether the ledger passes `hm ledger verify`, the protocols covered, the number of records and of people, and the tool's version. With the commit, anyone can make the same report again: check that commit out and run `hm stats --no-pull`.
 - **Where no commit holds the records**, the report says so and gives the checksum alone: in an index that is not shared, and for simulated runs.
 
-The tables:
+The report has four sections, each answering one question with totals. Whatever is per benchmark, per task or per event is in the tables.
 
-| Table | Says |
-|---|---|
-| `source` | What the tables were made from: commit, checksum, records, people, protocols |
-| `summary` | The whole curation in one column: tasks at each end of the funnel, calls, tokens and cost per tier, runs through Harbor and their cost, total cost and cost per accepted task, decisions by a person, skips |
-| `funnel` | Per benchmark: tasks submitted, failed a gate, not selected, selected, dropped at each later stage, in progress, report ready, accepted, rejected, replaced, and its last skip |
-| `gates` | Per benchmark and admission gate: tasks asked, dropped there, and sent up a tier |
-| `usage_by_stage`, `usage` | Model calls, tokens and cost per stage and tier, over all benchmarks and per benchmark |
-| `trials` | Runs through Harbor by purpose, agent and model: how many, passed, infrastructure errors, tokens, cost, container hours. The probe's mutant runs are not recorded one by one, so they are not in it |
-| `adapters` | Each adapter built or given up: who wrote the last version, in how many rounds, at what cost |
-| `human_counts`, `human` | Each decision a person made that left a record (a brief, an approval, a verdict, an adapter given up or fixed, a lock), counted by kind and listed in order |
-| `skips` | Each time a run left a benchmark out, and why |
-| `tasks` | One row per task: status, the stage it reached, the reason, trials, cost. In the CSV only |
+| Section | Shows | Tables behind it |
+|---|---|---|
+| 1. What happened to the tasks | The funnel from submitted to accepted, with shares. The same per benchmark, with a note on a skipped or abandoned one. Why tasks stopped, by stage and reason. What each admission gate did | `benchmarks`, `drops`, `gates`, `tasks` |
+| 2. What it cost | Calls, tokens and cost per model tier, the runs through Harbor, the total, and the cost per accepted task. Model calls by stage. Runs through Harbor by purpose and agent | `models`, `models_by_benchmark`, `harbor_runs` |
+| 3. What people had to do | Decisions by a person, counted by kind. Benchmarks a run left out and why. Adapters built or given up | `decisions`, `decision_counts`, `skips`, `adapters` |
+| 4. Where these figures come from | How the figures are computed, the source table, and the list of files | `source`, `summary` |
 
-With `--simulated` the same tables are made from the simulated runs' own records, into `.hm/stats/simulated/`, and the report says at its top that every figure in it is made up.
+With `--simulated` the same report is made from the simulated runs' own records, into `.hm/stats/simulated/`, and it says at its top that every figure in it is made up.
 
 **Not recorded yet.** How often the system asked a person something and how long it waited, and the commands a person typed to steer a run (`/pause`, `/stop`, `/budget`, `/recheck`). Those are in each run's `session.log` on the machine that ran it. Seconds per stage per task are in each run's `tasks.jsonl`, also local.
 

@@ -210,59 +210,177 @@ def summary(events: list[dict]) -> Table:
     return ["figure", "value"], rows
 
 
-TABLES = {     # file name -> (title, what it says, the function)
-    "summary": ("Summary", "The whole curation in one column.", summary),
-    "funnel": ("Where the tasks went", "Per benchmark: tasks submitted, and where each stands or stopped.", funnel),
-    "gates": ("Admission gates", "Per benchmark and gate: tasks asked, dropped there, and sent up a tier.", gates),
-    "usage_by_stage": ("Model calls and cost, by stage and tier", "Over all benchmarks. A call is one request to a model.", usage_by_stage),
-    "usage": ("Model calls and cost, by benchmark", "The same, per benchmark, with the model that was called.", usage),
-    "trials": ("Runs through Harbor", "The reference solution, the no-op and the agents: how many runs, how they went, what they cost. Runs of the probe's mutants are not recorded one by one: their outcome is in the probe's record.", trials),
-    "adapters": ("Adapters", "Each adapter that was built or given up.", adapters),
-    "human_counts": ("Decisions by a person, counted", "How many times a person had to decide something, by kind.", human_counts),
-    "human": ("Decisions by a person", "Each one, in order.", human),
-    "skips": ("Skipped benchmarks", "Each time a run left a benchmark out, and why.", skips),
-    "tasks": ("Every task", "One row per task. In the CSV only: the table is too long to read here.", tasks),
+def drops(events: list[dict]) -> Table:
+    """Per benchmark: at which stage tasks stopped, and why."""
+    count: dict[tuple[str, str, str], int] = defaultdict(int)
+    for s in fold(events).values():
+        if s.status == "not_selected":
+            count[(s.benchmark, "select", "ranked under the cap")] += 1
+        elif s.status == "dropped":
+            count[(s.benchmark, s.stage or "?", s.reason.replace("_", " ").replace(":", ": ") or "no reason recorded")] += 1
+        elif s.status in ("rejected", "replaced"):
+            count[(s.benchmark, "verdict", f"{s.status} by a reviewer")] += 1
+    order = ["triage", "select", *DROPS, "verdict"]
+    rows = [[b, stage, reason, n] for (b, stage, reason), n in sorted(count.items(), key=lambda kv: (kv[0][0], _order(kv[0][1], order), -kv[1]))]
+    return ["benchmark", "stage", "reason", "tasks"], rows
+
+
+TABLES = {     # file name -> what it holds, and the function that makes it
+    "summary": ("The whole curation as figures and values.", summary),
+    "benchmarks": ("Per benchmark: tasks submitted, and where each stands or stopped.", funnel),
+    "drops": ("Per benchmark: at which stage tasks stopped, and why.", drops),
+    "gates": ("Per benchmark and admission gate: tasks asked, dropped there, and sent up a tier.", gates),
+    "models": ("Model calls, tokens and cost per stage and tier, over all benchmarks.", usage_by_stage),
+    "models_by_benchmark": ("The same per benchmark, with the model that was called.", usage),
+    "harbor_runs": ("Runs through Harbor by purpose, agent and model.", trials),
+    "decisions": ("Every decision a person made that left a record, in order.", human),
+    "decision_counts": ("Those decisions counted by kind.", human_counts),
+    "skips": ("Every time a run left a benchmark out, and why.", skips),
+    "adapters": ("Every adapter that was built or given up.", adapters),
+    "tasks": ("One row per task: status, stage reached, reason, trials, cost.", tasks),
 }
-IN_CSV_ONLY = {"tasks"}
+DATA = "tables"         # the folder, beside stats.md, that holds one CSV per table
 
 
 def tables(events: Iterable[dict]) -> dict[str, Table]:
     events = list(events)
-    return {name: fn(events) for name, (_, _, fn) in TABLES.items()}
+    return {name: fn(events) for name, (_, fn) in TABLES.items()}
 
 
-def _cell(v: object) -> str:
-    text = f"{v:,}" if isinstance(v, int) and not isinstance(v, bool) else f"{v:,.4f}".rstrip("0").rstrip(".") if isinstance(v, float) else str(v)
-    return text.replace("|", "\\|").replace("\n", " ")
+# ----- the report -----
+
+def _n(v: object) -> str:
+    return f"{v:,}" if isinstance(v, int) and not isinstance(v, bool) else str(v)
+
+
+def _usd(x: float) -> str:
+    return "$0" if not x else "<$0.01" if x < 0.01 else f"${x:,.2f}"
+
+
+def _share(part: int, whole: int) -> str:
+    return f"{100 * part / whole:.0f}%" if whole else ""
+
+
+def _table(head: list[str], rows: list[list], right: set[int] | None = None) -> list[str]:
+    """A Markdown table. Columns in `right` are numbers, set against the right edge."""
+    right = right if right is not None else {i for i in range(1, len(head))}
+    clean = lambda v: str(v).replace("|", "\\|").replace("\n", " ")  # noqa: E731
+    return ["| " + " | ".join(head) + " |", "|" + "|".join("---:" if i in right else "---" for i in range(len(head))) + "|",
+            *("| " + " | ".join(clean(v) for v in row) + " |" for row in rows), ""]
 
 
 def markdown(found: dict[str, Table], title: str, notes: list[str], source: list[list] | None = None) -> str:
-    out = [f"# {title}", "", *notes, ""]
+    """The report: what happened to the tasks, what it cost, what people had to do, and where the figures come from.
+    It shows totals. Every table in full, and the ones too long to read, are CSV files in the folder beside it."""
+    figure = dict(found["summary"][1])
+    data = lambda name: f"`{DATA}/{name}.csv`"  # noqa: E731
+    out = [f"# {title}", ""]
+    out += [f"> {note}" for note in notes[:1] if note.startswith("**SIMULATED")] + [""]
+    made = dict(source or [])
+    out += [f"{_n(figure['records'])} records of {made.get('people with records', '?')} "
+            f"{'person' if str(made.get('people with records')) == '1' else 'people'}, made on {made.get('made', '')}. "
+            f"Every table below is also a CSV file in `{DATA}/`, in full.", ""]
+
+    # 1. the tasks
+    total = figure["tasks submitted"]
+    selected = sum(r[4] for r in found["benchmarks"][1])
+    waiting_on_run = sum(r[10] for r in found["benchmarks"][1])
+    out += ["## 1. What happened to the tasks", ""]
+    out += _table(["", "tasks", "of all"], [
+        ["submitted", _n(total), "100%" if total else ""],
+        ["failed an admission gate", _n(figure["tasks that failed a gate"]), _share(figure["tasks that failed a gate"], total)],
+        ["passed the gates, ranked under the cap", _n(figure["tasks not selected"]), _share(figure["tasks not selected"], total)],
+        ["selected for the costly stages", _n(selected), _share(selected, total)],
+        ["— dropped after selection", _n(figure["tasks dropped after selection"]), _share(figure["tasks dropped after selection"], total)],
+        ["— report waiting for a verdict", _n(figure["reports waiting for a verdict"]), _share(figure["reports waiting for a verdict"], total)],
+        ["— **accepted**", f"**{_n(figure['tasks accepted'])}**", _share(figure["tasks accepted"], total)],
+        ["— rejected or replaced by a reviewer", _n(figure["tasks rejected or replaced"]), _share(figure["tasks rejected or replaced"], total)],
+        ["passed the gates, not ranked or not finished yet", _n(waiting_on_run), _share(waiting_on_run, total)],
+    ])
+    out += ["**By benchmark**", ""]
+    out += _table(["benchmark", "submitted", "passed the gates", "selected", "dropped later", "waiting for a verdict", "accepted", "rejected", "note"],
+                  [[r[0], _n(r[1]), _n(r[1] - r[2]), _n(r[4]), _n(sum(r[5:10])), _n(r[11]), _n(r[12]), _n(r[13] + r[14]),
+                    "abandoned: no adapter passes" if r[16] == "abandoned" else f"skipped: {r[16].replace('_', ' ')}" if r[16] else ""]
+                   for r in found["benchmarks"][1]], right={1, 2, 3, 4, 5, 6, 7})
+    if found["drops"][1]:
+        why: dict[tuple[str, str], int] = defaultdict(int)
+        for _, stage, reason, n in found["drops"][1]:
+            why[(stage, reason)] += n
+        order = ["triage", "select", *DROPS, "verdict"]
+        out += ["**Why tasks stopped**", ""]
+        out += _table(["stage", "reason", "tasks"], [[stage, reason, _n(n)] for (stage, reason), n in
+                                                    sorted(why.items(), key=lambda kv: (_order(kv[0][0], order), -kv[1]))], right={2})
+    if found["gates"][1]:
+        gate: dict[str, list[int]] = defaultdict(lambda: [0, 0, 0])
+        for _, name, asked, dropped, up in found["gates"][1]:
+            gate[name] = [gate[name][0] + asked, gate[name][1] + dropped, gate[name][2] + up]
+        out += ["**Admission gates**", ""]
+        out += _table(["gate", "tasks asked", "dropped here", "sent up a tier"], [[g, *map(_n, v)] for g, v in sorted(gate.items())])
+    out += [f"Per benchmark: {data('benchmarks')}, {data('drops')}, {data('gates')}. Per task: {data('tasks')}.", ""]
+
+    # 2. the cost
+    out += ["## 2. What it cost", ""]
+    tiers = [t for t in TIER_ORDER if f"{t} tier calls" in figure]
+    runs = found["harbor_runs"][1]
+    cost_rows = [[f"{t} tier", _n(figure[f"{t} tier calls"]) + " calls", _n(figure[f"{t} tier tokens"]), _usd(figure[f"{t} tier cost"])] for t in tiers]
+    cost_rows.append(["runs through Harbor", _n(figure["runs through Harbor"]) + " runs", _n(sum(r[6] + r[7] for r in runs)), _usd(figure["runs through Harbor, cost"])])
+    cost_rows.append(["**total**", "", "", f"**{_usd(figure['total cost'])}**"])
+    if figure["cost per accepted task"] != "":
+        cost_rows.append(["per accepted task", "", "", _usd(figure["cost per accepted task"])])
+    out += _table(["", "how many", "tokens", "cost"], cost_rows)
+    if found["models"][1]:
+        stage: dict[str, dict] = {}
+        for name, tier, calls, tokens, cost in found["models"][1]:
+            row = stage.setdefault(name, {"tokens": 0, "cost": 0.0})
+            row[tier], row["tokens"], row["cost"] = row.get(tier, 0) + calls, row["tokens"] + tokens, row["cost"] + cost
+        cols = [t for t in TIER_ORDER if any(t in row for row in stage.values())]
+        out += ["**Model calls by stage**", ""]
+        out += _table(["stage", *(f"{t} calls" for t in cols), "tokens", "cost"],
+                      [[name, *(_n(row.get(t, 0)) if row.get(t) else "" for t in cols), _n(row["tokens"]), _usd(row["cost"])]
+                       for name, row in sorted(stage.items(), key=lambda kv: _order(kv[0], STAGE_ORDER))])
+    if runs:
+        out += ["**Runs through Harbor**", ""]
+        out += _table(["what for", "agent", "model", "runs", "passed", "errors", "tokens", "cost", "container hours"],
+                      [[r[0], r[1], r[2] or "", _n(r[3]), _n(r[4]), _n(r[5]), _n(r[6] + r[7]), _usd(r[8]), r[9]] for r in runs], right={3, 4, 5, 6, 7, 8})
+        out += ["The probe's mutant runs are not recorded one by one, so they are not counted here.", ""]
+    out += [f"In full: {data('models')}, {data('models_by_benchmark')}, {data('harbor_runs')}.", ""]
+
+    # 3. the people
+    out += ["## 3. What people had to do", ""]
+    counts = found["decision_counts"][1]
+    people_rows = [[kind, _n(n)] for kind, n in counts] or [["none recorded", ""]]
+    people_rows.append(["**all decisions by a person**", f"**{_n(figure['decisions by a person'])}**"])
+    out += _table(["decision", "times"], people_rows)
+    out += [f"Made by {_n(figure['people who made them'])} {'person' if figure['people who made them'] == 1 else 'people'}. "
+            f"Each one, with who and when: {data('decisions')}.", ""]
+    if found["skips"][1]:
+        out += ["**Benchmarks a run left out**", ""]
+        out += _table(["benchmark", "who", "why"], [[r[1], r[2], r[4]] for r in found["skips"][1]], right=set())
+    if found["adapters"][1]:
+        out += ["**Adapters**", ""]
+        out += _table(["benchmark", "outcome", "written by", "model rounds", "result", "cost"],
+                      [[r[1], r[2], r[3], _n(r[5]), r[6], _usd(r[7])] for r in found["adapters"][1]], right={3, 5})
+
+    # 4. where it comes from
+    out += ["## 4. Where these figures come from", ""]
+    out += [note for note in notes if not note.startswith("**SIMULATED")] + [""]
     if source:
-        out += ["## Source", "", "What these tables were made from, so that they can be made again. Data: `source.csv`.", "",
-                "| | |", "|---|---|", *(f"| {_cell(k)} | {_cell(v)} |" for k, v in source), ""]
-    for name, (heading, what, _) in TABLES.items():
-        head, rows = found[name]
-        out += [f"## {heading}", "", what + f" Data: `{name}.csv`.", ""]
-        if name in IN_CSV_ONLY:
-            out += [f"{len(rows)} rows.", ""]
-        elif not rows:
-            out += ["Nothing recorded.", ""]
-        else:
-            out += ["| " + " | ".join(head) + " |", "|" + "|".join("---:" if all(isinstance(r[i], (int, float)) for r in rows) else "---"
-                                                                 for i in range(len(head))) + "|"]
-            out += ["| " + " | ".join(_cell(v) for v in row) + " |" for row in rows]
-            out.append("")
+        out += _table(["", ""], [[k, _n(v)] for k, v in source], right=set())
+    out += ["**Files**", ""]
+    out += _table(["file", "holds"], [[f"`{DATA}/{name}.csv`", what] for name, (what, _) in TABLES.items()]
+                  + ([[f"`{DATA}/source.csv`", "What the tables were made from."]] if source else []), right=set())
     return "\n".join(out)
 
 
 def write(found: dict[str, Table], folder: Path, title: str, notes: list[str], source: list[list] | None = None) -> Path:
-    """Write stats.md and one CSV per table into `folder`. `source` says what they were made from. Returns the Markdown file."""
-    folder.mkdir(parents=True, exist_ok=True)
-    if source:
-        found = {"source": (["what", "value"], source), **found}
-    for name, (head, rows) in found.items():
-        with (folder / f"{name}.csv").open("w", newline="") as f:
+    """Write the report, stats.md, and beside it a folder with one CSV per table. Returns the report's path."""
+    data = folder / DATA
+    data.mkdir(parents=True, exist_ok=True)
+    for old in [*folder.glob("*.csv"), *data.glob("*.csv")]:        # nothing stale from an earlier layout or run
+        old.unlink()
+    everything = {**found, **({"source": (["what", "value"], source)} if source else {})}
+    for name, (head, rows) in everything.items():
+        with (data / f"{name}.csv").open("w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow([h.replace(" ", "_").replace(",", "") for h in head])
             writer.writerows(rows)

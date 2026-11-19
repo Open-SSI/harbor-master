@@ -153,7 +153,7 @@ def stats(simulated: bool = Simulated,
     console.print(tb)
     console.print(f"From {len(events):,} records of {len({e['runner'] for e in events})} people"
                   + (f", at commit {at['commit'][:12]}" if covered else "") + f". Pulled first: {pulled}.", highlight=False)
-    console.print(f"Wrote {path} and {len(found) + 1} CSV files beside it.", highlight=False)
+    console.print(f"Wrote the report, {path}, and {len(found) + 1} tables as CSV in {path.parent / ledger_mod.stats.DATA}.", highlight=False)
     console.print(f"[{theme.MU}]They are on this machine only: git ignores that folder, and nothing uploads it.[/]")
     mention_simulated(ws, simulated)
 
