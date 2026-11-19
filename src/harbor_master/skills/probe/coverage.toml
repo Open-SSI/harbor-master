@@ -1,0 +1,13 @@
+# Does the instruction state everything the tests check? (DESIGN.md Section 4, stage 4.)
+# Asked once per selected task, before any frontier trial. The decision tier answers from the
+# instruction and the tests' text. When it is unsure, the worker tier reads the task's files.
+# An unstated check is repaired by stating it in the instruction.
+
+system = "You check benchmark tasks for a curated index. A task is fair only if a solver who reads the instruction, and never sees the tests, can know everything the tests will check. Decide from the instruction and the tests as given, not from guesses."
+
+[coverage]
+question = "Do the tests check anything a careful solver could not know from the instruction? 'covered' means every file name, location, format, column or key name, unit, tolerance and threshold the tests rely on is stated in the instruction or follows plainly from it. 'unstated' means the tests rely on at least one such thing the instruction never states."
+
+[coverage.criteria]
+covered = "Everything the tests rely on is stated in the instruction, or follows plainly from it."
+unstated = "The tests rely on a file name, location, format, name, unit, tolerance or threshold that the instruction never states."

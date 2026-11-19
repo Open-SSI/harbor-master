@@ -25,6 +25,7 @@ class BenchState:
     tasks: list[Task] = field(default_factory=list)
     phase: str = "queued"        # queued | fetch | adapt | review | triage | brief | ranking | signoff | ready | skipped
     entry: dict | None = None    # its entry on the index's benchmark list, when it is on it
+    reported: dict[str, dict] = field(default_factory=dict)    # per task, what the benchmark's own results say
     skip: str = ""               # why it was skipped, as one word for the record: fetch_failed, no_brief, ...
     detail: str = ""
     selected: int = 0

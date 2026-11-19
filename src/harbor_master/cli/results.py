@@ -159,19 +159,43 @@ def stats(simulated: bool = Simulated,
 
 
 @app.command(name="roster")
-def roster_cmd(workspace: Optional[Path] = Workspace):
-    """The agent configurations to benchmark on the index, from its roster.toml."""
+def roster_cmd(what: str = typer.Argument("", help="presets: the configurations that have a short name. agents: every agent Harbor has."),
+               workspace: Optional[Path] = Workspace):
+    """The agent configurations to benchmark on the index, from its roster.toml. Also the presets a roster may name."""
     from ..core import keys
-    from ..core.config import roster
-    ws = need_workspace(workspace)
+    from ..core.config import RosterEntry, presets, roster
+    if what == "agents":
+        listed = keys.harbor_agents()
+        if not listed:
+            fail("Harbor could not be read. Install Harbor-Master again: uv tool install --editable .")
+        tb = Table(header_style=theme.MU, border_style=theme.BORDER)
+        for col in ("agent", "reads its key from"):
+            tb.add_column(col)
+        for name, names in listed.items():
+            if name not in ("oracle", "nop"):
+                tb.add_row(name, " or ".join(keys.needs(name)) or f"[{theme.MU}]Harbor names none: say which as `key` in the entry[/]")
+        console.print(tb)
+        console.print(f"[{theme.MU}]{len(listed) - 2} agents, from the installed Harbor. A roster entry may use any of them: "
+                      "give agent, model and name. The ones with a short name: /roster presets[/]")
+        return
+    if what not in ("", "presets"):
+        fail("Use /roster, /roster presets or /roster agents.")
+    entries = [RosterEntry.model_validate({"use": n}) for n in presets()] if what else roster(need_workspace(workspace))
     tb = Table(header_style=theme.MU, border_style=theme.BORDER)
     for col in ("name", "agent", "version", "model", "effort", "needs", "key found"):
         tb.add_column(col)
-    for c in roster(ws):
-        found = f"[{theme.TE}]yes[/]" if keys.found(c.key, c.agent) else f"[{theme.RD}]no[/]"
-        tb.add_row(c.name, c.agent, c.version, c.model, c.reasoning_effort, c.key, found)
+    for c in entries:
+        found = f"[{theme.TE}]yes[/]" if keys.found(c.key, c.agent, c.model) else f"[{theme.RD}]no[/]"
+        agent = c.agent if keys.known_agent(c.agent) else f"[{theme.RD}]{c.agent} (not in Harbor)[/]"
+        tb.add_row(c.name, agent, c.version or f"[{theme.MU}]newest[/]", c.model, c.reasoning_effort,
+                   c.key or " or ".join(keys.needs(c.agent, c.model)), found)
     console.print(tb)
-    console.print(f"[{theme.MU}]Run one with: hm eval --config NAME. What is still to run: hm todo[/]")
+    if what:
+        console.print(f"[{theme.MU}]A roster takes one in a line: use = \"NAME\" under \\[\\[config]] in roster.toml. A field written beside "
+                      "it, such as version, replaces the preset's. Every agent Harbor has: /roster agents[/]")
+    else:
+        console.print(f"[{theme.MU}]Run one with: hm eval --config NAME. What is still to run: hm todo. "
+                      "Configurations with a short name: /roster presets[/]")
 
 
 @app.command()

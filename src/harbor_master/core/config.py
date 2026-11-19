@@ -5,9 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import tomllib
+from functools import lru_cache
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 LOCAL = ".hm"                      # this machine's own files inside the clone of an index. Git ignores the folder
 CONFIG_NAME = "hm.toml"            # in .hm: parallelism and budget. The user's to change
@@ -42,6 +43,7 @@ class Triage(BaseModel):
     exclude_formats: list[str] = ["multiple_choice", "question_answering", "short_answer"]
     allow_llm_judge_verifier: bool = False
     max_verifier_seconds: int = 300
+    max_reported_pass_rate: float = 0.5   # a task that a model is already reported to solve more often than this is dropped
 
 
 class Adapt(BaseModel):
@@ -68,18 +70,39 @@ class Verify(BaseModel):
     parity_tasks: int = 5      # parity runs with the worker tier's model
 
 
+@lru_cache(maxsize=None)
+def presets() -> dict[str, dict]:
+    """The agent configurations that have a short name: presets.toml, beside this file."""
+    return tomllib.loads((Path(__file__).parent / "presets.toml").read_text()).get("preset", {})
+
+
 class SuiteEntry(BaseModel):
+    """One agent configuration: a Harbor agent and a model. `use = "NAME"` takes a preset's fields,
+    and any field written beside it replaces the preset's."""
     agent: str
     model: str
     reasoning_effort: str = ""
     version: str = ""          # the agent's own version. Pin it: a different build is a different request
+    key: str = ""              # the variable in secrets.env it needs
+    env: dict[str, str] = {}   # settings passed to the agent. Never a key
+
+    @model_validator(mode="before")
+    @classmethod
+    def _preset(cls, data):
+        if not isinstance(data, dict) or "use" not in data:
+            return data
+        known = presets()
+        if data["use"] not in known:
+            raise ValueError(f"no preset is named {data['use']!r}. The presets: {', '.join(known)}. See: hm roster presets")
+        out = {**known[data["use"]], **{k: v for k, v in data.items() if k != "use"}}
+        if "name" in cls.model_fields:
+            out.setdefault("name", data["use"])     # on a roster, the preset's name is the configuration's name
+        return out
 
 
 class RosterEntry(SuiteEntry):
     """One agent configuration to benchmark on the index: roster.toml in the index repository."""
     name: str
-    key: str = ""                    # the variable in secrets.env it needs
-    env: dict[str, str] = {}         # settings passed to the agent. Never a key
 
 
 def roster(workspace: Path) -> list[RosterEntry]:
@@ -97,6 +120,10 @@ class Difficulty(BaseModel):
     max_pass_rate: float = 0.40
     max_agent_hours: float = 4.0       # the most one agent trial may run. A task's own limit applies when it is shorter
     early_stop: bool = True
+    cheap_solve: bool = True           # the worker tier's model tries first. A task it solves every time never reaches the suite
+    cheap_trials: int = 2              # its tries, run side by side. The task is dropped only if all of them pass
+    cheap_agent: str = "claude-code"   # the agent that model runs in
+    cheap_agent_hours: float = 1.0     # the most that one of them may run
 
 
 class Fix(BaseModel):

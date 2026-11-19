@@ -24,7 +24,7 @@ def make_benchmark(root: Path, name: str, count: int, seed: int = 0) -> Path:
         area = rng.choice(["docking", "spectra", "retrosynthesis"])
         (d / "instruction.md").write_text(f"Task {i} on {area}. Write and run code to produce results.csv.\n")
         (d / "task.toml").write_text(tomli_w.dumps({"task": {"name": f"{name}/t{i:04d}"}, "metadata": {"field": area}}))
-        (d / "tests" / "test.sh").write_text(f"# verifier {i}\n")
+        (d / "tests" / "test.sh").write_text(f"# verifier {i}\ntest -s results.csv\n")
         (d / "solution" / "solve.sh").write_text(f"# solution {i}\n")
     return root / name
 

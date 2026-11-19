@@ -87,6 +87,32 @@ MUTANT_SCHEMA = {
 }
 
 
+def tests_text(task: Task, limit: int = 14000) -> str:
+    """The tests' own text, for the question of whether the instruction states what they check."""
+    folder, out, left = task.path / "tests", [], limit
+    for f in (sorted(p for p in folder.rglob("*") if p.is_file() and "__pycache__" not in p.parts) if folder.is_dir() else ()):
+        if left <= 0 or f.stat().st_size > 200_000:
+            continue
+        try:
+            text = f.read_text()
+        except UnicodeDecodeError:
+            continue                # data, not a test
+        out.append(f"--- {f.relative_to(folder)}\n{text[:left]}")
+        left -= len(text)
+    return "\n".join(out) or "(no readable tests)"
+
+
+COVERAGE = ["covered", "unstated"]
+REPORTED_SCHEMA = {
+    "type": "object", "additionalProperties": False, "required": ["source", "tasks"],
+    "properties": {
+        "source": {"type": "string", "description": "The files the results were read from, or why there are none."},
+        "tasks": {"type": "array", "items": {
+            "type": "object", "additionalProperties": False, "required": ["task", "pass_rate", "model"],
+            "properties": {"task": {"type": "string", "description": "The task's name, exactly as listed."},
+                           "pass_rate": {"type": "number", "description": "From 0 to 1."},
+                           "model": {"type": "string", "description": "The model or agent that reached it."}}}}},
+}
 LATER = ["verify", "probe", "difficulty", "audit"]
 
 
@@ -106,6 +132,14 @@ class RealBackend(Backend):
                 raise NotImplementedBackend(
                     f"The {tier} tier is set to provider {provider!r}, which is not built. The decision tier takes "
                     "\"openrouter\" (Jev) or \"claude-agent-sdk\". The worker and frontier tiers take \"claude-agent-sdk\".")
+
+    async def _ask(self, tier: str, system: str, prompt: str, schema: dict, cwd: Path | None = None,
+                   max_turns: int = 6) -> claude.Reply:
+        """One Claude session on a tier, counted under it."""
+        name = self.cfg.tiers.chat if tier == "chat" else tier
+        reply = await claude.ask(self.cfg.tier(name).model, system, prompt, schema, cwd=cwd, max_turns=max_turns)
+        self.usage(name, reply.cost, reply.tokens)
+        return reply
 
     def _state(self, task: Task) -> dict:
         """What Jev is shown. Kept under its 32,000-byte fast path."""
@@ -198,6 +232,36 @@ class RealBackend(Backend):
         mutants = [{**m, "files": {f["path"]: f["content"] for f in m["files"]}} for m in r.data["mutants"]]
         return {"mutants": mutants, "cost": r.cost, "tokens": r.tokens, "skill": skill.tag}
 
+    async def reported(self, benchmark: str, repo: Path, names: list[str]) -> dict:
+        skill = skills.load("triage/reported-results")
+        listed = "\n".join(names[:1500]) + (f"\n(and {len(names) - 1500} more: they are named like these)" if len(names) > 1500 else "")
+        r = await self._ask("worker", skill.system, skill.fill(benchmark=benchmark, n=len(names), names=listed),
+                            REPORTED_SCHEMA, cwd=repo, max_turns=40)
+        tasks = {t["task"]: {"pass_rate": t["pass_rate"], "model": t.get("model", "")} for t in r.data.get("tasks", [])}
+        return {"tasks": tasks, "source": r.data.get("source", ""), "cost": r.cost, "tokens": r.tokens, "skill": skill.tag}
+
+    async def covers(self, task: Task, first: Decision | None = None) -> Decision:
+        if "probe" in self.assumed:
+            d = await self.sim.covers(task, first)
+            d.cost = 0.0
+            return d
+        skill = skills.load("probe/coverage")
+        asked, tests = skill.data["coverage"], tests_text(task)
+        if first is None and self.jev:
+            state = {"task": describe(task, 6000)[:12000], "tests": tests}
+            answers, cost, tokens = await jev.decisions(self.cfg.tiers.decision.model, state,
+                                                        {"coverage": jev.choice(asked["question"], asked["criteria"])})
+            self.usage("decision", cost, tokens)
+            return self._jev_decision(COVERAGE, answers.get("coverage") or {}, cost, tokens, skill.tag)
+        tier = "decision" if first is None else "worker"
+        said = "" if first is None else (f"A first check said \"{first.value or '(no answer)'}\" with probability "
+                                           f"{first.prob:.2f}. Read the task's files where that helps.\n\n")
+        r = await self._ask(tier, skill.data["system"], f"{asked['question']}\n\n{said}{describe(task)}\n\nTESTS\n{tests}",
+                            _choice_schema(COVERAGE, rationale=True), cwd=task.path if first is not None else None,
+                            max_turns=12 if first is not None else 6)
+        return Decision(r.data["value"], float(r.data["confidence"]), tier, self.cfg.tier(tier).model, r.cost, r.tokens,
+                        r.data.get("rationale", ""), skill=skill.tag)
+
     async def answer(self, question: str, context: str) -> str:
         skill = skills.load("session/answer")
         schema = {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"],
@@ -246,9 +310,9 @@ class RealBackend(Backend):
         r = await harbor.run(task.path, self.jobs, "nop")
         return self._settle(r, keep=r.passed or bool(r.error), label=f"{task.name}.noop.{uuid.uuid4().hex[:6]}")
 
-    async def run_mutant(self, task: Task, mutant: dict) -> bool:
-        if "probe" in self.assumed:
-            return await self.sim.run_mutant(task, mutant)
+    async def run_mutant(self, task: Task, mutant: dict, stage: str = "probe") -> bool:
+        if stage in self.assumed:
+            return await self.sim.run_mutant(task, mutant, stage)
         copy = harbor.with_solution(task.path, mutant["files"], self.scratch)
         try:
             result = await harbor.run(copy, self.jobs, "oracle")
@@ -259,13 +323,13 @@ class RealBackend(Backend):
         self._settle(result, keep=finding or bool(result.error), label=f"{task.name}.mutant-{mutant['id']}")
         return result.passed
 
-    async def run_trial(self, task: Task, entry: SuiteEntry, index: int) -> TrialResult:
+    async def run_trial(self, task: Task, entry: SuiteEntry, index: int, max_hours: float = 0) -> TrialResult:
         if "difficulty" in self.assumed:
             result = await self.sim.run_trial(task, entry, index)
             result.cost, result.tokens_in, result.tokens_out, result.seconds = 0.0, 0, 0, 0.0
             return result
         r = await harbor.run(task.path, self.jobs, entry.agent, entry.model,
                              {"version": entry.version, "reasoning_effort": entry.reasoning_effort}, with_keys=True,
-                             max_agent_seconds=self.cfg.difficulty.max_agent_hours * 3600,
-                             agent_env=getattr(entry, "env", None))
+                             max_agent_seconds=(max_hours or self.cfg.difficulty.max_agent_hours) * 3600,
+                             agent_env=entry.env or None, key=entry.key)
         return self._settle(r, keep=True, label=f"{task.name}.{entry.agent}.{entry.model}.{index}")

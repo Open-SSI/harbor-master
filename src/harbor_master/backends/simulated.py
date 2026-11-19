@@ -29,6 +29,9 @@ def latent(task: Task) -> dict:
         "hard": r.random() < 0.30,
         "fixable": r.random() < 0.65,
         "importance": r.random(),
+        # drawn last, so that adding them left every earlier draw as it was
+        "shortcut": r.random() < 0.05 and "verifier" not in fixed,       # the verifier accepts an empty output
+        "unstated": r.random() < 0.07 and "design" not in fixed,         # the tests check what the instruction omits
     }
 
 
@@ -111,6 +114,21 @@ class SimulatedBackend(Backend):
         return {"mutants": [{"id": f"m{i}", "kind": "wrong" if i < n // 2 else "equivalent"} for i in range(n)],
                 "cost": 0.30, "tokens": 22_000}
 
+    async def covers(self, task: Task, first: Decision | None = None) -> Decision:
+        value = "unstated" if latent(task)["unstated"] else "covered"
+        if first is not None:
+            self._spend("worker", 0.05, 6_000)
+            await self._wait(0.3)
+            return Decision(value, 0.97, "worker", self.cfg.tiers.worker.model, 0.05, 6_000,
+                            "Read the tests against the instruction.")
+        r = _rng("covers", task.digest)
+        tokens = max(400, len(task.instruction) // 2)
+        cost = tokens * 0.042e-6
+        self._spend("decision", cost, tokens)
+        await self._wait(0.02)
+        return Decision(value, 0.70 + 0.14 * r.random() if r.random() < 0.08 else 0.90 + 0.099 * r.random(),
+                        "decision", self.cfg.tiers.decision.model, cost, tokens)
+
     async def audit(self, task: Task, round_no: int) -> Decision:
         r = _rng("audit", task.digest, round_no)
         flaw = latent(task)["design_flaw"]
@@ -165,20 +183,26 @@ class SimulatedBackend(Backend):
         await self._wait(0.5)
         return TrialResult(False, 0.0, 0, 0, 0.0, 20.0)
 
-    async def run_mutant(self, task: Task, mutant: dict) -> bool:
+    async def run_mutant(self, task: Task, mutant: dict, stage: str = "probe") -> bool:
         """True when the verifier accepted the mutant."""
         await self._wait(0.3)
+        if mutant["id"].startswith("trivial"):
+            return latent(task)["shortcut"] and mutant["id"] == "trivial-empty"
         if mutant["kind"] == "equivalent":
             return True
         return latent(task)["verifier_broken"] and mutant["id"] == "m1"
 
-    async def run_trial(self, task: Task, entry: SuiteEntry, index: int) -> TrialResult:
+    async def run_trial(self, task: Task, entry: SuiteEntry, index: int, max_hours: float = 0) -> TrialResult:
         r = _rng("trial", task.digest, entry.agent, entry.model, index)
         p = 0.08 if latent(task)["hard"] else 0.85
+        cheap = all(entry.model != e.model for e in self.cfg.difficulty.suite)     # a smaller model: the cheap first tries
+        if cheap:
+            p = 0.02 if latent(task)["hard"] else 0.6
         passed = r.random() < p
         tokens_in, tokens_out = r.randint(150_000, 900_000), r.randint(8_000, 40_000)
         seconds = r.uniform(240, 1500)
         await self._wait(r.uniform(2.0, 5.0))
+        price_in, price_out = (0.4e-6, 2e-6) if cheap else (2.0e-6, 10e-6)
         return TrialResult(passed, float(passed), tokens_in, tokens_out,
-                           round(tokens_in * 2.0e-6 + tokens_out * 10e-6, 2), seconds,
+                           round(tokens_in * price_in + tokens_out * price_out, 2), seconds,
                            agent_version=entry.version)      # a simulation runs the version it was asked for

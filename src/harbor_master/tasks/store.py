@@ -56,6 +56,9 @@ class Folder:
         shutil.copyfile(self.root / k, dest)
         return True
 
+    def remove(self, k: str) -> None:
+        (self.root / k).unlink(missing_ok=True)
+
 
 class HuggingFace:
     """A store that is a Hugging Face dataset repository. Writing to it needs HF_TOKEN, each person's own.
@@ -99,6 +102,10 @@ class HuggingFace:
     def put(self, k: str, file: Path) -> None:
         self._guard("upload to", lambda: self.api.upload_file(path_or_fileobj=str(file), path_in_repo=k, repo_id=self.repo,
                                                               repo_type="dataset", commit_message=f"add {k}"))
+
+    def remove(self, k: str) -> None:
+        self._guard("delete from", lambda: self.api.delete_file(k, repo_id=self.repo, repo_type="dataset",
+                                                                commit_message=f"remove {k}"))
 
     def get(self, k: str, dest: Path) -> bool:
         if not self.has(k):
@@ -170,6 +177,20 @@ def put(ws: Path, cfg, benchmark: str, name: str, digest: str, task_dir: Path) -
     if not there.has(k):
         there.put(k, here.root / k)
     return True, f"kept in {there.where}"
+
+
+def drop(ws: Path, cfg, benchmark: str, name: str, digest: str) -> str:
+    """Take a task that was cut from the index out of the index's store. The archive on this machine stays,
+    so that restoring the task can put it back. Returns one line on what was done."""
+    k, there = key(benchmark, name, digest), remote(cfg)
+    if there is None:
+        return "this index names no task store"
+    if not there.has(k):
+        return f"it was not in {there.where}"
+    if not local(ws).has(k):            # keep the only copy that will be left
+        there.get(k, local(ws).root / k)
+    there.remove(k)
+    return f"removed from {there.where}"
 
 
 def fetch(ws: Path, cfg, benchmark: str, name: str, digest: str) -> Path | None:

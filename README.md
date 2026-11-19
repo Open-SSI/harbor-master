@@ -23,18 +23,19 @@ Three model tiers share the work. A fast **decision** model makes every gate and
 For each benchmark, Harbor-Master:
 
 1. **Fetches** it at its pinned release, and **adapts** it if its tasks are not in Harbor format.
-2. **Admits** tasks that an agent must execute, that ship a reference solution, and that a program can verify quickly. Multiple choice and question answering are filtered out.
+2. **Admits** tasks that an agent must execute, that ship a reference solution, and that a program can verify quickly. Multiple choice and question answering are filtered out. An agent reads the results the benchmark itself reports, and a task that a model already solves more than half the time is dropped. So is a task whose answer is within the agent's reach.
 3. **Ranks** the admitted tasks by importance under a brief from its lead: each is scored once, and the ones near the top are then compared in pairs. It **selects** the top ones: at most 24 per benchmark, and at most a quarter of it. The lead approves the selection before any trial is spent.
-4. **Verifies and probes** each selected task: the reference solution must pass, a no-op must fail, and the verifier must reject wrong answers and accept right ones in another form.
-5. **Filters by difficulty**: two frontier agents attempt the task, for at most 4 hours a trial, and it is kept only if at most 40% of trials pass.
-6. **Audits and repairs**: an auditor reads the trajectories, and broken tasks are fixed and sent back through the checks.
+4. **Verifies and probes** each selected task: the reference solution must pass, a no-op and an empty or placeholder output must fail, the verifier must reject wrong answers and accept right ones in another form, and the instruction must state everything the tests check.
+5. **Filters by difficulty**, once per task: a smaller model tries twice first, and a task it solves both times is dropped. Then two frontier agents attempt the task, for at most 4 hours a trial, and it is kept only if at most 40% of trials pass.
+6. **Audits and repairs**: an auditor reads the trajectories, and broken tasks are fixed and sent back through the cheap checks. The frontier trials are not run again.
 7. **Reports** to a reviewer, who accepts, rejects, or sends back. A benchmark may have at most 8 tasks in the index, so a ninth must replace one.
+8. **The final cut** is made by hand: the owner and the leads bring the accepted set down to the index's size with `/tasks cut TASK <why>`, which also takes the task out of the list and the task store.
 
 Tasks run in parallel in working cells. A person decides three things: the brief, the selection, and each verdict. The design, the cost estimate, and the reasons behind each choice are in [DESIGN.md](DESIGN.md).
 
 ## Quick start
 
-You need Python 3.11 or later and [uv](https://docs.astral.sh/uv/). A simulated run needs no keys and no Docker.
+You need Python 3.12 or later and [uv](https://docs.astral.sh/uv/). A simulated run needs no keys and no Docker.
 
 **1. Install it, and open it.**
 
@@ -109,7 +110,7 @@ Type `hm` in the folder where the index should go. The tip names each of these i
 | `/keys`, then `/doctor` | Creates the keys file for real runs, and shows which keys are found |
 | `/run` | Curates. The first time, and after any change to a setting, a skill or the roster, it shows what is not locked and asks to lock it |
 
-The agents to compare are listed in `roster.toml`, which explains each entry. `/run --simulate` tries it all on simulated models, with no lock and no keys. An index that was not shared when it was made is shared later with `/connect URL`.
+The agents to compare are listed in `roster.toml`, which explains each entry. An entry can be one line, `use = "claude-opus-5.5"`: `/roster presets` lists the ten configurations that have a short name, and `/roster agents` every agent the installed Harbor has, any of which a roster may use. `/run --simulate` tries it all on simulated models, with no lock and no keys. An index that was not shared when it was made is shared later with `/connect URL`.
 
 ### Join one
 
@@ -203,7 +204,7 @@ Real runs call models and need keys. `hm keys init` copies [`secrets.env.example
 | Step | Commands |
 |---|---|
 | Start | `/init`, `/indexes`, `/join`, `/new`, `/use`, `/demo` |
-| Set up an index | `/index`, `/benchmarks [add URL, remove ID]`, `/roster`, `/skills [diff, adopt]`, `/protocol`, `/lock`, `/connect`, `/entry`, `/contributors [add HANDLE KEY, remove HANDLE]`, `/whoami` |
+| Set up an index | `/index`, `/benchmarks [add URL, remove ID]`, `/roster [presets, agents]`, `/skills [diff, adopt]`, `/protocol`, `/lock`, `/connect`, `/entry`, `/contributors [add HANDLE KEY, remove HANDLE, role HANDLE lead]`, `/whoami` |
 | This machine | `/keys`, `/doctor` |
 | Run | `/run`, `/adapt`, `/claims` |
 | Results | `/status`, `/leaderboard`, `/todo`, `/tasks [push, pull]`, `/stats`, `/credits`, `/sync`, `/verify` |

@@ -11,13 +11,16 @@ class TaskState:
     task_id: str
     benchmark: str
     digest: str = ""
-    status: str = "in_progress"  # in_progress | dropped | not_selected | report_ready | accepted | rejected | replaced | contested
+    status: str = "in_progress"  # in_progress | dropped | not_selected | report_ready | accepted | rejected | replaced | contested | cut
     stage: str = ""
     reason: str = ""
     passes: int = 0
     trials: int = 0
     cost: float = 0.0
     verdicts: list[dict] = field(default_factory=list)
+
+
+CUT = ("cut", "restore")     # the verdicts of the final cut, which only the owner or a lead signs
 
 
 def fold(events: Iterable[dict]) -> dict[str, TaskState]:
@@ -55,9 +58,17 @@ def fold(events: Iterable[dict]) -> dict[str, TaskState]:
             s.passes += int(bool(e.get("passed")))
         elif t == "repair":
             s.digest = e.get("new_digest", s.digest)
-            s.passes = s.trials = 0  # results under the old digest no longer describe this task
+            # the difficulty trials stand: they are run once per task, and a repair does not run them again
         elif t == "report":
             s.status, s.stage = "report_ready", "report"
+        elif t == "verdict" and e.get("value") in CUT:
+            # The final cut: the owner or a lead takes an accepted task out of the index, or puts it back.
+            if e["value"] == "cut" and s.status == "accepted":
+                s.status, s.reason = "cut", e.get("reason", "")
+            elif e["value"] == "restore" and s.status == "cut":
+                s.status, s.reason = "accepted", ""
+        elif t == "verdict" and s.status == "cut":
+            s.verdicts.append(e)                        # a cut task stays out until it is restored
         elif t == "verdict":
             s.verdicts.append(e)
             latest: dict[str, dict] = {}                # a reviewer's later verdict replaces their earlier one
@@ -123,6 +134,12 @@ def leaderboard(events: Iterable[dict], roster: list[dict] | None = None,
     events = list(events)
     index = {s.task_id: s.digest for s in fold(events).values() if s.status == "accepted"}
     rows: dict[tuple, dict] = {}
+    back = {(e["task_id"], e.get("new_digest")): e.get("old_digest") for e in events if e["type"] == "repair"}
+    earlier: dict[str, set[str]] = {}
+    for tid, digest in index.items():
+        while (tid, digest) in back and back[(tid, digest)] not in earlier.setdefault(tid, set()):
+            digest = back[(tid, digest)]
+            earlier[tid].add(digest)
 
     def row(agent: str, version: str, model: str, effort: str, name: str = "") -> dict:
         return rows.setdefault((agent, version, model, effort), {
@@ -134,8 +151,9 @@ def leaderboard(events: Iterable[dict], roster: list[dict] | None = None,
     for e in events:
         if e["type"] != "trial" or e.get("purpose") not in ("difficulty", "benchmark") or e.get("assumed") or e.get("error"):
             continue
-        if index.get(e["task_id"]) != e["digest"]:
-            continue
+        if index.get(e["task_id"]) != e["digest"] and not (
+                e["purpose"] == "difficulty" and e["digest"] in earlier.get(e["task_id"], ())):
+            continue        # a difficulty trial run before a repair still stands: it is run once per task
         r = row(e.get("agent", ""), e.get("agent_version", ""), e.get("model", ""), e.get("reasoning_effort", ""))
         r["trials"] += 1
         r["runners"].add(e["runner"])

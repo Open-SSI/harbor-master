@@ -2,7 +2,7 @@
 name = "harbor-master"
 version = "0.1.0"
 description = "A multi-agent system that curates benchmarks into an index of hard, verified tasks"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "typer>=0.12",
     "rich>=13.7",
@@ -11,6 +11,7 @@ dependencies = [
     "cryptography>=42",
     "tomli-w>=1.0",
     "claude-agent-sdk>=0.2",
+    "harbor>=0.26.0",               # runs every task and every agent, and names the agents a roster may use
     "huggingface_hub>=0.24",        # the task store: every index keeps its accepted tasks in one
 ]
 

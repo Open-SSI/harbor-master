@@ -43,11 +43,11 @@ So every hand-off can be cached, compared across tiers, and checked by someone e
 | 0 | Intake | Code | Fetches at the pinned commit, computes digests | |
 | 1 | Triage | D, then W when unsure | The admission gates below | A gate fails |
 | 2 | Adapt | W, then F, then a person. Once per benchmark, skipped for Harbor-format input | An adapter with a signed record that it passed, and the tasks it writes (Section 10) | The person abandons the benchmark |
-| 3 | Verify | Code | Reference solution passes twice, a no-op fails, the verifier is fast enough | Still failing after the retry limit |
-| 4 | Probe | W and code | Mutants of the solution test the verifier before any frontier trial | The verifier is wrong and repair fails |
-| 5 | Difficulty | Evaluation suite | 2 frontier agents x 3 trials, in rounds, each at most 4 hours | More than 40% pass |
+| 3 | Verify | Code | Reference solution passes twice, a no-op fails, trivial submissions fail, the verifier is fast enough | Still failing after the retry limit |
+| 4 | Probe | W and code, then D | Mutants of the solution test the verifier. Then one question: does the instruction state everything the tests check | The verifier or the instruction is wrong and repair fails |
+| 5 | Difficulty | Worker model, then the evaluation suite | Two tries by the worker model, side by side. Then 2 frontier agents x 3 trials, in rounds, each at most 4 hours. Run once per task | The worker model solves it both times, or more than 40% pass |
 | 6 | Audit | W; F when unsure and on a sample | Reads trajectories against the rubric, and says whether a failure is the task's, the agent's, or the infrastructure's | Broken and not repairable |
-| 7 | Fix | W; F after two rounds | Repairs the task and returns it to stage 3 | Round limit reached |
+| 7 | Fix | W; F after two rounds | Repairs the task and returns it to stage 3. Stage 5 is not run again | Round limit reached |
 | 8 | Report | W | One report per task: evidence, diffs, cost, recommendation | |
 | 9 | Verdict | A person | Accept, reject, or send back, signed and credited | |
 
@@ -60,6 +60,8 @@ So every hand-off can be cached, compared across tiers, and checked by someone e
 | Verifier | Programmatic and deterministic, not judged by a model or a person | D, then stage 3 |
 | Verifier cost | Finishes within `max_verifier_seconds` on CPU, with no paid API | D estimates, stage 3 measures |
 | Recency | The benchmark's release date is after the cutoff | Code |
+| Reported results | No model is already reported to solve the task more than `max_reported_pass_rate` of the time. A task with no reported result passes | W reads the benchmark's own results once per benchmark, code compares |
+| Leak | No file of the solution, and no test code or answer file, is also in the agent's image. The instruction does not quote the solution | Code |
 | Duplicate | Not in the ledger already | Code, D for near matches |
 | License | Allows use for evaluation | D |
 
@@ -74,16 +76,25 @@ Measured on the 70 tasks of Terminal-Bench-Science: 468 requests, $0.023, 11 sec
 
 **Selection cap.** Only the top `min(top_k, max_fraction x N)` tasks of a benchmark go on to the costly stages: 24 of 1,000, 18 of 70. Selection goes round-robin over sub-areas. The rest are `not_selected`, not dropped.
 
+**Cheap checks before the costly one.** Stage 5 is where the money goes, so everything that can fail a task for cents runs before it, and stage 5 runs once.
+
+- *Trivial submissions* (stage 3, code). Besides the no-op, the task's output files are left empty, filled with a placeholder, and copied from a file that was already there. The output files are those the instruction and the tests both name. A verifier that accepts one goes to repair.
+- *Coverage* (stage 4, one tier-D request, tier W when unsure). If the tests rely on a file name, format, unit or tolerance the instruction never states, the instruction is repaired here, not after the trials.
+- *Cheap solve* (stage 5). The worker tier's model tries `cheap_trials` times side by side, each for at most `cheap_agent_hours`. If every try passes, the task is dropped as `solved_by_worker` and no frontier trial is spent. One pass among failures is not enough. Its tries are not leaderboard results.
+- *Once per task.* Stages 3 and 4 loop through repair until they pass. A repair after stage 5 runs them again and carries the difficulty result forward on a record that names the digest it was measured on. The frontier trials are never run a second time, so a task accepted after such a repair has a difficulty measured before it.
+
 **Early stop** in stage 5: with 6 trials and a 40% threshold, a task is dropped once 3 trials pass and kept once 4 fail.
 
 **The index cap.** A benchmark may have at most `max_per_benchmark` tasks in the index, 8 by default. The cap applies at the verdict: accepting a ninth asks which task it replaces, and signs both verdicts together.
+
+**The final cut.** Accepting is each reviewer's call. Bringing the accepted set down to the index's final size is a judgement over the whole set: difficulty, diversity, and no few benchmarks dominating. It is made by hand, by the owner and by the contributors the owner names as leads (`role = "lead"`, set with `/contributors role HANDLE lead`). `/tasks` shows the accepted tasks and how many each benchmark has. `/tasks cut TASK <why>` signs a `cut` verdict: the task leaves `index.toml` and its archive is deleted from the task store. The cutter's machine keeps a copy, so `/tasks restore TASK` can put it back. `hm ledger verify` rejects a cut signed by anyone else.
 
 ## 5. Where this goes beyond the paper
 
 1. **Verifier probes before frontier trials.** A worker writes mutants of the reference solution: some wrong in a way that matters, some right in another form. The verifier must reject the first and accept the second.
 2. **Calibrated escalation.** Every decision is stored with its probability, and every later overturn is a label. Thresholds can be refit on those labels.
-3. **Sequential difficulty filter**, with early stop and reuse of any valid trial in the ledger.
-4. **Content-addressed record.** A repair changes a digest, so only what depends on it runs again.
+3. **Sequential difficulty filter**, run once per task after a smaller model has tried, with early stop and reuse of any valid trial in the ledger.
+4. **Content-addressed record.** A repair changes a digest, so the cheap checks that depend on it run again. The frontier trials do not.
 5. **Credited human judgement.** A verdict carries who signed it and why, and is never asked for twice.
 
 ## 6. Working cells and parallelism
@@ -219,6 +230,7 @@ The same tool runs agents on the finished index. A benchmark trial is made by th
 
 - **The roster.** `roster.toml` lists the agent configurations to run on every accepted task. Roster times accepted tasks is every slot that should exist. `/todo` shows what is missing.
 - **`hm eval`** runs a configuration on accepted tasks, each at its accepted version. Filled slots are refused.
+- **Agents come from Harbor.** Harbor is a dependency, and its list of agents is the list: any agent the installed Harbor has can be benchmarked, and `/roster agents` shows them with the variables each reads its key from. Harbor names agents, not models, so the pairs with a short name are ours: `core/presets.toml` holds ten configurations, the ones run on Autonomous Science Bench, and `/roster presets` lists them. A roster entry, or an entry of the difficulty suite, takes one with `use = "NAME"`; a field written beside it, such as `version`, replaces the preset's. A trial gets only the keys its own configuration can use.
 - **The leaderboard** is computed from the ledger each time: a configuration's pass rate on each task, averaged over tasks. Infrastructure failures are left out. A configuration that has not run every task is shown as incomplete. The two agents of the difficulty suite are marked, since the tasks were selected against them.
 
 ## 10. Config
@@ -277,10 +289,11 @@ Both are written commented by `/new`. The defaults are in `templates/protocol.to
 | Setting | Default |
 |---|---|
 | `escalation.min_confidence` | 0.85 |
-| `triage.released_after`, `max_verifier_seconds` | 2025-06-01, 300 |
+| `triage.released_after`, `max_verifier_seconds`, `max_reported_pass_rate` | 2025-06-01, 300, 0.5 |
 | `select.top_k`, `max_fraction`, `comparisons_per_task` | 24, 0.25, 12 |
 | `difficulty.suite` | Fable on Claude Code, GPT-6 Astra on Codex, both pinned |
 | `difficulty.trials_per_config`, `max_pass_rate`, `max_agent_hours` | 3, 0.40, 4 |
+| `difficulty.cheap_solve`, `cheap_trials`, `cheap_agent`, `cheap_agent_hours` | true, 2, claude-code, 1 |
 | `adapt.max_rounds`, `fix.max_rounds` | 3, 3 |
 | `index.max_per_benchmark` | 8 |
 | `run.cells`, `max_containers`, `budget_usd` | 4, 16, 200 |
@@ -446,7 +459,8 @@ src/harbor_master/
 **Never run for real:**
 
 - A model writing an adapter, or drafting a benchmark's entry.
-- Agent trials for the difficulty filter, and the audit, repair and report on real trajectories.
+- Agent trials for the difficulty filter, the worker model's first tries, and the audit, repair and report on real trajectories.
+- The agent that reads a benchmark's per-task results, the coverage question on a real model, and trivial submissions through Harbor. The leak scan and the trivial submissions are heuristics, tested on made-up tasks only.
 - The task store against Hugging Face.
 - A benchmark trial through `hm eval`.
 

@@ -117,7 +117,7 @@ class Session:
         if shard is None:
             shard = self._shards[benchmark] = Shard(self.ledger_dir, benchmark, self.ident, self.run_id, self.protocol)
         digest = data.pop("digest_override", None) or (task.digest if task else "")
-        stage = data.get("stage") or {"difficulty": "difficulty", "probe": "probe"}.get(data.get("purpose", ""), "")
+        stage = data.get("stage") or {"difficulty": "difficulty", "cheap_solve": "difficulty", "probe": "probe"}.get(data.get("purpose", ""), "")
         if stage in self.assumed or (type in ("report", "repair") and self.assumed):
             data["assumed"] = True      # never evidence: no accept may rest on it
         if self.sandbox:

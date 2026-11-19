@@ -121,6 +121,15 @@ def tasks_show(ctx: typer.Context, workspace: Optional[Path] = Workspace):
         missing += kept.endswith("no[/]")
         tb.add_row(e["task"], e["digest"][:12], local, kept)
     console.print(tb)
+    per: dict[str, int] = {}
+    for e in entries:
+        per[e["benchmark"]] = per.get(e["benchmark"], 0) + 1
+    console.print(f"{len(entries)} accepted, from {len(per)} benchmark{'s' if len(per) != 1 else ''}: "
+                  + ", ".join(f"{b} {n}" for b, n in sorted(per.items(), key=lambda x: -x[1])), highlight=False)
+    cut = [s.task_id for s in ledger_mod.fold(ledger_mod.Ledger(ws).events).values() if s.status == "cut"]
+    if cut:
+        console.print(f"[{theme.MU}]Cut from the index: {', '.join(cut[:8])}{' and more' if len(cut) > 8 else ''}.[/]", highlight=False)
+    console.print(f"[{theme.MU}]The owner or a lead makes the final cut with /tasks cut TASK <why>, and undoes one with /tasks restore TASK.[/]")
     console.print(f"[{theme.MU}]The store: {there.where if there else 'none named. The owner sets one with /tasks store ORG/NAME'}.[/]")
     if missing:
         console.print(f"[{theme.AM}]{missing} accepted task{'s are' if missing != 1 else ' is'} not in the store.[/] "
@@ -148,6 +157,73 @@ def tasks_push(workspace: Optional[Path] = Workspace):
                   + (f" {len(lacking)} could not be: this machine does not have the accepted version of {', '.join(lacking[:4])}." if lacking else ""))
     if lacking:
         raise typer.Exit(1)
+
+
+def _final(ws: Path, name: str, status: str, value: str, reason: str) -> None:
+    """Sign one verdict of the final cut, rewrite the list of accepted tasks, and share both."""
+    ident = need_identity()
+    me = next((c for c in ledger_mod.load_contributors(ws) if c.get("github") == ident.github), None)
+    if not ledger_mod.can_cut(me):
+        fail(f"The final cut is made by the owner or a lead, and @{ident.github} is neither. The owner names a lead with: "
+             "/contributors role HANDLE lead")
+    cfg, sync = config_mod.load(ws), ledger_mod.Sync(ws, ident.name, ident.github)
+    try:
+        if sync.enabled:
+            sync.pull()
+    except ledger_mod.SyncError as err:
+        fail(str(err))
+    states = [s for s in ledger_mod.fold(ledger_mod.Ledger(ws).events).values()
+              if s.status == status and (s.task_id == name or s.task_id.split("/", 1)[-1] == name)]
+    if len(states) != 1:
+        where = "in the index" if status == "accepted" else "among the tasks that were cut"
+        fail(f"{name} is in more than one benchmark {where}. Name it as BENCHMARK/TASK." if states else
+             f"{name} is not {where}. See: /tasks")
+    s = states[0]
+    benchmark, task = s.task_id.split("/", 1)
+    ledger_mod.Shard(ws, benchmark, ident, ledger_mod.MANUAL, cfg.protocol).append(
+        "verdict", s.task_id, s.digest, value=value, reason=reason, reason_code=value, reviewer=ident.github, tier="human")
+    ledger_mod.write_index(ws)
+    try:
+        if value == "cut":
+            how = store.drop(ws, cfg, benchmark, task, s.digest)
+        else:
+            ok, how = store.put(ws, cfg, benchmark, task, s.digest, _files(ws, {"task": s.task_id, "digest": s.digest}) or Path("/nonexistent"))
+    except store.StoreError as err:
+        how = f"[{theme.AM}]the store was not changed: {str(err)[:200]}[/]. Run this again to finish"
+    try:
+        if sync.enabled:
+            sync.publish(f"{value} {s.task_id}")
+    except ledger_mod.SyncError as err:
+        fail(str(err))
+    left = sum(1 for e in _accepted(ws))
+    word = "Cut" if value == "cut" else "Restored"
+    console.print(f"[{theme.TE}]{word} {s.task_id}[/], signed by @{ident.github}" + (" and shared" if sync.enabled else "")
+                  + f". Store: {how}. {left} task{'s are' if left != 1 else ' is'} in the index now.", highlight=False)
+
+
+@tasks_app.command("cut")
+def tasks_cut(task: str = typer.Argument(..., help="The accepted task to take out of the index."),
+              reason: list[str] = typer.Argument(None, help="Why, in a few words."), workspace: Optional[Path] = Workspace):
+    """Owner or lead: the final cut. Take an accepted task out of the index, its list and its store."""
+    ws = need_workspace(workspace)
+    if not reason:
+        fail(f"Give a reason: /tasks cut {task} <why>")
+    state = next((s for s in ledger_mod.fold(ledger_mod.Ledger(ws).events).values()
+                  if s.status == "cut" and (s.task_id == task or s.task_id.split("/", 1)[-1] == task)), None)
+    if state is not None:           # cut already: only the store may still hold it, after a failed removal
+        try:
+            how = store.drop(ws, config_mod.load(ws), *state.task_id.split("/", 1), state.digest)
+        except store.StoreError as err:
+            fail(str(err))
+        console.print(f"{state.task_id} was cut already. Store: {how}.", highlight=False)
+        return
+    _final(ws, task, "accepted", "cut", " ".join(reason))
+
+
+@tasks_app.command("restore")
+def tasks_restore(task: str = typer.Argument(..., help="A task that was cut."), workspace: Optional[Path] = Workspace):
+    """Owner or lead: put a task that was cut back in the index, its list and its store."""
+    _final(need_workspace(workspace), task, "cut", "restore", "")
 
 
 @tasks_app.command("pull")

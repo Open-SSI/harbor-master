@@ -1,16 +1,30 @@
 # The agent configurations to benchmark on this index. Each one is run on every accepted
 # task, and the leaderboard has one row per entry.
 #
-#   name      what the leaderboard calls it, and what `hm eval --config NAME` takes
-#   key       the variable in secrets.env that this configuration needs
-#   env       settings passed to the agent. Never a key
-#
-# Only the owner changes this file, and locks the change: hm protocol lock
+# The short way: name a preset. /roster presets lists them.
 #
 # [[config]]
-# name = "claude-opus-5.5"
-# agent = "claude-code"
-# model = "claude-opus-5-5"
-# reasoning_effort = "max"
+# use = "claude-opus-5.5"
+#
+# A field written beside `use` replaces the preset's. Pin the agent's version this way, so
+# that results can be repeated:
+#
+# [[config]]
+# use = "claude-opus-5.5"
 # version = "2.1.292"
-# key = "ANTHROPIC_API_KEY"
+#
+# Or write a configuration out in full, with any agent Harbor has (/roster agents):
+#
+#   name      what the leaderboard calls it, and what `hm eval --config NAME` takes
+#   agent     the Harbor agent
+#   model     the model, as that agent names it
+#   key       the variable in secrets.env that this configuration needs
+#   env       settings passed to the agent. Never a key: name one as "${VARIABLE}"
+#
+# [[config]]
+# name = "my-agent"
+# agent = "mini-swe-agent"
+# model = "openrouter/qwen/qwen3.8-27b"
+# key = "OPENROUTER_API_KEY"
+#
+# Only the owner changes this file, and locks the change: /lock

@@ -127,7 +127,7 @@ def terms(session: Session) -> dict[str, str]:
                f"{sel.max_fraction:.0%} of its tasks. A benchmark may have at most {cfg.index.max_per_benchmark} tasks in the index.",
         "gate": "An admission gate is a cheap check a task must pass before it is ranked: it has a reference solution, "
                 "a program can verify it quickly, it is not multiple choice, its license allows use, and it is recent.",
-        "cell": "A working cell carries one task through verify, probe, difficulty, audit and report. Cells run in parallel.",
+        "cell": "A working cell carries one task through verify, probe, difficulty (once), audit and report. Cells run in parallel.",
         "verdict": "A verdict is a reviewer's signed decision on a finished task: /accept ID, /reject ID reason, or "
                    "/sendback ID reason. Start with /review.",
         "simulat": "A simulated run invents every result and spends nothing. No model is called, so answers here are "

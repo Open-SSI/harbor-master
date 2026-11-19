@@ -256,6 +256,26 @@ def contributors_add(handle: str = typer.Argument(..., help="Their GitHub handle
                   "They get it with /sync. Give them write access to the index's repository too.", highlight=False)
 
 
+@contributors_app.command("role")
+def contributors_role(handle: str = typer.Argument(..., help="Their GitHub handle."),
+                      role: str = typer.Argument(..., help="lead, or contributor to take the role away."),
+                      workspace: Optional[Path] = Workspace):
+    """Owner only: make a contributor a lead, who makes the final cut with the owner, or an ordinary contributor again."""
+    ws, ident = need_workspace(workspace), need_identity()
+    if not is_owner(ws, ident):
+        fail(f"Only the owner names a lead, and @{ident.github} is not the owner of this index.")
+    if role not in ("lead", "contributor"):
+        fail("The role is lead or contributor.")
+    handle, people = handle.lstrip("@"), ledger_mod.load_contributors(ws)
+    who = next((c for c in people if c.get("github", "").lower() == handle.lower()), None)
+    if who is None or who.get("role") == "owner":
+        fail(f"@{handle} is the owner." if who else f"@{handle} is not on the list. Add them first: /contributors add HANDLE KEY")
+    changed = {k: v for k, v in who.items() if k != "role"} | ({"role": "lead"} if role == "lead" else {})
+    _change_list(ws, ident, [changed if c is who else c for c in people], f"make {handle} a {role}")
+    console.print(f"[{theme.TE}]@{handle} is a lead now[/]: with the owner, they make the final cut of accepted tasks (/tasks cut)."
+                  if role == "lead" else f"@{handle} is an ordinary contributor again.", highlight=False)
+
+
 @contributors_app.command("remove")
 def contributors_remove(handle: str, workspace: Optional[Path] = Workspace):
     """Owner only: take someone off this index's contributor list. Their earlier records stay."""
@@ -285,8 +305,9 @@ def contributors(ctx: typer.Context, workspace: Optional[Path] = Workspace):
         tb.add_row(c.get("name", "?"), c.get("affiliation", ""), f"@{c['github']}" if c.get("github") else "-",
                    c.get("role", ""), f"[{theme.TE if ok else theme.AM}]{ledger_mod.status(c)}[/]")
     console.print(tb)
-    console.print(f"[{theme.MU}]Everyone on it may add benchmarks, run them and sign verdicts. The owner adds someone with: "
-                  "/contributors add HANDLE KEY[/]")
+    console.print(f"[{theme.MU}]Everyone on it may add benchmarks, run them and sign verdicts. The owner and the leads make the "
+                  "final cut. The owner adds someone with /contributors add HANDLE KEY, and names a lead with "
+                  "/contributors role HANDLE lead[/]")
 
 
 @keys_app.command("init")

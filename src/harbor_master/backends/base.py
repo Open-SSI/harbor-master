@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 from ..core.config import Config, SuiteEntry
@@ -74,6 +75,16 @@ class Backend(ABC):
     async def adapt(self, benchmark: str, n_tasks: int) -> dict: ...
     @abstractmethod
     async def write_mutants(self, task: Task, n: int = 8) -> dict: ...
+    async def reported(self, benchmark: str, repo: Path, names: list[str]) -> dict:
+        """What the benchmark's own results say, task by task: {"tasks": {name: {"pass_rate", "model"}},
+        "source", "cost"}. Only tasks with a reported result are named. None reported: an empty "tasks"."""
+        return {"tasks": {}, "source": "", "cost": 0.0}
+
+    @abstractmethod
+    async def covers(self, task: Task, first: Decision | None = None) -> Decision:
+        """Does the instruction state everything the tests check: "covered" or "unstated". The decision
+        tier answers. Given its unsure answer as `first`, the worker tier reads the task and answers."""
+        ...
     @abstractmethod
     async def audit(self, task: Task, round_no: int) -> Decision: ...
     @abstractmethod
@@ -91,8 +102,11 @@ class Backend(ABC):
     @abstractmethod
     async def run_noop(self, task: Task) -> TrialResult: ...
     @abstractmethod
-    async def run_mutant(self, task: Task, mutant: dict) -> bool: ...
+    async def run_mutant(self, task: Task, mutant: dict, stage: str = "probe") -> bool:
+        """True when the verifier accepted it. `stage` is the stage that asked: verify or probe."""
+        ...
     @abstractmethod
-    async def run_trial(self, task: Task, entry: SuiteEntry, index: int) -> TrialResult:
-        """Run one agent trial. Must report the agent version that actually ran."""
+    async def run_trial(self, task: Task, entry: SuiteEntry, index: int, max_hours: float = 0) -> TrialResult:
+        """Run one agent trial. Must report the agent version that actually ran. `max_hours` is the most it
+        may run, the difficulty filter's own limit when 0."""
         ...

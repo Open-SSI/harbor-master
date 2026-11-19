@@ -28,9 +28,14 @@ def can_contribute(c: dict | None) -> bool:
     return bool(c and c.get("github") and c.get("key"))
 
 
+def can_cut(c: dict | None) -> bool:
+    """Whether a listed person makes the final cut: the owner, and anyone the owner made a lead."""
+    return can_contribute(c) and c.get("role") in ("owner", "lead")
+
+
 def status(c: dict) -> str:
     if can_contribute(c):
-        return "owner" if c.get("role") == "owner" else "can contribute"
+        return {"owner": "owner", "lead": "lead: makes the final cut"}.get(c.get("role", ""), "can contribute")
     missing = [w for w in ("github", "key") if not c.get(w)]
     return "listed, waiting for " + " and ".join("GitHub handle" if w == "github" else "signing key" for w in missing)
 
@@ -155,6 +160,10 @@ def verify(ledger_dir: Path, max_per_benchmark: int | None = None,
     for lock in found:
         if lock["runner"] not in owners:
             problems.append(f"protocol {lock['protocol']} was locked by @{lock['runner']}, who is not the owner")
+    cutters = {c["github"] for c in contributors if can_cut(c)}
+    for e in events:
+        if e["type"] == "verdict" and e.get("value") in ("cut", "restore") and e["runner"] not in cutters:
+            problems.append(f"{e.get('task_id', '?')}: its {e['value']} was signed by @{e['runner']}, who is neither the owner nor a lead")
     if found:
         allowed, since = {lock["protocol"] for lock in found}, found[0]["time"]
         seen: set[str] = set()

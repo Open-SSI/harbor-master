@@ -10,8 +10,10 @@ import time
 from typing import TYPE_CHECKING
 
 from .. import ledger as ledger_mod
-from ..backends import Decision
-from ..curation import gates, ranking
+from pathlib import Path
+
+from ..backends import Decision, NotImplementedBackend
+from ..curation import gates, leak, ranking
 from ..tasks import Task, load_benchmark
 from . import claims, prepare
 from .state import BENCH, STAGE, BenchState
@@ -60,6 +62,8 @@ async def _run_shared(s: Session, bench: BenchState) -> None:
         return
     for task in bench.tasks:
         task.meta["_benchmark_license"] = bench.license
+    bench.detail = "reading the benchmark's published results"
+    bench.reported = await reported_results(s, bench)
     if s.only:
         wanted = [t for t in bench.tasks if t.name in s.only]
         missing = s.only - {t.name for t in wanted}
@@ -150,6 +154,51 @@ async def _run_shared(s: Session, bench: BenchState) -> None:
     bench.phase, bench.detail = "ready", ""
 
 
+def repository(path: Path) -> Path:
+    """The benchmark's whole repository, where its results are likely to be, not only its task folder."""
+    for folder in (path, *list(path.parents)[:4]):
+        if (folder / ".git").exists():
+            return folder
+    return path
+
+
+async def reported_results(s: Session, bench: BenchState) -> dict[str, dict]:
+    """What the benchmark itself reports for each task: {task name: {"pass_rate", "model"}}.
+
+    Once per benchmark, an agent of the worker tier reads the repository for results given task by
+    task: a results table, a leaderboard file, logs of the authors' runs. The record it leaves is
+    reused by every later run on the same tasks. A benchmark that reports nothing per task leaves
+    an empty one, and all its tasks pass this gate.
+    """
+    if s.cfg.triage.max_reported_pass_rate >= 1 or not bench.tasks:
+        return {}
+    digest = hashlib.sha256("|".join(sorted(t.digest for t in bench.tasks)).encode()).hexdigest()
+    prior = s.ledger.decision(digest, "triage", "reported_results", s.protocol)
+    if prior is not None:
+        return prior.get("results") or {}
+    try:
+        got = await s.backend.reported(bench.id, repository(bench.path), [t.name for t in bench.tasks])
+    except (RuntimeError, NotImplementedBackend) as err:
+        s.note_recent("error", bench.id, f"no agent could read its published results, so no task is dropped on them: {str(err)[:140]}")
+        return {}
+    names = {t.name.lower(): t.name for t in bench.tasks}
+    results = {}
+    for name, seen in got["tasks"].items():
+        rate = seen.get("pass_rate")
+        if name.lower() in names and isinstance(rate, (int, float)) and 0 <= rate <= 1:
+            results[names[name.lower()]] = {"pass_rate": round(float(rate), 3), "model": str(seen.get("model", ""))[:80]}
+    limit = s.cfg.triage.max_reported_pass_rate
+    over = sum(r["pass_rate"] > limit for r in results.values())
+    s.record(bench.id, "decision", stage="triage", gate="reported_results", tier="worker", model=s.cfg.tiers.worker.model,
+             value=f"{len(results)} of {len(bench.tasks)} tasks have a reported result, {over} over {limit:.0%}",
+             outcome="pass", results=results, source=got.get("source", ""), cost=got.get("cost", 0.0),
+             skill=got.get("skill", ""), digest_override=digest)
+    if results:
+        s.note_recent("checked", bench.id, f"its published results cover {len(results)} of {len(bench.tasks)} tasks: "
+                                           f"{over} already solved more than {limit:.0%} of the time")
+    return results
+
+
 async def triage(s: Session, task: Task) -> bool:
     """The admission gates. Code settles what it can, tier D the rest, tier W the unsure ones.
 
@@ -174,9 +223,18 @@ async def triage(s: Session, task: Task) -> bool:
         answers["recency"] = {"value": released, "tier": "code"}
         if released < cutoff:
             return done("recency")
+    seen = s.benches[task.benchmark].reported.get(task.name)
+    if seen:                        # what the benchmark's own results say of this task. One with no result passes
+        answers["reported"] = {"value": seen["pass_rate"], "tier": "worker", "model": seen.get("model", "")}
+        if seen["pass_rate"] > s.cfg.triage.max_reported_pass_rate:
+            return done("reported")
     answers["reference_solution"] = {"value": "present" if task.has_solution else "missing", "tier": "code"}
     if not task.has_solution and s.cfg.triage.require_reference_solution:
         return done("reference_solution")
+    kind, where = await asyncio.to_thread(leak.find, task.path, task.instruction)
+    answers["leak"] = {"value": kind, "tier": "code", **({"where": where[:5]} if where else {})}
+    if kind != leak.NONE:           # the answer is within the agent's reach: no model is asked about the rest
+        return done("leak")
     wanted = {g: choices for g, (choices, _) in gates.D_GATES.items()}
     decided = await s.backend.decide_gates(task, wanted)       # one request where the backend can
     cost = sum(d.cost for d in decided.values())

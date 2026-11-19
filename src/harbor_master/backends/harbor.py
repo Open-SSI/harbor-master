@@ -10,6 +10,7 @@ import io
 import json
 import os
 import shutil
+import sys
 import tarfile
 import tomllib
 import uuid
@@ -18,6 +19,13 @@ from pathlib import Path
 
 from ..core import keys
 from .base import TrialResult
+
+def binary() -> str:
+    """The `harbor` command that was installed with Harbor-Master, as its dependency. An older one that
+    happens to be on the PATH is used only when that one is missing."""
+    beside = Path(sys.executable).parent / "harbor"
+    return str(beside) if beside.is_file() else "harbor"
+
 
 def _seconds(span: dict | None) -> float:
     if not span or not span.get("started_at") or not span.get("finished_at"):
@@ -50,11 +58,11 @@ async def _stop(proc: asyncio.subprocess.Process, grace: float = 30.0) -> None:
 
 async def run(task_dir: Path, jobs_dir: Path, agent: str, model: str = "", agent_kwargs: dict | None = None,
               with_keys: bool = False, timeout: float = 3 * 3600, max_agent_seconds: float = 0,
-              agent_env: dict[str, str] | None = None) -> TrialResult:
+              agent_env: dict[str, str] | None = None, key: str = "") -> TrialResult:
     """One Harbor job with one trial. Infrastructure failures come back as a failed result with `error` set."""
     name = f"{agent}-{uuid.uuid4().hex[:8]}"
     jobs_dir.mkdir(parents=True, exist_ok=True)
-    cmd = ["harbor", "run", "-p", str(task_dir), "-a", agent, "-o", str(jobs_dir), "--job-name", name, "-q"]
+    cmd = [binary(), "run", "-p", str(task_dir), "-a", agent, "-o", str(jobs_dir), "--job-name", name, "-q"]
     if model:
         cmd += ["-m", model]
     for k, v in (agent_kwargs or {}).items():
@@ -69,7 +77,7 @@ async def run(task_dir: Path, jobs_dir: Path, agent: str, model: str = "", agent
         timeout = min(own or max_agent_seconds, max_agent_seconds) + 3600      # room for setup and the verifier
     env = dict(os.environ)
     if with_keys:      # only an agent trial gets keys, and only through the process environment
-        env.update(keys.agent_env())
+        env.update(keys.agent_env(agent, model, key, agent_env))
     proc = await asyncio.create_subprocess_exec(*cmd, env=env, stdout=asyncio.subprocess.PIPE,
                                                 stderr=asyncio.subprocess.STDOUT)
     try:

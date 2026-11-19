@@ -43,6 +43,8 @@ require_reference_solution = true
 exclude_formats = ["multiple_choice", "question_answering", "short_answer"]
 allow_llm_judge_verifier = false
 max_verifier_seconds = 300      # CPU only, no paid API
+max_reported_pass_rate = 0.5    # an agent reads the benchmark's own published results. A task that a model already
+                                # solves more often than this is dropped. A task with no reported result passes. 1.0 turns this off
 
 # ----- adapters: for a benchmark that is not in Harbor format -----
 [adapt]
@@ -67,11 +69,16 @@ parity = "sampled"              # "off" | "sampled" | "full"
 parity_tasks = 5                # run with the worker tier's model: no separate setting
 
 # ----- difficulty: a task is kept only if frontier agents mostly fail it -----
+# Run once per task, after every cheap check has passed. A later repair does not run it again.
 [difficulty]
 trials_per_config = 3
 max_pass_rate = 0.4
 max_agent_hours = 4.0           # the most one agent trial may run. A task's own limit applies when shorter
 early_stop = true
+cheap_solve = true              # the worker tier's model tries first. A task it solves every time is dropped with no frontier trial
+cheap_trials = 2                # its tries, run side by side. The task is dropped only if all of them pass
+cheap_agent = "claude-code"     # the agent that model runs in
+cheap_agent_hours = 1.0         # the most that one of them may run
 
 [[difficulty.suite]]
 agent = "claude-code"

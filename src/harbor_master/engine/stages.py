@@ -1,5 +1,9 @@
 """The stages a task goes through inside one working cell (DESIGN.md Section 4, stages 3 to 8).
 
+The cheap checks come first and may loop through a repair: verify, probe. The difficulty run is the
+costly one, so it runs once per task, after they pass. A repair that comes later runs the cheap
+checks again and carries the difficulty result forward.
+
 Each stage returns ("ok", ""), ("fix", defect), or ("drop", reason). To add a stage, write one
 function with that contract and put it in the tuple in `process`.
 """
@@ -11,7 +15,8 @@ import time
 from typing import TYPE_CHECKING
 
 from ..backends import NotImplementedBackend
-from ..curation import difficulty
+from ..core.config import SuiteEntry
+from ..curation import difficulty, trivial
 from ..tasks import Task
 from .state import STAGE, STAGES, CellState
 
@@ -126,10 +131,63 @@ async def stage_verify(s: Session, cell: CellState, task: Task, rounds: int):
         s.record(task.benchmark, "decision", task, stage="verify", gate="verifier_time", tier="code",
                  value=round(slowest, 1), outcome="drop", reason="verifier_too_slow")
         return "drop", "verifier_too_slow"
-    return "ok", ""
+    return await trivial_submissions(s, cell, task)
+
+
+async def trivial_submissions(s: Session, cell: CellState, task: Task):
+    """The verifier rejects a submission that did no work: the task's output files left empty, filled
+    with a placeholder, or copied from a file that was already there. Written by code, no model."""
+    prior = s.ledger.decision(task.digest, "verify", "trivial", s.protocol)
+    if prior is not None:
+        return ("ok", "") if prior["outcome"] == "pass" else ("fix", "verifier")
+    tries = trivial.submissions(task.path, task.instruction)
+    if not tries:                   # the task names no output file that its tests also name
+        return "ok", ""
+    t0 = enter(cell, 3, "trivial submissions")
+    accepted = await asyncio.gather(*(s.container(s.backend.run_mutant(task, m, "verify")) for m in tries))
+    passed = [m for m, a in zip(tries, accepted) if a]
+    s.record(task.benchmark, "decision", task, stage="verify", gate="trivial", tier="code", value=f"{len(tries)} tried",
+             outcome="fix" if passed else "pass", accepted=[m["id"] for m in passed])
+    s.stage_done(task, 3, t0, trivial_tried=len(tries), trivial_accepted=[m["id"] for m in passed])
+    if not passed:
+        return "ok", ""
+    s.board(task)["why"] = f"the verifier accepts a submission that did no work: one that {passed[0]['what']}"
+    return "fix", "verifier"
 
 
 async def stage_probe(s: Session, cell: CellState, task: Task, rounds: int):
+    """The verifier is tested from both sides before any agent trial: by mutants of the solution, and by
+    asking whether the instruction states everything the tests check."""
+    kind, info = await mutants(s, cell, task)
+    return (kind, info) if kind != "ok" else await coverage(s, cell, task)
+
+
+async def coverage(s: Session, cell: CellState, task: Task):
+    """An unstated check is the commonest reason a task that looks hard is only unclear. Finding it here
+    costs one request. Finding it at the audit costs the frontier trials that came before."""
+    prior = s.ledger.decision(task.digest, "probe", "coverage", s.protocol)
+    if prior is not None:
+        return ("ok", "") if prior["outcome"] == "pass" else ("fix", "design")
+    t0 = enter(cell, 4, "instruction against the tests")
+    d = await s.backend.covers(task)
+    tiers = [d.tier]
+    if d.prob < s.cfg.escalation.min_confidence:
+        s.record(task.benchmark, "decision", task, stage="probe", gate="coverage", tier=d.tier, model=d.model,
+                 value=d.value, probability=round(d.prob, 3), outcome="escalate", cost=d.cost, skill=d.skill)
+        d = await s.backend.covers(task, d)
+        tiers.append(d.tier)
+    ok = d.value != "unstated"
+    s.record(task.benchmark, "decision", task, stage="probe", gate="coverage", tier=d.tier, model=d.model,
+             value=d.value, probability=round(d.prob, 3), outcome="pass" if ok else "fix", cost=d.cost,
+             rationale=d.rationale, skill=d.skill)
+    s.stage_done(task, 4, t0, coverage=d.value, tiers=tiers, rationale=d.rationale)
+    if ok:
+        return "ok", ""
+    s.board(task)["why"] = d.rationale or "the tests check something the instruction does not state"
+    return "fix", "design"
+
+
+async def mutants(s: Session, cell: CellState, task: Task):
     prior = s.ledger.decision(task.digest, "probe", "verifier", s.protocol)
     if prior is not None:
         return ("ok", "") if prior["outcome"] == "pass" else ("fix", "verifier")
@@ -160,14 +218,63 @@ async def stage_probe(s: Session, cell: CellState, task: Task, rounds: int):
     return "fix", "verifier"
 
 
+def before_repair(s: Session, task: Task) -> dict | None:
+    """The difficulty result this task got under an earlier digest, before a repair changed it."""
+    back = {e["new_digest"]: e["old_digest"] for e in s.ledger.by_task.get(task.task_id, []) if e["type"] == "repair"}
+    digest, seen = task.digest, set()
+    while digest in back and digest not in seen:
+        seen.add(digest)
+        digest = back[digest]
+        found = s.ledger.decision(digest, "difficulty", "pass_rate", s.protocol)
+        if found is not None:
+            return found
+    return None
+
+
+async def cheap_solve(s: Session, cell: CellState, task: Task) -> list[dict] | None:
+    """The worker tier's model tries first, `cheap_trials` times side by side, before any frontier agent runs.
+    Returns its trials when every one passed: a task a smaller model solves each time is too easy, and the
+    suite's trials are never spent on it. One pass among failures is not enough to say so."""
+    d = s.cfg.difficulty
+    if not d.cheap_solve or d.cheap_trials < 1:
+        return None
+    version = next((e.version for e in d.suite if e.agent == d.cheap_agent), "")
+    entry = SuiteEntry(agent=d.cheap_agent, model=s.cfg.tiers.worker.model, version=version)
+    if any((e.agent, e.model) == (entry.agent, entry.model) for e in d.suite):
+        return None                 # the worker's model is in the suite itself: there is no cheaper try to make
+    cell.detail = f"the worker model ({entry.model}) tries first, {d.cheap_trials} at once"
+    got = await asyncio.gather(*(
+        trial(s, task, "cheap_solve", entry.agent, entry.model, i,
+              lambda i=i: s.backend.run_trial(task, entry, i, d.cheap_agent_hours), version=entry.version)
+        for i in range(d.cheap_trials)))
+    return list(got) if all(e["passed"] and not e.get("error") for e in got) else None
+
+
 async def stage_difficulty(s: Session, cell: CellState, task: Task, rounds: int):
+    """Run once per task. A task repaired after it keeps the result it had: the frontier trials are never
+    run a second time, and the record that carries the result forward names the digest it was measured on."""
     d = s.cfg.difficulty
     n_total = len(d.suite) * d.trials_per_config
     prior = s.ledger.decision(task.digest, "difficulty", "pass_rate", s.protocol)
+    if prior is None and (earlier := before_repair(s, task)) is not None and earlier["outcome"] == "pass":
+        prior = s.record(task.benchmark, "decision", task, stage="difficulty", gate="pass_rate", tier="code",
+                         value=earlier["value"], outcome="pass", passes=earlier.get("passes", 0),
+                         trials=earlier.get("trials", 0), carried_from=earlier.get("carried_from") or earlier["digest"])
     if prior is not None:
-        s.board(task)["difficulty"] = prior["value"]
-        return ("ok", "") if prior["outcome"] == "pass" else ("drop", "too_easy")
-    t0 = enter(cell, 5, f"round 1 of {d.trials_per_config}")
+        carried = ", measured before the repair" if prior.get("carried_from") else ""
+        s.board(task)["difficulty"] = prior["value"] + carried
+        return ("ok", "") if prior["outcome"] == "pass" else ("drop", prior.get("reason") or "too_easy")
+    t0 = enter(cell, 5, "the worker model tries first" if d.cheap_solve else f"round 1 of {d.trials_per_config}")
+    solved = await cheap_solve(s, cell, task)
+    if solved is not None:
+        n, model = len(solved), solved[0]["model"]
+        value = f"solved by the worker model, {n} of {n} tries"
+        s.record(task.benchmark, "decision", task, stage="difficulty", gate="pass_rate", tier="code", value=value,
+                 outcome="drop", passes=0, trials=0, cheap_solve="passed", cheap_trials=n, model=model, reason="solved_by_worker")
+        s.stage_done(task, 5, t0, cheap_solve="passed", cheap_trials=n, passes=0, trials=0)
+        s.board(task)["difficulty"] = value
+        s.board(task)["why"] = f"{model} solved it in {'each of its ' + str(n) + ' tries' if n > 1 else 'one try'}, so no frontier trial was run"
+        return "drop", "solved_by_worker"
     passes = fails = 0
     result = None
     for r in range(d.trials_per_config):

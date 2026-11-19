@@ -18,10 +18,12 @@ so they are the same for every index and are not part of any protocol.
 | `triage/gates.toml` | decision tier (Jev) | The admission gates: each question and what each answer means |
 | `triage/decide.md` | decision tier, when it runs on a general model | One gate at a time |
 | `triage/confirm.md` | worker tier | Re-deciding a gate the decision tier was unsure about |
+| `triage/reported-results.md` | worker tier | Reading what a benchmark itself reports for each task |
 | `rank/score.toml` | decision tier | How much one task matters under the lead's brief, on an ordered scale |
 | `rank/compare.toml` | decision tier | Which of two tasks matters more under the lead's brief |
 | `adapt/write-adapter.md` | worker tier | The adapter that turns a benchmark in another format into Harbor tasks |
 | `probe/write-mutants.md` | worker tier | Variants of the reference solution that test the verifier |
+| `probe/coverage.toml` | decision tier, then worker tier when unsure | Whether the instruction states everything the tests check |
 | `audit/rubric.md` | worker tier | The task-quality rubric. Not used yet |
 | `session/interpret.toml` | decision tier | Reading a plain-text message as a command |
 | `session/answer.md` | chat tier | Answering a question from the records |
