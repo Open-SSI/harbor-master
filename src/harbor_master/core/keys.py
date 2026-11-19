@@ -20,6 +20,7 @@ PATH_KEYS = {"CODEX_AUTH_JSON_PATH"}     # the value is the path of a file that 
 PROVIDER_KEYS = {
     "openrouter": ["OPENROUTER_API_KEY"],
     "claude-agent-sdk": ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],  # either one
+    "codex": ["CODEX_AUTH_JSON_PATH"],      # the sign-in that `codex login` writes. ~/.codex/auth.json is found without it
     "mock": [],
 }
 OTHER_KEYS = ["HF_TOKEN"]
@@ -169,6 +170,8 @@ def doctor(cfg: Config) -> list[tuple[str, str, bool, str]]:
             rows.append((f"{tier} tier", "none needed", True, f"{t.provider}: {t.model}"))
             continue
         present = any(get(n) for n in names)
+        if t.provider == "codex" and not present:        # Codex's own sign-in file needs no variable
+            present = (Path.home() / ".codex" / "auth.json").is_file()
         rows.append((f"{tier} tier", " or ".join(names), present, f"{t.provider}: {t.model}"))
     def agent_row(what: str, agent: str, model: str, key: str = "") -> None:
         names = needs(agent, model, key)

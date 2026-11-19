@@ -13,11 +13,15 @@ harbor_master = "0.1.0"         # the oldest Harbor-Master that may run this ind
 
 # ----- who decides: the three model tiers -----
 # "provider" picks the backend, "model" the model it calls.
+# The worker and frontier tiers run on "claude-agent-sdk" (Claude models) or on "codex" (OpenAI models,
+# through Codex and its sign-in to a ChatGPT subscription), for example:
+#   provider = "codex"
+#   model = "gpt-5.6-terra"
 # `hm run --simulate` ignores these and spends nothing.
 [tiers]
 chat = "worker"                 # which tier answers questions typed in the session
 
-[tiers.decision]                # every gate and routing choice: a typed value with a probability
+[tiers.decision]                # every gate and routing choice: a typed value with a probability. Jev only
 provider = "openrouter"
 model = "typesafe/jev-1.14"     # pinned, so that probability thresholds stay stable
 

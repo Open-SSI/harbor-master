@@ -20,8 +20,12 @@ READ_ONLY = ["Read", "Glob", "Grep"]
 @dataclass
 class Reply:
     data: dict
-    cost: float
+    cost: float                 # what the provider reported. 0 when it reported none: sessions.ask then estimates it
     tokens: int
+    fresh_in: int = 0           # input tokens that were not read from a cache
+    cached: int = 0             # input tokens read from a cache
+    cache_write: int = 0        # input tokens written to a cache
+    out: int = 0
 
 
 def _env() -> dict[str, str]:
@@ -56,6 +60,8 @@ async def ask(model: str, system: str, prompt: str, schema: dict, cwd: Path | No
             usage = result.usage or {}
             tokens = sum(int(usage.get(k) or 0) for k in ("input_tokens", "output_tokens", "cache_read_input_tokens",
                                                           "cache_creation_input_tokens"))
-            return Reply(result.structured_output, float(result.total_cost_usd or 0.0), tokens)
+            n = lambda k: int(usage.get(k) or 0)  # noqa: E731
+            return Reply(result.structured_output, float(result.total_cost_usd or 0.0), tokens, n("input_tokens"),
+                         n("cache_read_input_tokens"), n("cache_creation_input_tokens"), n("output_tokens"))
         problem = (result.result or result.subtype or "no typed result")[:200] if result else "no result"
     raise RuntimeError(f"Claude ({model}) did not return a typed result: {problem}")

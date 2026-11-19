@@ -16,7 +16,6 @@ so they are the same for every index and are not part of any protocol.
 | File | Read by | For |
 |---|---|---|
 | `triage/gates.toml` | decision tier (Jev) | The admission gates: each question and what each answer means |
-| `triage/decide.md` | decision tier, when it runs on a general model | One gate at a time |
 | `triage/confirm.md` | worker tier | Re-deciding a gate the decision tier was unsure about |
 | `triage/reported-results.md` | worker tier | Reading what a benchmark itself reports for each task |
 | `rank/score.toml` | decision tier | How much one task matters under the lead's brief, on an ordered scale |

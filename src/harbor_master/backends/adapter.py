@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .. import skills
 from ..core.config import Config
-from . import claude
+from . import sessions
 
 SKILL = "adapt/write-adapter"
 SCHEMA = {
@@ -56,7 +56,7 @@ async def write_adapter(cfg: Config, entry: dict, source_dir: Path, feedback: st
     Returns its typed reply, what it cost, its tokens, and the skill's tag."""
     skill = skills.load(SKILL)
     again = ("A first version of the adapter did not pass these checks. Return every file again, corrected:\n" + feedback) if feedback else ""
-    reply = await claude.ask(cfg.tier(tier).model, skill.system,
+    reply = await sessions.ask(cfg.tier(tier), skill.system,
                              skill.fill(benchmark=about(entry), layout=layout(source_dir), feedback=again),
                              SCHEMA, cwd=source_dir, max_turns=40)
     return reply.data, reply.cost, reply.tokens, skill.tag

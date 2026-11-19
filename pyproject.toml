@@ -10,7 +10,8 @@ dependencies = [
     "pydantic>=2.6",
     "cryptography>=42",
     "tomli-w>=1.0",
-    "claude-agent-sdk>=0.2",
+    "claude-agent-sdk>=0.2",        # the worker and frontier tiers on Claude models
+    "openai-codex>=0.170.0",        # the same tiers on OpenAI models, through Codex and its sign-in
     "harbor>=0.26.0",               # runs every task and every agent, and names the agents a roster may use
     "huggingface_hub>=0.24",        # the task store: every index keeps its accepted tasks in one
 ]

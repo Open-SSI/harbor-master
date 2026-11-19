@@ -11,7 +11,7 @@ from pathlib import Path
 
 from .. import skills
 from ..core.config import Config
-from . import claude
+from . import sessions
 
 SKILL = "session/describe-benchmark"
 EDITABLE = ("name", "description", "paper", "released", "license", "homepage")
@@ -70,7 +70,7 @@ async def fill(cfg: Config, entry: dict, repo: Path, note: str = "") -> tuple[di
     """One short session of the worker tier, reading the repository. Returns what it filled in, and what it cost."""
     skill = skills.load(SKILL)
     known = _lines(entry, ("id", "github", "version", "released", "tasks", "task_count", "format"))
-    reply = await claude.ask(cfg.tier("worker").model, skill.system,
+    reply = await sessions.ask(cfg.tier("worker"), skill.system,
                              skill.fill(known=known, draft=_lines(entry, EDITABLE), note=note or "(nothing yet)"),
                              SCHEMA, cwd=repo, max_turns=10)
     return reply.data, reply.cost

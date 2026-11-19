@@ -1,8 +1,8 @@
 """The real backend: Claude for the model tiers, Harbor for every run.
 
-The decision tier runs on Jev through OpenRouter (provider "openrouter"), which returns real
-probabilities and answers all of a task's gates in one request. It can run on Claude instead
-(provider "claude-agent-sdk"), where the probability is only the model's stated confidence.
+The decision tier runs on Jev through OpenRouter (provider "openrouter"), and on nothing else: Jev
+returns real probabilities and answers all of a task's gates in one request. The worker and
+frontier tiers run on Claude, or on OpenAI models through Codex.
 
 Built so far: the admission gates, pairwise comparison, mutant writing, answers, and Harbor
 runs of the reference solution, a no-op, a mutant, and an agent. Not built: the adapter
@@ -20,11 +20,11 @@ from .. import skills
 from ..core.config import Config, SuiteEntry
 from ..curation import gates
 from ..tasks import Task
-from . import claude, harbor, jev
+from . import claude, harbor, jev, sessions
 from .base import Backend, Decision, NotImplementedBackend, TrialResult, Usage
 from .simulated import SimulatedBackend
 
-CLAUDE_PROVIDERS = ("claude-agent-sdk", "claude")
+CLAUDE_PROVIDERS = sessions.PROVIDERS       # what an agent session can run on: Claude, or OpenAI models through Codex
 
 
 def describe(task: Task, limit: int = 6000) -> str:
@@ -125,19 +125,22 @@ class RealBackend(Backend):
         self.run_dir, self.jobs, self.scratch = run_dir, run_dir / "harbor", run_dir / "scratch"
         self.assumed = set(LATER[LATER.index(assume_after) + 1:]) if assume_after else set()
         self.sim = SimulatedBackend(cfg, lambda tier, cost, tokens: None, speed=0)
-        self.jev = cfg.tiers.decision.provider == "openrouter"     # the decision tier runs on Jev
-        for tier in ("decision", "worker", "frontier"):
+        if cfg.tiers.decision.provider != "openrouter":     # a general model states a confidence, not a probability
+            raise NotImplementedBackend(
+                f"The decision tier is set to provider {cfg.tiers.decision.provider!r}. It runs on Jev only: "
+                "provider \"openrouter\", model \"typesafe/jev-1.14\".")
+        for tier in ("worker", "frontier"):
             provider = cfg.tier(tier).provider
-            if provider not in CLAUDE_PROVIDERS and not (tier == "decision" and self.jev):
+            if provider not in CLAUDE_PROVIDERS:
                 raise NotImplementedBackend(
-                    f"The {tier} tier is set to provider {provider!r}, which is not built. The decision tier takes "
-                    "\"openrouter\" (Jev) or \"claude-agent-sdk\". The worker and frontier tiers take \"claude-agent-sdk\".")
+                    f"The {tier} tier is set to provider {provider!r}, which is not built. The worker and frontier "
+                    "tiers take \"claude-agent-sdk\" or \"codex\".")
 
     async def _ask(self, tier: str, system: str, prompt: str, schema: dict, cwd: Path | None = None,
                    max_turns: int = 6) -> claude.Reply:
-        """One Claude session on a tier, counted under it."""
+        """One agent session on a tier, counted under it."""
         name = self.cfg.tiers.chat if tier == "chat" else tier
-        reply = await claude.ask(self.cfg.tier(name).model, system, prompt, schema, cwd=cwd, max_turns=max_turns)
+        reply = await sessions.ask(self.cfg.tier(name), system, prompt, schema, cwd=cwd, max_turns=max_turns)
         self.usage(name, reply.cost, reply.tokens)
         return reply
 
@@ -152,8 +155,8 @@ class RealBackend(Backend):
         return Decision(answer["choice"], prob, "decision", self.cfg.tiers.decision.model, cost, tokens, skill=tag)
 
     async def decide_gates(self, task: Task, wanted: dict[str, list[str]]) -> dict[str, Decision]:
-        if not self.jev or not wanted:
-            return await super().decide_gates(task, wanted)
+        if not wanted:
+            return {}
         questions, criteria, tag = gates.wording()
         asked = {g: jev.choice(questions[g], {c: criteria[g][c] for c in choices}) for g, choices in wanted.items()}
         answers, cost, tokens = await jev.decisions(self.cfg.tiers.decision.model, self._state(task), asked)
@@ -164,8 +167,6 @@ class RealBackend(Backend):
 
     async def classify(self, state, questions: dict) -> dict:
         """Any typed questions about any state, for the session prompt. Decision tier on Jev only."""
-        if not self.jev:
-            raise NotImplementedBackend("typed classification needs the decision tier on Jev")
         answers, cost, tokens = await jev.decisions(self.cfg.tiers.decision.model, state, questions)
         self.usage("decision", cost, tokens)
         return answers
@@ -173,13 +174,7 @@ class RealBackend(Backend):
     # ----- tier D -----
 
     async def decide(self, gate: str, choices: list[str], task: Task) -> Decision:
-        if self.jev:
-            return (await self.decide_gates(task, {gate: choices}))[gate]
-        skill, (questions, _, _) = skills.load("triage/decide"), gates.wording()
-        r = await self._ask("decision", skill.system, skill.fill(question=questions[gate], task=describe(task)),
-                            _choice_schema(choices))
-        return Decision(r.data["value"], float(r.data["confidence"]), "decision", self.cfg.tiers.decision.model,
-                        r.cost, r.tokens, skill=skill.tag)
+        return (await self.decide_gates(task, {gate: choices}))[gate]
 
     async def confirm(self, gate: str, choices: list[str], task: Task, first: Decision) -> Decision:
         skill, (questions, _, _) = skills.load("triage/confirm"), gates.wording()
@@ -191,8 +186,6 @@ class RealBackend(Backend):
                         r.cost, r.tokens, r.data.get("rationale", ""), skill=skill.tag)
 
     async def importance(self, brief: str, task: Task) -> float | None:
-        if not self.jev:
-            return None             # a general model's single scores bunch up: compare in pairs instead
         skill = skills.load("rank/score")
         state = {"brief_from_the_field_lead": brief or "(none given)", "task": card(task)}
         q = {"importance": {"type": "score", "instructions": skill.data["question"], "criteria": skill.data["levels"]}}
@@ -205,19 +198,12 @@ class RealBackend(Backend):
         skill = skills.load("rank/compare")
 
         async def ask(first: Task, second: Task) -> float:
-            if self.jev:
-                state = {"brief_from_the_field_lead": brief or "(none given)",
-                         "first_task": card(first), "second_task": card(second)}
-                q = {"first_matters_more": jev.noul(skill.data["question"], skill.data["yes"], skill.data["no"])}
-                answers, cost, tokens = await jev.decisions(self.cfg.tiers.decision.model, state, q)
-                self.usage("decision", cost, tokens)
-                return min(0.99, max(0.01, float((answers.get("first_matters_more") or {}).get("noul", 0.5))))
-            r = await self._ask("decision", skill.data["system"],
-                                f"The field lead's brief on what is important:\n{brief or '(none given)'}\n\n"
-                                f"{skill.data['question']}\n\nFIRST\n{describe(first, 2500)}\n\n"
-                                f"SECOND\n{describe(second, 2500)}", _choice_schema(["yes", "no"]))
-            p = min(0.99, max(0.01, float(r.data["confidence"])))
-            return p if r.data["value"] == "yes" else 1 - p
+            state = {"brief_from_the_field_lead": brief or "(none given)",
+                     "first_task": card(first), "second_task": card(second)}
+            q = {"first_matters_more": jev.noul(skill.data["question"], skill.data["yes"], skill.data["no"])}
+            answers, cost, tokens = await jev.decisions(self.cfg.tiers.decision.model, state, q)
+            self.usage("decision", cost, tokens)
+            return min(0.99, max(0.01, float((answers.get("first_matters_more") or {}).get("noul", 0.5))))
 
         return (await ask(a, b) + (1 - await ask(b, a))) / 2      # both orders, to cancel position bias
 
@@ -247,19 +233,17 @@ class RealBackend(Backend):
             return d
         skill = skills.load("probe/coverage")
         asked, tests = skill.data["coverage"], tests_text(task)
-        if first is None and self.jev:
+        if first is None:
             state = {"task": describe(task, 6000)[:12000], "tests": tests}
             answers, cost, tokens = await jev.decisions(self.cfg.tiers.decision.model, state,
                                                         {"coverage": jev.choice(asked["question"], asked["criteria"])})
             self.usage("decision", cost, tokens)
             return self._jev_decision(COVERAGE, answers.get("coverage") or {}, cost, tokens, skill.tag)
-        tier = "decision" if first is None else "worker"
-        said = "" if first is None else (f"A first check said \"{first.value or '(no answer)'}\" with probability "
-                                           f"{first.prob:.2f}. Read the task's files where that helps.\n\n")
-        r = await self._ask(tier, skill.data["system"], f"{asked['question']}\n\n{said}{describe(task)}\n\nTESTS\n{tests}",
-                            _choice_schema(COVERAGE, rationale=True), cwd=task.path if first is not None else None,
-                            max_turns=12 if first is not None else 6)
-        return Decision(r.data["value"], float(r.data["confidence"]), tier, self.cfg.tier(tier).model, r.cost, r.tokens,
+        said = (f"A first check said \"{first.value or '(no answer)'}\" with probability {first.prob:.2f}. "
+                "Read the task's files where that helps.\n\n")
+        r = await self._ask("worker", skill.data["system"], f"{asked['question']}\n\n{said}{describe(task)}\n\nTESTS\n{tests}",
+                            _choice_schema(COVERAGE, rationale=True), cwd=task.path, max_turns=12)
+        return Decision(r.data["value"], float(r.data["confidence"]), "worker", self.cfg.tiers.worker.model, r.cost, r.tokens,
                         r.data.get("rationale", ""), skill=skill.tag)
 
     async def answer(self, question: str, context: str) -> str:

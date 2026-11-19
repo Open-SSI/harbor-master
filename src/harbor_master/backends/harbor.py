@@ -17,7 +17,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from ..core import keys
+from ..core import keys, prices
 from .base import TrialResult
 
 def binary() -> str:
@@ -95,10 +95,15 @@ async def run(task_dir: Path, jobs_dir: Path, agent: str, model: str = "", agent
     reward = float(((r.get("verifier_result") or {}).get("rewards") or {}).get("reward") or 0.0)
     usage = r.get("agent_result") or {}
     err = r.get("exception_info")
+    tokens_in, cached = int(usage.get("n_input_tokens") or 0), int(usage.get("n_cache_tokens") or 0)
+    cost = float(usage.get("cost_usd") or 0.0)
+    if not cost:        # an agent on a subscription, or an API that names no price: its tokens at list price
+        cost = prices.estimate(model, tokens_in - min(cached, tokens_in), min(cached, tokens_in), 0,
+                               int(usage.get("n_output_tokens") or 0)) or 0.0
     return TrialResult(
         passed=reward > 0, reward=reward,
-        tokens_in=int(usage.get("n_input_tokens") or 0), tokens_out=int(usage.get("n_output_tokens") or 0),
-        cost=float(usage.get("cost_usd") or 0.0), seconds=_seconds(r.get("agent_execution")),
+        tokens_in=tokens_in, tokens_out=int(usage.get("n_output_tokens") or 0),
+        cost=cost, seconds=_seconds(r.get("agent_execution")),
         agent_version=str((r.get("agent_info") or {}).get("version") or ""),
         verifier_seconds=_seconds(r.get("verifier")), checksum=str(r.get("task_checksum") or ""),
         artifact=str(results[0].parent), error=json.dumps(err)[:400] if err else "", job=str(job))

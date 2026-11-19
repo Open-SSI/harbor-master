@@ -185,7 +185,7 @@ The figures cover everyone's records: in a shared index it pulls first. The fold
 
 ## Keys
 
-Real runs call models and need keys. `hm keys init` copies [`secrets.env.example`](secrets.env.example) to `secrets.env` in the Harbor-Master folder, readable only by you and ignored by git. Fill in the keys you have: Claude and Codex each take an API key or a subscription sign-in. `hm doctor` shows which are found and what they let this machine run. A key is never typed into a screen, written to a settings file, or put in the ledger.
+Real runs call models and need keys. `hm keys init` copies [`secrets.env.example`](secrets.env.example) to `secrets.env` in the Harbor-Master folder, readable only by you and ignored by git. Fill in the keys you have: Claude and Codex each take an API key or a subscription sign-in. The worker and frontier tiers run on Claude models, or on OpenAI models through Codex (`provider = "codex"` in `protocol.toml`), which uses the sign-in that `codex login` writes. `hm doctor` shows which are found and what they let this machine run. A key is never typed into a screen, written to a settings file, or put in the ledger.
 
 ## Commands
 

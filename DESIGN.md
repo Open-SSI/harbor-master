@@ -24,6 +24,10 @@ Frontier trials are spent before any audit, so broken tasks consume most of them
 | W, worker | `claude-sonnet-5-5`, Claude Agent SDK | Adapters, repairs, audits, reports, drafting a benchmark's entry |
 | F, frontier | `claude-opus-5-5` | Second judge on a contested audit, repair after W failed twice |
 
+The worker and frontier tiers run on Claude models (provider `claude-agent-sdk`) or on OpenAI models (provider `codex`, through the Codex SDK and its sign-in to a ChatGPT subscription). A Codex session is read-only. The decision tier runs on Jev only, because a general model states a confidence, not a probability.
+
+**Costs.** A cost that a provider reports is recorded as it is. Where none is reported, as with the Codex SDK and some agents on a subscription, the session or trial is costed from its tokens at the provider's published rate (`core/prices.py`: fresh input, cached input, cache writes, output), so it still counts toward the budget. A model with no list price there is recorded at 0.
+
 A stage calls the next tier up only on a recorded trigger: low confidence, disagreement between two checks, or a retry limit. The share of tasks that reach tier F is reported for every run. The frontier models that are the *subjects* of the difficulty filter are a separate budget.
 
 ## 3. Intercom: typed records, no agent chat
@@ -459,6 +463,7 @@ src/harbor_master/
 **Never run for real:**
 
 - A model writing an adapter, or drafting a benchmark's entry.
+- Any tier on the `codex` provider.
 - Agent trials for the difficulty filter, the worker model's first tries, and the audit, repair and report on real trajectories.
 - The agent that reads a benchmark's per-task results, the coverage question on a real model, and trivial submissions through Harbor. The leak scan and the trivial submissions are heuristics, tested on made-up tasks only.
 - The task store against Hugging Face.

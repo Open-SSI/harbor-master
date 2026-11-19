@@ -150,7 +150,7 @@ def test_anyone_listed_with_a_handle_and_a_key_can_contribute():
 def test_every_skill_loads_and_has_a_version():
     from harbor_master import skills
     from harbor_master.curation import gates
-    for name in ("triage/gates", "triage/decide", "triage/confirm", "rank/compare", "probe/write-mutants",
+    for name in ("triage/gates", "triage/confirm", "rank/compare", "probe/write-mutants",
                  "audit/rubric", "session/interpret", "session/answer"):
         s = skills.load(name)
         assert len(s.version) == 10 and s.tag == f"{name}@{s.version}"
