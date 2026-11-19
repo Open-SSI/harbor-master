@@ -853,7 +853,7 @@ The tables:
 | `funnel` | Per benchmark: tasks submitted, failed a gate, not selected, selected, dropped at each later stage, in progress, report ready, accepted, rejected, replaced, and its last skip |
 | `gates` | Per benchmark and admission gate: tasks asked, dropped there, and sent up a tier |
 | `usage_by_stage`, `usage` | Model calls, tokens and cost per stage and tier, over all benchmarks and per benchmark |
-| `trials` | Runs through Harbor by purpose, agent and model: how many, passed, infrastructure errors, tokens, cost, container hours |
+| `trials` | Runs through Harbor by purpose, agent and model: how many, passed, infrastructure errors, tokens, cost, container hours. The probe's mutant runs are not recorded one by one, so they are not in it |
 | `adapters` | Each adapter built or given up: who wrote the last version, in how many rounds, at what cost |
 | `human_counts`, `human` | Each decision a person made that left a record (a brief, an approval, a verdict, an adapter given up or fixed, a lock), counted by kind and listed in order |
 | `skips` | Each time a run left a benchmark out, and why |

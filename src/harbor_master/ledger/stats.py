@@ -216,7 +216,7 @@ TABLES = {     # file name -> (title, what it says, the function)
     "gates": ("Admission gates", "Per benchmark and gate: tasks asked, dropped there, and sent up a tier.", gates),
     "usage_by_stage": ("Model calls and cost, by stage and tier", "Over all benchmarks. A call is one request to a model.", usage_by_stage),
     "usage": ("Model calls and cost, by benchmark", "The same, per benchmark, with the model that was called.", usage),
-    "trials": ("Runs through Harbor", "The reference solution, the no-op, the mutants and the agents: how many runs, how they went, what they cost.", trials),
+    "trials": ("Runs through Harbor", "The reference solution, the no-op and the agents: how many runs, how they went, what they cost. Runs of the probe's mutants are not recorded one by one: their outcome is in the probe's record.", trials),
     "adapters": ("Adapters", "Each adapter that was built or given up.", adapters),
     "human_counts": ("Decisions by a person, counted", "How many times a person had to decide something, by kind.", human_counts),
     "human": ("Decisions by a person", "Each one, in order.", human),
