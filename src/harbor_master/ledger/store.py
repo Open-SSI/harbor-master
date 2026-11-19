@@ -17,6 +17,7 @@ from ..core.identity import Identity
 from .events import EVENT_TYPES, TIER_RANK, canonical, duplicate_key, event_id, slug
 
 SHARDS = "ledger"            # the folder of an index repository that holds the shards
+REPORTS = "reports"          # and the one that holds the reports that reviewers sign
 KEEP = {"value", "outcome", "tasks", "expires", "settings", "registry"}      # written even when empty or zero
 MANUAL = "manual"            # the shard for records a person makes by hand: briefs, verdicts, locks
 
@@ -58,6 +59,16 @@ def read_shard(path: Path) -> list[dict]:
 
 def shard_paths(ledger_dir: Path) -> list[Path]:
     return sorted((ledger_dir / SHARDS).glob("*/*.jsonl"))
+
+
+def digest(ledger_dir: Path) -> str:
+    """One checksum over every shard, by path and content. Two copies of a ledger with the same checksum hold the same records."""
+    import hashlib
+    h = hashlib.sha256()
+    for path in shard_paths(ledger_dir):
+        h.update(str(path.relative_to(ledger_dir)).encode())
+        h.update(path.read_bytes())
+    return h.hexdigest()[:16]
 
 
 class Ledger:

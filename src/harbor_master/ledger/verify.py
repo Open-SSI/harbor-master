@@ -161,6 +161,12 @@ def verify(ledger_dir: Path, fields: dict[str, str] | None = None, max_per_bench
                 seen.add(e["protocol"])
                 problems.append(f"records were made under protocol {e['protocol']}, which was never locked "
                                 f"(first by @{e['runner']})")
+    import hashlib
+    for e in events:        # a report is what a reviewer signs on: the file must be the one that was recorded
+        if e["type"] == "report" and e.get("report_digest") and e.get("location"):
+            path = (index_dir or ledger_dir) / e["location"]
+            if path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest()[:16] != e["report_digest"]:
+                problems.append(f"{e.get('task_id', '?')}: its report was changed after it was recorded ({e['location']})")
     index_file = ledger_dir / INDEX_FILE
     if index_file.exists():
         try:

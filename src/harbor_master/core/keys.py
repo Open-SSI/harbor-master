@@ -129,7 +129,7 @@ def doctor(cfg: Config) -> list[tuple[str, str, bool, str]]:
         else:
             rows.append(("difficulty suite", " or ".join(names), any(get(n) for n in names), f"{entry.agent}: {entry.model}"))
     for name in OTHER_KEYS:
-        rows.append(("artifact store", name, bool(get(name)), cfg.about.artifacts or "not set in about.toml"))
+        rows.append(("task store", name, bool(get(name)), cfg.about.tasks or "none named in about.toml"))
     return rows
 
 

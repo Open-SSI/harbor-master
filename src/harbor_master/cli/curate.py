@@ -28,11 +28,17 @@ def benchmarks(workspace: Optional[Path] = Workspace):
     tb = Table(header_style=theme.MU, border_style=theme.BORDER)
     for col in ("id", "name", "version", "released", "tasks", "license", "source", "in this workspace"):
         tb.add_column(col)
+    gone = ledger_mod.abandoned(ledger_mod.Ledger(ws).events)
     for e in tasks_mod.supported.supported(ws):
         here = e["id"] in registry
+        state = (f"[{theme.RD}]abandoned[/]" if e["id"] in gone else f"[{theme.TE}]yes[/]" if here
+                 else "not yet: a run fetches it")
         tb.add_row(e["id"], e["name"], e["version"], e["released"], str(e.get("task_count", "")), e.get("license", ""),
-                   e["github"].replace("https://", ""), f"[{theme.TE}]yes[/]" if here else "no: hm submit " + e["id"])
+                   e["github"].replace("https://", ""), state)
     console.print(tb)
+    for b, record in gone.items():      # said in full under the table, where a narrow column cannot cut it
+        from ..engine import prepare
+        console.print(f"[{theme.RD}]{b}[/] was {prepare.abandoned_text(b, record)}", highlight=False)
     console.print(f"[{theme.MU}]hm run works only on these. To add one, the owner adds an entry to benchmarks.toml and locks it.[/]")
 
 
@@ -40,6 +46,8 @@ def benchmarks(workspace: Optional[Path] = Workspace):
 def submit(name: str = typer.Argument(..., help="A benchmark ID from `hm benchmarks`. With --dev, a local path."),
            dev: bool = typer.Option(False, help="Register a local folder for simulated runs only."),
            field: str = typer.Option("general", help="With --dev: the field this benchmark belongs to."),
+           no_sandbox: bool = typer.Option(False, "--no-sandbox", help="For a benchmark that needs an adapter: run the adapter's code "
+                                                                     "on this machine as it is, not in a container."),
            workspace: Optional[Path] = Workspace):
     """Fetch a supported benchmark at its pinned release and register it in this workspace."""
     ws = need_workspace(workspace)
@@ -59,17 +67,42 @@ def submit(name: str = typer.Argument(..., help="A benchmark ID from `hm benchma
         known = ", ".join(e["id"] for e in tasks_mod.supported.supported(ws)) or "none yet"
         fail(f"{name} is not on this index's list of benchmarks ({known}). See: hm benchmarks. "
              "A local folder can be registered for simulated runs with --dev.")
+    foreign = entry.get("format", "harbor") != "harbor"
+    if foreign:                                          # not Harbor tasks yet: the index's adapter writes them
+        from ..tasks import adapter as adapter_mod
+        adapter_dir = adapter_mod.folder(ws, entry["id"])
+        if adapter_mod.code_dir(adapter_dir) is None:
+            fail(f"{entry['id']} is not in Harbor format, and this index has no adapter for it yet. Its owner builds one with: "
+                 f"hm adapt {entry['id']}")
+        wrong = adapter_mod.structure(adapter_dir)
+        if wrong:
+            fail(f"The adapter for {entry['id']} cannot be used: {'; '.join(wrong[:3])}")
     console.print(f"Fetching {entry['name']} {entry['version']} ({entry['ref']}) from {entry['github']} ...")
     try:
         path = tasks_mod.supported.fetch(entry, config_mod.local(ws) / "sources")
     except (ValueError, subprocess.CalledProcessError) as err:
         fail(str(getattr(err, "stderr", "") or err))
     benchmark = entry["id"]
+    more = {}
+    if foreign:
+        console.print(f"Writing the tasks with the index's adapter ({adapter_mod.FOLDER}/{benchmark}) ...")
+        out = config_mod.local(ws) / "adapted" / benchmark / "tasks"
+        ok, said = adapter_mod.generate(adapter_dir, path, out, sandbox=not no_sandbox)
+        problems, _ = adapter_mod.inspect(out, entry.get("task_count")) if ok else ([f"the adapter failed: {said or 'no output'}"], [])
+        if problems:
+            fail(f"The adapter for {benchmark} did not write usable tasks: {'; '.join(problems[:3])}")
+        known = ledger_mod.submitted(ledger_mod.Ledger(ws).events)
+        mine = adapter_mod.digests(out)
+        differ = [t for t, d in mine.items() if known.get(f"{benchmark}/{t}", {}).get("digest") not in (None, d)]
+        if differ:
+            console.print(f"[{theme.AM}]{len(differ)} of these tasks differ from the ones the ledger has under the same names.[/] "
+                          "That is expected only after the adapter changed.")
+        path, more = out, {"adapter": adapter_mod.digest(adapter_dir)}
     found = tasks_mod.load_benchmark(path, benchmark)
     tasks_mod.register(ws, benchmark, path, ", ".join(entry.get("fields", [])) or "general", supported=entry["id"], license=entry.get("license", ""),
-                       version=entry["version"], released=entry["released"], commit=entry["commit"], github=entry["github"])
+                       version=entry["version"], released=entry["released"], commit=entry["commit"], github=entry["github"], **more)
     console.print(f"Registered [bold]{benchmark}[/]: {entry['name']} {entry['version']}, released {entry['released']}, "
-                  f"{len(found)} tasks at commit {entry['commit'][:10]}.")
+                  f"{len(found)} tasks at commit {entry['commit'][:10]}" + (", written by the index's adapter." if more else "."))
 
 
 @app.command()
@@ -109,17 +142,26 @@ def run(benchmarks: list[str] = typer.Argument(None, help="Benchmarks to run. De
     if budget:
         cfg.run.budget_usd = budget
     registry = tasks_mod.read_registry(ws)
-    wanted = benchmarks or list(registry)
+    listed = {e["id"]: e for e in tasks_mod.supported.supported(ws)}
+    wanted = benchmarks or [*listed, *(b for b in registry if b not in listed and (simulate or registry[b].get("supported")))]
     resolved = {}
     for b in wanted:
-        match = b if b in registry else next((r for r in registry if r.split("/")[-1] == b), None)
-        if match is None:
-            fail(f"{b} is not registered. Register it with: hm submit PATH")
-        resolved[match] = registry[match]
-        if not simulate and not registry[match].get("supported"):
-            fail(f"{match} is not on the list of supported benchmarks, so it only runs with --simulate. See: hm benchmarks")
+        if b not in registry and b not in listed:
+            fail(f"{b} is not on this index's list of benchmarks, and is not a folder registered here. See: hm benchmarks")
+        entry = listed.get(b)       # on the list: the run fetches it, and adapts it, when that is not done yet
+        info = dict(registry[b]) if b in registry else {
+            "path": "", "field": ", ".join(entry.get("fields", [])) or "general", "supported": b,
+            "license": entry.get("license", ""), "released": entry.get("released", "")}
+        resolved[b] = {**info, **({"entry": entry} if entry else {})}
+        if not simulate and not resolved[b].get("supported"):
+            fail(f"{b} is not on the list of supported benchmarks, so it only runs with --simulate. See: hm benchmarks")
+    gone = ledger_mod.abandoned(ledger_mod.Ledger(ws).events)
+    for b in benchmarks or []:          # asked for by name: refused outright. Otherwise the run leaves it out and says so
+        if b in gone:
+            from ..engine import prepare
+            fail(f"Refused: {b} was {prepare.abandoned_text(b, gone[b])}")
     if not resolved:
-        fail("Nothing to run. Register a benchmark with: hm submit ID")
+        fail("Nothing to run: this index lists no benchmark yet. Its owner adds one to benchmarks.toml. To try made-up tasks: hm demo")
     lock = ledger_mod.protocol.current(ledger_mod.Ledger(ws).events)
     if lock is None and not simulate:
         fail("No protocol is locked in this ledger, so a real run has no fixed settings to run under. "
@@ -184,6 +226,16 @@ def review(benchmark: str = typer.Argument(None), simulated: bool = Simulated, w
             led.add(shard.append("verdict", task_id, digest, value=value, reason=reason, tier="human",
                                  reason_code=value, reviewer=ident.github, simulated=simulated))
             ledger_mod.write_index(ledger_dir, simulated)       # the accepted list follows every verdict
+            if value == "accept" and not simulated:             # keep the version that was accepted, for later benchmark runs
+                from ..tasks import store
+                info = tasks_mod.read_registry(ws).get(task_id.split("/", 1)[0], {})
+                files = next((d for d in tasks_mod.find_tasks(Path(info["path"])) if d.name == task_id.split("/", 1)[1]), None) \
+                    if info.get("path") and Path(info["path"]).is_dir() else None
+                try:
+                    _, how = store.put(ws, cfg, *task_id.split("/", 1), digest, files or Path("/nonexistent"))
+                except store.StoreError as err:
+                    how = f"not kept: {err}"
+                console.print(f"[{theme.MU}]Accepted version {how}.[/]", highlight=False)
 
         if value == "accept":
             inside = ledger_mod.accepted(led.events, s.benchmark)
@@ -239,18 +291,39 @@ def eval_(benchmarks: list[str] = typer.Argument(None, help="Benchmarks whose ta
     if not simulate and lock is None:
         fail("Benchmarking needs a locked protocol. The owner locks one with: hm protocol lock")
     check_lock(lock, cfg, ws)
-    wanted = {m: registry[m] for b in (benchmarks or list(registry))
-              for m in registry if m == b or m.split("/")[-1] == b}
-    if not wanted:
-        fail("No such benchmark is registered here. See: hm benchmarks")
-    if not simulate and not all(v.get("supported") for v in wanted.values()):
-        fail("Only supported benchmarks can be benchmarked for real. See: hm benchmarks")
+    from ..tasks import store
     names = {t.strip() for t in only.split(",") if t.strip()}
-    accepted = {s.task_id for s in ledger_mod.fold(led.events).values() if s.status == "accepted"}
-    chosen = [t for b, info in wanted.items() for t in tasks_mod.load_benchmark(Path(info["path"]), b)
-              if (t.name in names if names else t.task_id in accepted)]
+    index = [e for e in ledger_mod.index_entries(led.events) if not benchmarks or e["benchmark"] in benchmarks]
+    here: dict[str, tasks_mod.Task] = {}                # the tasks of the benchmarks registered on this machine
+    for b, info in registry.items():
+        if (not benchmarks or b in benchmarks) and info.get("path") and Path(info["path"]).is_dir():
+            here.update({t.task_id: t for t in tasks_mod.load_benchmark(Path(info["path"]), b)})
+    chosen, lacking = [], []
+    if names:           # tasks named by hand, to try an agent on them. An accepted one must still be the accepted version
+        version = {e["task"]: e["digest"] for e in index}
+        chosen = [t for t in here.values() if t.name in names]
+        lacking = [t.task_id for t in chosen if not simulate and version.get(t.task_id, t.digest) != t.digest]
+    for e in ([] if names else index):
+        mine = here.get(e["task"])
+        if mine is not None and (simulate or mine.digest == e["digest"]):
+            chosen.append(mine)
+            continue
+        try:            # not here, or not this version: the store has the one that was accepted
+            path = None if simulate else store.fetch(ws, cfg, *e["task"].split("/", 1), e["digest"])
+        except store.StoreError as err:
+            fail(str(err))
+        if path is None:
+            lacking.append(e["task"])
+        else:
+            chosen.append(tasks_mod.load_task(path, e["benchmark"]))
+    if lacking:
+        fail(f"Refused: the accepted version of {', '.join(lacking[:5])}{' and more' if len(lacking) > 5 else ''} is not on this machine "
+             "and not in the task store. Running another version would give results for a different task. See: hm tasks")
     if not chosen:
         fail("No tasks to run. Name some with --tasks, or accept tasks into the index first.")
+    wanted = {b: registry.get(b) or {"path": "", "field": "", "supported": b} for b in sorted({t.benchmark for t in chosen})}
+    if not simulate and not all(v.get("supported") for v in wanted.values()):
+        fail("Only supported benchmarks can be benchmarked for real. See: hm benchmarks")
     session = Session(ws, cfg, ident, wanted, simulate=simulate, speed=0.0, no_input=True,
                       command=f"hm eval --agent {agent} --model {model}")
     rows = asyncio.run(evaluate(session, entry, chosen, trials or cfg.difficulty.trials_per_config))

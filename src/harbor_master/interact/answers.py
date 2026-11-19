@@ -52,6 +52,9 @@ def how_to_answer(r) -> str:
             "verdict": "Nothing enters the index until you sign. Start with /review",
             "replace": f"Answer with /replace OLD {short}, or /reject {short} <reason>. "
                        f"Compare them with /included {r.target.rsplit('/', 1)[0] if '/' in r.target else ''}",
+            "adapter": f"Fix the files and check them again with /recheck {short} (with no fix, the frontier model tries once more). "
+                       f"Or give the benchmark up with /abandon {short}",
+            "lock": f"Lock it with /lock {short}",
             "budget": "Answer with: /budget N, or /quit"}.get(r.kind, "")
 
 
@@ -87,8 +90,10 @@ def bench_line(b) -> str:
         return f"{b.id}: {gates}. Ranking them now."
     if b.phase == "signoff":
         return f"{b.id}: {gates}, {sum(1 for r in b.ranking if r[2])} selected. Waiting for the selection to be approved."
-    if b.phase == "adapt":
-        return f"{b.id}: {gates}. Building the adapter."
+    if b.phase in ("fetch", "adapt"):
+        return f"{b.id}: getting it ready ({b.detail or b.phase})."
+    if b.phase == "review":
+        return f"{b.id}: {b.detail or 'its adapter needs you'}."
     return (f"{b.id}: {b.selected} of {n} tasks selected ({b.triaged_out} failed a gate, {b.not_selected} under "
             f"the cap). {b.kept} kept, {b.dropped} dropped, {b.queued} still to do.")
 

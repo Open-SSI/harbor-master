@@ -247,6 +247,37 @@ def approve(session, args):
     return f"Selection approved for {waiting.target}."
 
 
+def _adapter_request(session, args, kind: str):
+    return next((r for r in session.requests if r.kind == kind and (not args or r.target == args[0])), None)
+
+
+@command("recheck", "control", "/recheck benchmark", "its adapter is checked again: your fix if you made one, otherwise one more try by the frontier model")
+def recheck(session, args):
+    waiting = _adapter_request(session, args, "adapter")
+    if waiting is None:
+        return "No adapter is waiting for you" + (f" for {args[0]}." if args else ".")
+    session.answer_request(waiting, "retry")
+    return f"Checking the adapter for {waiting.target} again."
+
+
+@command("abandon", "confirm", "/abandon benchmark", "the benchmark is given up for this index until someone builds its adapter by hand")
+def abandon(session, args):
+    waiting = _adapter_request(session, args, "adapter")
+    if waiting is None:
+        return "No adapter is waiting for you" + (f" for {args[0]}." if args else ".")
+    session.answer_request(waiting, "abandon")
+    return f"{waiting.target} is abandoned: its adapter could not be made to pass. To try again later: hm adapt {waiting.target}"
+
+
+@command("lock", "confirm", "/lock benchmark", "its adapter is signed into the lock, and its tasks start")
+def lock(session, args):
+    waiting = _adapter_request(session, args, "lock")
+    if waiting is None:
+        return "No adapter is waiting to be locked" + (f" for {args[0]}." if args else ".")
+    session.answer_request(waiting, "lock")
+    return f"The adapter for {waiting.target} is locked."
+
+
 def _verdict(session, args, name: str, value: str, need_reason: bool) -> str:
     task, err = _task(session, args, name)
     if task is None:

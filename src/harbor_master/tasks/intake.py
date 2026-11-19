@@ -51,5 +51,5 @@ def load_task(path: Path, benchmark: str) -> Task:
 def load_benchmark(path: Path, benchmark: str) -> list[Task]:
     found = find_tasks(path) if path.is_dir() else []
     if not found:
-        raise ValueError(f"{path} is not in Harbor format. Building an adapter for other formats is not implemented yet.")
+        raise ValueError(f"{path} is not in Harbor format. A benchmark in another format needs an adapter: its index's owner builds one with hm adapt.")
     return [load_task(d, benchmark) for d in found]

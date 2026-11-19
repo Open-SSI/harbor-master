@@ -36,3 +36,15 @@ def differences(locked: dict, mine: dict) -> list[str]:
     a, b = flatten(locked), flatten(mine)
     return [f"{k}: locked {a.get(k, '(not set)')!r}, here {b.get(k, '(not set)')!r}"
             for k in sorted(set(a) | set(b)) if a.get(k) != b.get(k)]
+
+
+def write(ledger_dir, ident, cfg, note: str = "", registry: dict | None = None) -> dict:
+    """Append the owner's lock: the settings, and the checksums of what is locked beside them.
+    `registry` gives those checksums when not everything on disk is meant, as when a run locks one new adapter."""
+    from .. import templates
+    from .store import MANUAL, Ledger, Shard
+    lock = current(Ledger(ledger_dir).events)
+    shard = Shard(ledger_dir, BENCH, ident, MANUAL, cfg.protocol)
+    return shard.append("protocol", settings=cfg.protocol_settings(), registry=registry if registry is not None else templates.digests(ledger_dir),
+                        requires=cfg.requires.harbor_master, note=note,
+                        replaces=lock["protocol"] if lock and lock["protocol"] != cfg.protocol else "")

@@ -133,7 +133,8 @@ def check_lock(lock: dict | None, cfg, ws: Path) -> None:
             console.print(f"  {line}")
         fail("Refused. Put the settings back, or have the owner lock the new ones: hm protocol lock")
     here = templates.digests(ws)
-    changed = [name for name, digest in (lock.get("registry") or {}).items() if here.get(name) != digest]
+    changed = [name for name, digest in (lock.get("registry") or {}).items()        # an adapter holds back only its own
+               if here.get(name) != digest and not name.startswith("adapters/")]      # benchmark: the run checks each one
     if changed:
         fail(f"Refused: {', '.join(changed)} differ{'s' if len(changed) == 1 else ''} from what the owner locked. "
              "Put the file back (git checkout -- FILE), or have the owner lock the new one: hm protocol lock")

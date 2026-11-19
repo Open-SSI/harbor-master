@@ -3,7 +3,7 @@
 What each agent is told. One file per job, grouped by stage. Code holds the rules
 (which answers pass, what a stage does with a result); these files hold the wording.
 
-The curation skills (`triage/`, `rank/`, `probe/`, `audit/`) decide what gets into an index.
+The curation skills (`adapt/`, `triage/`, `rank/`, `probe/`, `audit/`) decide what gets into an index.
 Each index has its own copies under `skills/` in its repository: `hm index new` writes them,
 and they are locked with the index's protocol. The files here are the templates those copies
 start from. An index may change any wording. It may not change what the code reads: the keys
@@ -20,6 +20,7 @@ so they are the same for every index and are not part of any protocol.
 | `triage/confirm.md` | worker tier | Re-deciding a gate the decision tier was unsure about |
 | `rank/score.toml` | decision tier | How much one task matters under the lead's brief, on an ordered scale |
 | `rank/compare.toml` | decision tier | Which of two tasks matters more under the lead's brief |
+| `adapt/write-adapter.md` | worker tier | The adapter that turns a benchmark in another format into Harbor tasks |
 | `probe/write-mutants.md` | worker tier | Variants of the reference solution that test the verifier |
 | `audit/rubric.md` | worker tier | The task-quality rubric. Not used yet |
 | `session/interpret.toml` | decision tier | Reading a plain-text message as a command |

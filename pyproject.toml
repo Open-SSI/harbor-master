@@ -13,6 +13,9 @@ dependencies = [
     "claude-agent-sdk>=0.2",
 ]
 
+[project.optional-dependencies]
+hf = ["huggingface_hub>=0.24"]      # only for an index that keeps its accepted tasks on Hugging Face
+
 [project.scripts]
 hm = "harbor_master.cli:app"
 

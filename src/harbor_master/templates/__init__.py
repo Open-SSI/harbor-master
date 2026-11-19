@@ -20,6 +20,11 @@ def read(name: str) -> str:
 
 
 def digests(index_dir: Path) -> dict[str, str]:
-    """Checksums of the index's files that are locked with the protocol. A missing file counts as empty."""
-    return {name: hashlib.sha256((index_dir / name).read_bytes() if (index_dir / name).exists() else b"").hexdigest()[:16]
-            for name in LOCKED}
+    """Checksums of what is locked with the protocol: the three lists, and every adapter. A missing file counts as empty."""
+    from ..tasks import adapter
+    out = {name: hashlib.sha256((index_dir / name).read_bytes() if (index_dir / name).exists() else b"").hexdigest()[:16]
+           for name in LOCKED}
+    folder = index_dir / adapter.FOLDER         # an adapter decides what the tasks are, so each one is locked too
+    for d in sorted(p for p in folder.iterdir() if p.is_dir()) if folder.is_dir() else []:
+        out[f"{adapter.FOLDER}/{d.name}"] = adapter.digest(d)
+    return out

@@ -8,7 +8,7 @@
 [run]
 cells = 4                       # tasks in flight, one agent session each
 max_containers = 16
-sandbox = "docker"              # "docker" | "daytona" | "modal"
+sandbox = "docker"              # "docker" | "daytona" | "modal". "none" runs an adapter's code on this machine as it is
 budget_usd = 200.0              # the session stops taking tasks at this spend
 budget_usd_per_task = 50.0
 max_tokens_per_agent_session = 400000   # curation agents only

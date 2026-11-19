@@ -92,6 +92,72 @@ def leaderboard(simulated: bool = Simulated, workspace: Optional[Path] = Workspa
                   "rate on each task, averaged over tasks. Trials that failed for an infrastructure reason are left out.[/]")
 
 
+@app.command()
+def stats(simulated: bool = Simulated,
+          out: Optional[Path] = typer.Option(None, "--out", help="Where to write. Default: .hm/stats in this index, which git ignores."),
+          no_pull: bool = typer.Option(False, "--no-pull", help="Use the ledger as it is on this machine, without pulling what others pushed."),
+          workspace: Optional[Path] = Workspace):
+    """Write the statistics of this curation, over everyone's records: stats.md and a CSV per table. They stay on this machine."""
+    from .. import __version__
+    ws = need_workspace(workspace)
+    cfg = config_mod.load(ws)
+    sync = ledger_mod.Sync(ws)
+    pulled = "no: these are one machine's simulated runs" if simulated else "no: this index is not shared" if not sync.enabled \
+        else "no: --no-pull" if no_pull else "yes"
+    if pulled == "yes":         # the tables are over everyone's records, so bring them in first
+        try:
+            sync.pull()
+        except ledger_mod.SyncError as err:
+            pulled = f"failed, so this is the ledger as it was here: {str(err)[:160]}"
+            console.print(f"[{theme.AM}]Could not pull what others pushed.[/] The tables are made from the ledger as it is on this machine.")
+    where = records(ws, simulated)
+    events = ledger_mod.Ledger(where, simulated=simulated).events
+    problems = ledger_mod.verify(where, max_per_benchmark=cfg.index.max_per_benchmark, simulated=simulated, index_dir=ws)
+    at = {"commit": "", "remote": "", "unpushed": "", "committed": "no"} if simulated else sync.where()
+    covered = at["commit"] and at["committed"] == "yes"
+    source = [
+        ["made", time.strftime("%Y-%m-%d %H:%M")],
+        ["index", cfg.about.title or cfg.about.name or ws.name],
+        ["records", len(events)],
+        ["people with records", len({e["runner"] for e in events})],
+        ["protocols", ", ".join(sorted({e["protocol"] for e in events})) or "none"],
+        ["ledger checksum", ledger_mod.digest(where)],
+        ["ledger check", "sound" if not problems else f"{len(problems)} problems: see hm ledger verify"],
+        ["commit", at["commit"] if covered else "none holds these records: " + ("they are simulated" if simulated else
+                                                                              "the index is not shared" if not at["remote"] else
+                                                                              "some records here are not committed")],
+        ["shared at", at["remote"] or "nowhere"],
+        ["pulled first", pulled],
+        ["commits not pushed", at["unpushed"] or "0"],
+        ["made again with", f"git checkout {at['commit'][:12]} && hm stats --no-pull" if covered else "hm stats" + (" --simulated" if simulated else "")],
+        ["Harbor-Master", __version__],
+    ]
+    notes = []
+    if simulated:
+        notes.append("**SIMULATED.** These are the records of simulated runs on one machine. Every model answer, trial and cost "
+                     "here is made up. None of it is in the index.")
+    notes.append("Every figure is computed from the ledger, over the records of everyone who curated. Model calls, tokens and cost by "
+                 "stage come from the `usage` records that each run writes. Runs through Harbor are counted apart, from their own "
+                 "records. A decision by a person is counted when it left a record: a brief, an approval, a verdict, an adapter "
+                 "given up or fixed, a lock.")
+    if at["unpushed"] not in ("", "0"):
+        notes.append(f"**{at['unpushed']} commits here are not pushed yet.** The tables include records that others do not have until: hm sync")
+    found = ledger_mod.stats.tables(events)
+    folder = out or config_mod.local(ws) / "stats" / ("simulated" if simulated else "")
+    path = ledger_mod.stats.write(found, folder, f"Curation statistics: {cfg.about.title or cfg.about.name or ws.name}", notes, source)
+    tb = Table(header_style=theme.MU, border_style=theme.BORDER)
+    tb.add_column("figure")
+    tb.add_column("value", justify="right")
+    for name, value in found["summary"][1]:
+        tb.add_row(name, f"{value:,}" if isinstance(value, int) else f"{value:,.2f}" if isinstance(value, float) else str(value))
+    console.print(tb)
+    console.print(f"From {len(events):,} records of {len({e['runner'] for e in events})} people"
+                  + (f", at commit {at['commit'][:12]}" if covered else "") + f". Pulled first: {pulled}.", highlight=False)
+    console.print(f"Wrote {path} and {len(found) + 1} CSV files beside it.", highlight=False)
+    console.print(f"[{theme.MU}]They are on this machine only: git ignores that folder, and nothing uploads it.[/]")
+    mention_simulated(ws, simulated)
+
+
 @app.command(name="roster")
 def roster_cmd(workspace: Optional[Path] = Workspace):
     """The agent configurations to benchmark on the index, from its roster.toml."""
@@ -210,13 +276,21 @@ def protocol_show(ctx: typer.Context, workspace: Optional[Path] = Workspace):
     console.print(f"Locked: [bold]{lock['protocol']}[/], by @{lock['runner']} on {when}." + (f" {lock['note']}" if lock.get("note") else ""))
     diff = ledger_mod.protocol.differences(lock.get("settings", {}), cfg.protocol_settings())
     here = templates.digests(ws)
-    diff += [f"{name}: not the locked copy" for name, digest in (lock.get("registry") or {}).items() if here.get(name) != digest]
-    if not diff:
+    listed = lock.get("registry") or {}
+    is_adapter = lambda name: name.startswith("adapters/")  # noqa: E731
+    diff += [f"{name}: not the locked copy" for name, digest in listed.items() if here.get(name) != digest and not is_adapter(name)]
+    held = [f"{name}: not the locked copy" for name, digest in listed.items() if here.get(name) != digest and is_adapter(name)]
+    held += [f"{name}: not locked yet" for name in here if name not in listed]
+    if diff:
+        console.print(f"[{theme.RD}]They differ, so runs are refused here:[/]")
+        for line in diff:
+            console.print(f"  {line}")
+    else:
         console.print(f"[{theme.TE}]They match. Runs are allowed.[/]")
-        return
-    console.print(f"[{theme.RD}]They differ, so runs are refused here:[/]")
-    for line in diff:
-        console.print(f"  {line}")
+    if held:        # an adapter holds back its own benchmark, and nothing else
+        console.print(f"[{theme.AM}]Held back until locked, each for its own benchmark only:[/]")
+        for line in held:
+            console.print(f"  {line}")
 
 
 @protocol_app.command("lock")
@@ -242,9 +316,7 @@ def protocol_lock(note: str = typer.Option("", help="Why the protocol is being s
     if lock is not None and (lock["protocol"], lock.get("registry"), lock.get("requires", requires)) == (cfg.protocol, registry, requires):
         console.print(f"Protocol {cfg.protocol} and the index's files are already the locked ones.")
         return
-    shard = ledger_mod.Shard(ws, ledger_mod.protocol.BENCH, ident, ledger_mod.MANUAL, cfg.protocol)
-    shard.append("protocol", settings=cfg.protocol_settings(), registry=registry, requires=requires, note=note,
-                 replaces=lock["protocol"] if lock and lock["protocol"] != cfg.protocol else "")
+    ledger_mod.protocol.write(ws, ident, cfg, note)
     sync.define(f"lock protocol {cfg.protocol}")        # the files travel with the lock that covers them
     if sync.enabled:
         sync.publish(f"lock protocol {cfg.protocol}")

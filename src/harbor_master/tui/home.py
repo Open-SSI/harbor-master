@@ -47,9 +47,12 @@ COMMANDS: dict[str, tuple[str, str, str]] = {
     "keys": ("", "Create the keys file, or say where it is", ""),
     "doctor": ("", "Which keys are found, and what this machine can run", "doctor"),
     "benchmarks": ("", "The benchmarks this index may curate", "benchmarks"),
+    "adapt": ("ID", "Owner: build the adapter for a benchmark that is not in Harbor format", "adapt"),
     "submit": ("ID", "Fetch a benchmark at its pinned release and register it", "submit"),
     "run": ("[benchmarks] [--simulate]", "Open the run screen. --simulate spends nothing", ""),
     "status": ("", "Where every task stands", "status"),
+    "tasks": ("[push | pull]", "The accepted tasks, and the store that keeps the accepted version of each", "tasks"),
+    "stats": ("", "Write the statistics of this curation: a report and CSV files, on this machine", "stats"),
     "leaderboard": ("", "How each agent configuration does on the accepted tasks", "leaderboard"),
     "todo": ("", "What is still to benchmark", "todo"),
     "roster": ("", "The agent configurations benchmarked on this index", "roster"),
@@ -223,7 +226,8 @@ class HomeApp(App[tuple[list[str], Path] | None]):
             names.sort(key=lambda n: wanted.index(n) if n in wanted else len(wanted))        # what the tip names comes first
             return ["/" + n + (" " if COMMANDS[n][0] else "") for n in names]
         s = self.state
-        words = {"use": s.nearby, "submit": s.listed, "run": [*s.registered, "--simulate"]}.get(head, [])
+        words = {"use": s.nearby, "submit": s.listed, "adapt": s.to_adapt,
+                 "run": [*dict.fromkeys([*s.registered, *s.listed]), "--simulate"]}.get(head, [])
         done = rest.split()[:-1] if rest and not rest.endswith(" ") else rest.split()
         last = "" if rest.endswith(" ") or not rest else rest.split()[-1]
         return [" ".join(["/" + head, *done, w]) for w in words if w.startswith(last) and w not in done]
@@ -312,8 +316,8 @@ class HomeApp(App[tuple[list[str], Path] | None]):
             self.show("left", f"Back in {self.folder}. Pick an index with /use, /join or /new.")
             self.look()
         elif name == "run":
-            if not s.registered:
-                self.show("nothing to run", "No benchmark is registered here yet. Fetch one with /submit ID, or add a made-up one with /demo.", failed=True)
+            if not (s.registered or s.listed):
+                self.show("nothing to run", "This index lists no benchmark yet. Its owner adds one to benchmarks.toml. Or add a made-up one with /demo.", failed=True)
                 return
             self.exit((args, self.ws))
         elif name == "lock":

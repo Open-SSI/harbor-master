@@ -80,6 +80,9 @@ async def test_a_running_task_and_a_completed_task_are_both_rejected_for_the_oth
     assert bob2.benches[BENCH].selected == 0 and "already completed" in notes(bob2)
     assert not any(e["type"] == "trial" and e["runner"] == "bob" for e in bob2.ledger.events)
     assert ledger.verify(bob2.ledger_dir) == []                     # Bob's copy now holds both people's records, all valid
+    from harbor_master import interact                              # and the reports Alice's run wrote, so that he can review them
+    theirs = sorted((bob2.ws / "reports" / BENCH).glob("*.md"))
+    assert theirs and bob2.ready and "Recommendation" in interact.execute(bob2, interact.Command("report", [bob2.ready[0].name]))
 
 
 async def test_an_interrupted_or_failed_task_is_released_for_others(world, monkeypatch):

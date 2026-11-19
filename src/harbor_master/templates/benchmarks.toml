@@ -9,6 +9,8 @@
 #   released   the date of the pinned release, used by the recency gate
 #   tasks      where the task folders are inside the repository
 #   manifest   optional: a Harbor dataset.toml that lists which tasks belong to the release
+#   format     "harbor" when the tasks are Harbor task folders. Anything else, such as "jsonl",
+#              means the benchmark needs an adapter, which the owner builds with: hm adapt ID
 #
 # [[benchmark]]
 # id = "example-bench"

@@ -87,6 +87,15 @@ def submitted(events: Iterable[dict]) -> dict[str, dict]:
     return out
 
 
+def abandoned(events: Iterable[dict]) -> dict[str, dict]:
+    """The benchmarks given up because no adapter could be made to pass: benchmark -> the record that says so.
+    The latest record of the adapt stage decides, so an adapter that passes later reopens the benchmark."""
+    last: dict[str, dict] = {}
+    for e in sorted((e for e in events if e["type"] == "decision" and e.get("stage") == "adapt"), key=lambda e: e["time"]):
+        last[e["benchmark"]] = e
+    return {b: e for b, e in last.items() if e.get("outcome") == "drop"}
+
+
 def credits(events: Iterable[dict]) -> dict[str, dict]:
     out: dict[str, dict] = defaultdict(lambda: defaultdict(float))
     for e in events:

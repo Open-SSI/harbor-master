@@ -15,8 +15,8 @@ if TYPE_CHECKING:
     from ..engine import Session
 
 ANSWERS = {"brief": ["brief"], "selection": ["approve", "selection"], "verdict": ["review"],     # request kind -> commands
-           "replace": ["replace", "included"], "budget": ["budget"]}
-BENCH_PHASE = {"brief": "brief", "approve": "signoff", "selection": "signoff"}      # the phase a command answers
+           "replace": ["replace", "included"], "budget": ["budget"], "adapter": ["recheck", "abandon"], "lock": ["lock"]}
+BENCH_PHASE = {"brief": "brief", "approve": "signoff", "selection": "signoff", "recheck": "review", "abandon": "review", "lock": "review"}      # the phase a command answers
 VERDICTS = ("accept", "reject", "sendback", "report")
 LIMIT = 40
 

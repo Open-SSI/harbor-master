@@ -31,6 +31,8 @@ class State:
     can_curate: bool = False
     described: bool = False                             # about.toml has a description
     listed: list[str] = field(default_factory=list)     # benchmarks the index may curate
+    to_adapt: list[str] = field(default_factory=list)   # the ones in another format that have no adapter yet
+    abandoned: list[str] = field(default_factory=list)  # the ones given up, because no adapter could be made to pass
     lock: str = "none"                                  # none | locked | differs
     shared: str = ""                                    # the repository it is shared through
     skills_missing: int = 0                             # curation skills the index has no copy of
@@ -46,8 +48,8 @@ class State:
 
     @property
     def real(self) -> list[str]:
-        """The registered benchmarks a real run may take: the ones on the index's list."""
-        return [b for b, info in self.registered.items() if info.get("supported")]
+        """The benchmarks a real run may take: the ones on the index's list. A run fetches them itself."""
+        return sorted({*self.listed, *(b for b, info in self.registered.items() if info.get("supported"))} - set(self.abandoned))
 
     @property
     def trying(self) -> bool:
@@ -65,7 +67,11 @@ def look(start: Path | None = None) -> State:
     ws = s.ws
     try:
         cfg = config_mod.load(ws)
-        s.listed = [e["id"] for e in tasks_mod.supported.supported(ws)]
+        entries = tasks_mod.supported.supported(ws)
+        s.listed = [e["id"] for e in entries]
+        from ..tasks import adapter
+        s.to_adapt = [e["id"] for e in entries if e.get("format", "harbor") != "harbor"
+                      and adapter.code_dir(adapter.folder(ws, e["id"])) is None]
     except (ValueError, OSError):       # a file of the index does not parse: the commands will say which
         cfg = config_mod.Config()
     people = ledger_mod.load_contributors(ws)
@@ -76,6 +82,8 @@ def look(start: Path | None = None) -> State:
         s.is_owner = bool(s.me and s.me.get("role") == "owner" and s.me.get("key"))
         s.can_curate = ledger_mod.fields_of(people, s.ident.github) != set()
     events = ledger_mod.Ledger(ws).events
+    s.abandoned = sorted(ledger_mod.abandoned(events))
+    s.to_adapt = [b for b in s.to_adapt if b not in s.abandoned]
     lock = ledger_mod.protocol.current(events)
     if lock is not None:
         from .. import templates
@@ -85,7 +93,7 @@ def look(start: Path | None = None) -> State:
         s.shared = ledger_mod.Sync(ws)._git("remote", "get-url", "origin", check=False).stdout.strip()
     from .. import skills
     s.skills_missing = len(skills.missing(ws / "skills"))
-    s.missing_keys = [(what, var) for what, var, present, _ in keys_mod.doctor(cfg) if not present and what != "artifact store"]
+    s.missing_keys = [(what, var) for what, var, present, _ in keys_mod.doctor(cfg) if not present and what != "task store"]
     s.keys_file = keys_mod.secrets_path()
     s.registered = tasks_mod.read_registry(ws)
     s.ran, s.ready, s.accepted = _counts(events)
@@ -120,7 +128,9 @@ def steps(s: State) -> list[tuple[str, str, str]]:
             ("The protocol", s.lock == "locked", {"none": "not locked yet, needed for real runs", "locked": "locked",
                                                   "differs": "this copy is not the locked one"}[s.lock]),
             ("Keys", not s.missing_keys, keys),
-            ("A benchmark", bool(s.registered), ", ".join(s.registered) or "none registered here"),
+            ("A benchmark", bool(set(s.registered) | set(s.listed) - set(s.abandoned)),
+             ", ".join(f"{b} (abandoned)" if b in s.abandoned else b if b in s.registered else f"{b} (the run fetches it)"
+                       for b in dict.fromkeys([*s.registered, *s.listed])) or "none listed yet"),
             ("A run", s.ran or (s.trying and s.sim_ran), "the ledger has records" if s.ran else
              "simulated only: kept on this machine, not in the index" if s.sim_ran else "nothing has run yet"),
             ("Your verdicts", bool(s.accepted) and not s.ready, f"{s.ready} report{'s' if s.ready != 1 else ''} waiting, {s.accepted} accepted")
@@ -146,8 +156,8 @@ def next_step(s: State) -> str:
         return "An index"
     if s.ready:
         return "Your verdicts"
-    if not s.registered:
-        return "Your place in it" if not s.can_curate and not s.is_owner and s.listed else "A benchmark"
+    if not (set(s.registered) | set(s.listed) - set(s.abandoned)):
+        return "A benchmark"
     if s.real:      # a benchmark that can run for real: clear what a real run needs, in order
         if not s.can_curate:
             return "Your place in it"
@@ -236,11 +246,14 @@ def tip(s: State) -> Tip:
             ("/doctor", "Shows which keys are found, and what this machine can run"),
             _meanwhile(s, "keys")])
     if step == "A benchmark":
-        lines = [("/benchmarks", "Shows the benchmarks this index may curate" + ("" if s.listed else ". None is listed yet"))]
-        if s.listed:
-            lines.append((f"/submit {s.listed[0]}", "Fetches one at its pinned release and registers it here"))
-        elif s.is_owner:
-            lines.append(("", "To curate a real benchmark, list it in benchmarks.toml and lock the change with /lock."))
+        if s.abandoned:
+            return Tip("Next: get a benchmark to curate", [
+                ("", f"{', '.join(s.abandoned)} was abandoned: no adapter could be made to pass, so no run takes it."),
+                (f"/adapt {s.abandoned[0]}", "Owner: try again. An adapter that passes reopens the benchmark") if s.is_owner else
+                ("", f"Only {s.owner or 'the owner'} can reopen it, by building an adapter that passes."),
+                ("/demo", "Adds a made-up benchmark, for simulated runs only. It spends nothing")])
+        lines = [("", "This index lists no benchmark yet." + (" List one in benchmarks.toml, pinned to a release, and lock the change "
+                      "with /lock. The file explains each field." if s.is_owner else f" {s.owner or 'Its owner'} adds them."))]
         lines.append(("/demo", "Adds a made-up benchmark, for simulated runs only. It spends nothing"))
         return Tip("Next: get a benchmark to curate", lines)
     if step == "A run":
@@ -250,6 +263,13 @@ def tip(s: State) -> Tip:
         elif s.real:
             lines.append(("", "A real run needs your place on the list, a locked protocol, and keys: see the steps above."))
         lines.append(("/run --simulate", "The same screen on simulated models and trials. It spends nothing"))
+        unfetched = [b for b in s.listed if b not in s.registered]
+        if unfetched:
+            lines.append(("", f"The run fetches {', '.join(unfetched)} itself, at the pinned release."))
+        if s.to_adapt:
+            who = "your run builds its adapter by itself, and asks you only if the models cannot" if s.is_owner else \
+                f"it is skipped until {s.owner or 'the owner'} has run it once, which builds and locks its adapter"
+            lines.append(("", f"{', '.join(s.to_adapt)} is not in Harbor format: {who}."))
         lines.append(("", "The run stops twice to ask you something: first for a brief on what matters in the benchmark, "
                           "then to approve its selection. A tip on that screen says how to answer."))
         if s.sim_ran:
@@ -317,6 +337,11 @@ def session_tip(session) -> str:
             return f"The run waits for you. /selection {short} shows the ranking, /approve {short} starts the costly stages"
         if r.kind == "budget":
             return "The budget is spent and the run is paused. Raise it with /budget N, or leave with /quit"
+        if r.kind == "adapter":
+            return (f"The models could not make {short}'s adapter pass. Fix it and type /recheck {short}, "
+                    f"or give the benchmark up with /abandon {short}")
+        if r.kind == "lock":
+            return f"The adapter for {short} passes. Read it, then /lock {short} lets its tasks start"
         if r.kind == "replace":
             return f"The benchmark is full. /included {r.target.rsplit('/', 1)[0] if '/' in r.target else ''} compares its tasks, /replace OLD {short} swaps one"
         return "Reports are ready. /review lists them, /report ID shows one, /accept ID or /reject ID <reason> signs your verdict"
@@ -324,6 +349,8 @@ def session_tip(session) -> str:
         return "The run is paused. /resume continues it"
     if session.finished:
         return "The run is finished. ctrl+q leaves, and what it did is in: hm status"
-    if any(b.phase in ("queued", "triage", "ranking", "adapt") for b in session.benches.values()) and not any(c.task for c in session.cells):
+    if any(b.phase in ("fetch", "adapt") for b in session.benches.values()) and not any(c.task for c in session.cells):
+        return "Getting the benchmark ready: fetching it, and building its adapter if it needs one. Nothing is needed from you"
+    if any(b.phase in ("queued", "triage", "ranking") for b in session.benches.values()) and not any(c.task for c in session.cells):
         return "Screening the tasks. Nothing is needed from you yet. Ask anything in plain words, such as: what happens next?"
     return "Nothing is needed from you. Press 1-9 to open a cell, ask a question in plain words, or type / for commands"

@@ -49,7 +49,7 @@ A submission is anything: a Harbor task directory, a Harbor dataset, a git repos
 |---|---|---|---|---|
 | 0 | Intake | Code | Detects the format, fetches, computes content digests, groups tasks into working cells | Always |
 | 1 | Triage | D, then W on low confidence | The admission gates below, plus the field label | Any gate fails: dropped with a reason code |
-| 2 | Adapt | W with `/create-adapter`; skipped for Harbor-format input | A Harbor adapter for the benchmark, or one adapted task | Cannot be adapted after the retry limit |
+| 2 | Adapt | The run itself, at its start: W with the `adapt/write-adapter` skill, F after two failed rounds, a person only after that. Once per benchmark. Skipped for Harbor-format input | An adapter in the index's repository, in Harbor's adapter layout, locked, and the Harbor tasks it writes | The owner abandons it when the models cannot make it pass |
 | 3 | Verify | Code, W for repairs | Image builds, oracle passes, no-op fails, verifier is deterministic over two runs, no answer files in the agent image, verifier isolated, `harbor adapter review` passes. Sampled parity on a small parity set, run with the worker tier's model so that there is no separate setting, only when the original harness runs | Still failing after the retry limit |
 | 4 | Probe | Code and W | Verifier stress test before any frontier trial (Section 5) | Verifier accepts a wrong solution or rejects a right one, and repair fails |
 | 5 | Difficulty | Evaluation suite | 2 frontier models x native harness x 3 trials, in rounds, with early stop: Fable on Claude Code, and GPT-6 Astra on Codex. Each trial runs for at most 4 hours. Keep if at most 40% pass | More than 40% pass |
@@ -129,8 +129,8 @@ Nothing goes to Harbor during curation. Three stores hold the work until the ind
 
 | Store | Holds | Why there |
 |---|---|---|
-| Task store (private git repository) | Adapters and adapted tasks, in Harbor format | Small text files, versioned, shared by all runners |
-| Artifact store (private Hugging Face dataset repository, addressed by digest) | Trajectories, verifier output, logs, reports | Large files that do not belong in git |
+| Task store (a Hugging Face dataset repository or a folder, addressed by digest) | The accepted tasks, each as one archive at the version that was accepted | Too large for git, and what a later benchmark run needs. Section 8 |
+| The run folder on each machine (`.hm/runs/`) | Trajectories, verifier output, logs | Evidence that stays where it was made. Not shared: Section 8 says what that gives up |
 | Ledger (git) | Small typed events: who ran or decided what, on which digest, with what result and cost | Auditable history. Private until release, then made public with its full history |
 
 A local SQLite index is rebuilt from the ledger for queries. It is never the source of truth.
@@ -161,6 +161,8 @@ One event schema covers curation and later benchmarking. Every event has `id`, `
 | `claim` | task IDs, expiry, or `released` | After selection, and again when the run ends |
 | `brief` | benchmark, the lead's text, example tasks, version | A field lead states what is important |
 | `roster` | agent, version, model, settings, index version, trials per task | Registering an agent configuration for benchmarking |
+| `usage` | rows of stage, tier, model, calls, tokens and cost: what the model tiers were called for since the last such record of the run | After a benchmark's shared phase, after each task, and when the run ends |
+| `skip` | a one-word reason and the full one | A run leaves a benchmark out: it could not be fetched, has no adapter, was abandoned, got no brief, its selection was not approved, someone else is screening it, or it failed with an error |
 
 A frontier run during curation and a run by a new agent six months later are the same `trial` event with a different `purpose`. The difficulty filter and the leaderboard therefore read one table, and a benchmarking run by anyone also counts as evidence when the next release decides which tasks to retire.
 
@@ -175,6 +177,7 @@ The curation skills (the first five rows below) decide what gets into an index, 
 | `triage/gates.toml` | decision tier (Jev) | The admission gates: each question, and what each answer means |
 | `triage/decide.md`, `triage/confirm.md` | decision tier on a general model, worker tier | One gate, and re-deciding a gate the decision tier was unsure about |
 | `rank/score.toml`, `rank/compare.toml` | decision tier | How much one task matters under the lead's brief, and which of two matters more |
+| `adapt/write-adapter.md` | worker tier | The adapter that turns a benchmark in another format into Harbor tasks |
 | `probe/write-mutants.md` | worker tier | Variants of the reference solution that test the verifier |
 | `audit/rubric.md` | worker tier | The task-quality rubric. Written, not used yet |
 | `session/interpret.toml`, `session/answer.md` | decision tier, chat tier | Reading a typed line, and answering a question from the records |
@@ -250,6 +253,7 @@ Little, and all of it readable. The rule is that nothing is stored twice, and no
   benchmarks.toml  roster.toml             what may be curated, and which agents are benchmarked. Locked
   contributors.toml                        who may curate. Locked
   index.toml                               the accepted tasks, written from the verdicts
+  reports/<benchmark>/<task>.<digest>.md   the report on each task that reached one, for the reviewer
   ledger/
     <benchmark>/<you>-<run id>.jsonl       one file per run: every record that run made
     <benchmark>/<you>-manual.jsonl         one file for what you record by hand: briefs, verdicts
@@ -259,11 +263,12 @@ Little, and all of it readable. The rule is that nothing is stored twice, and no
     owner                                  the owner's key, as it was when this machine joined
     tasks/registry.json                    which benchmarks are registered here
     sources/<benchmark>/                   the benchmarks, cloned at their pinned release
+    store/                                 a copy of each accepted task's archive, and the ones unpacked for a benchmark run
+    stats/                                 what hm stats wrote: stats.md and a CSV per table. stats/simulated/ for simulated runs
     simulated/                             what simulated runs recorded: its own ledger/ and index.toml. Never in the index
     runs/<run id>/
       run.json                               counts per stage, cost per tier, calls
       tasks.jsonl                            one line per task: its status and every stage's result
-      reports/<task>.md                      only for a task that reached a report
       trials/<task>.<agent>.<model>.<i>.tar.gz   only agent trials, and runs that went wrong
       session.log                            only if something was typed
       requests.json                          only while something is waiting on the user
@@ -296,32 +301,46 @@ Keys never enter the config, the ledger, or anything uploaded, and git never see
 
 ### Where each thing goes
 
-| What | Goes to | Visibility before release |
+Two places are shared, and nothing else is.
+
+| What | Goes to | Why there |
 |---|---|---|
-| Ledger files (`ledger/<benchmark>/*.jsonl`), `index.toml` | The index's repository, through `hm sync` | Private |
-| Adapters and adapted tasks | Task repository on GitHub | Private |
-| Trial archives, reports, `run.json`, `tasks.jsonl` | Hugging Face, artifacts repository. Not built | Private |
-| Probes and repair diffs | Hugging Face, restricted repository | Private, and they stay private after release: they reveal solutions |
-| `index.sqlite`, `cache/`, identity, API keys | Nowhere | Local only |
+| The index's definition, its adapters, the ledger, the reports, `index.toml` | The index's repository, through `hm sync` and every run | Small text, signed or checked against a signed record, and needed by everyone |
+| The accepted tasks, at the version that was accepted | The index's task store | Too large for a git repository, and the only thing a later benchmark run needs besides the ledger |
+| Trial archives, mutants, `run.json`, `tasks.jsonl`, `session.log`, statistics | Nowhere: they stay in `.hm/` on the machine that made them | The ledger already holds every result. See below for what that gives up |
+| Identity, API keys | Nowhere | Local only |
 
-### Hugging Face
+### The task store
 
-Two private dataset repositories under one organization. S3 is not needed: Hugging Face is free at this size, versioned, and supports private and gated access. Docker images are not uploaded: tasks pin their base image by digest and build from the Dockerfile.
+A later benchmark run must run exactly the task that was accepted. Three things make a copy necessary:
 
-| Repository | Holds | At release |
-|---|---|---|
-| `OpenSSI/harbor-master-artifacts` | Each run's `trials/` archives, `reports/`, `run.json` and `tasks.jsonl`, as the run wrote them, plus a manifest mapping trial records to archives | The archives of index tasks are copied to a public or gated repository |
-| `OpenSSI/harbor-master-restricted` | Probe mutants, exploit attempts, and repair diffs, in the same layout | Stays private |
+- **Size.** Tasks are too large for git. In Terminal-Bench-Science 0.1.0 the 70 tasks take 1.1 GB, the median task is 1.6 MB, 20 are over 10 MB, and the largest is 196 MB.
+- **Repairs.** A repaired task has a new digest and exists nowhere but on the machine that repaired it. The benchmark's source and the adapter give only the version before.
+- **The source may go.** A pinned commit does not protect against a repository that is deleted or rewritten.
 
-Files are packed per run and task, not one file per trial, to stay well inside the Hub's limits on file counts. The ledger holds the digest and path of each archive, so a record can be checked against its artifact.
+So each accepted task is kept as one archive, named by benchmark, task and digest: `tasks/<benchmark>/<task>.<digest>.tar.gz`. Only accepted tasks are kept, at most `max_per_benchmark` per benchmark. Every other converted task can be written again by the locked adapter, with the same digest.
 
-Setup, once per runner:
+- **Where.** `tasks` in the index's `about.toml` names the store: a Hugging Face dataset repository, written `org/name`, or a folder, such as a shared drive. A copy is always kept on the machine, under `.hm/store/`. With nothing named, that copy is the only one.
+- **When.** Accepting a task puts its accepted version in the store, beside the run, and the recent outcomes say how it went. It never holds a verdict back. If the files on the machine are not the accepted version, it says so and keeps nothing.
+- **`hm tasks`** lists each accepted task and where a copy is. `hm tasks push` puts in whatever this machine has and the store lacks. `hm tasks pull` brings every accepted task onto this machine.
+- **`hm eval` runs the accepted version or nothing.** For each accepted task it uses the files of the benchmark on the machine if their digest is the accepted one. Otherwise it takes the archive from the store, unpacks it, and checks the digest. If there is no copy, or the copy does not match, it refuses: a result on another version would be a result for a different task.
+- **A copy that does not match its digest is thrown away**, archive and files, and reported.
+- **Hugging Face** needs the `huggingface_hub` package (`uv tool install --editable '.[hf]'`) and a token with write access to that one repository, set with `hm keys set HF_TOKEN`. The repository is private until release. Written, and never run against Hugging Face: only the folder store is tested.
+- **At release**, `hm publish` sends the accepted tasks to the Harbor Hub, where anyone can run them with `harbor run -d`. Not built.
+- **A benchmark whose licence forbids redistribution** should not be copied into a store that will be public. Nothing checks that yet.
 
-1. A maintainer creates the organization and the two repositories, and adds the runner to the organization with write access.
-2. The runner creates a fine-grained Hugging Face token with write access to those two repositories only, and stores it with `hm keys set HF_TOKEN`.
-3. The owner writes the two repository names in the index's `about.toml`, as `artifacts` and `restricted`. Nothing checks the token against them yet.
+### Reports
 
-During curation only organization members run, so direct write access is enough. Once the index is open to outside contributors, they cannot be given write access to a private repository. An outside contributor uploads archives to a dataset repository of their own, the ledger record points to it, and CI copies the archives into the organization's repository when the pull request merges.
+A reviewer signs a verdict from the report, so the report must reach the reviewer's machine. It is written into the index's repository, as `reports/<benchmark>/<task>.<digest>.md`, and committed with the ledger records of the run that wrote it. The record of a report holds a checksum of the file, and `hm ledger verify` reports a report that was changed afterwards. A simulated run writes its reports under `.hm/simulated/`, with its other records.
+
+### What is not shared, and what that gives up
+
+Trial archives (the trajectory and the verifier's output of each agent trial), the mutants of the probe, and each run's own summary files stay on the machine that made them.
+
+- **Nothing the system does needs them elsewhere.** The ledger records each trial's result, tokens, cost, time and agent version. The index, the leaderboard and the statistics are computed from that. The audit reads trajectories on the machine where the trials ran, while the run is going.
+- **What is given up:** a trial's record is a signed statement that the trial happened and how it went. Nobody else can open the trajectory to check it, and it is gone when that machine's run folder is deleted. A reviewer on another machine reads the report, not the trajectories.
+- **No private store for mutants and repair diffs.** An earlier draft kept them apart because they reveal solutions. A Harbor task ships its reference solution in `solution/` already, so there is nothing more to protect. A repair's diff is the difference between the stored task and the one the source gives.
+- **If outside-checkable evidence is wanted later**, the trial archives of the accepted tasks alone are few, and can go into the task store beside the tasks.
 
 ## 9. Benchmarking on the index
 
@@ -407,8 +426,10 @@ Harbor-Master is the tool, and holds no index. Each index is a git repository of
 | `benchmarks.toml` | Which benchmarks may be curated, each pinned to a release | The owner, by locking | Its checksum is locked beside the protocol |
 | `roster.toml` | Which agent configurations are benchmarked on the index | The owner, by locking | Its checksum is locked beside the protocol |
 | `contributors.toml` | Who may curate, in which fields, and their signing keys | The owner, by locking | Its checksum is locked beside the protocol, and every record is checked against it |
-| `skills/` | What the agents that curate this index are told: the gates, the ranking, the probe, the audit | The owner, by locking | Part of the protocol hash |
+| `skills/` | What the agents that curate this index are told: the adapter, the gates, the ranking, the probe, the audit | The owner, by locking | Part of the protocol hash |
+| `adapters/<benchmark>/` | The code that turns a benchmark in another format into Harbor tasks | The owner, by locking | Its checksum is locked beside the protocol |
 | `ledger/` | Every record | Everyone on the list, through `hm` | Signed and chained: `hm ledger verify` |
+| `reports/` | The report on each task that reached one | Nobody: `hm` writes them | Each report's record holds its checksum |
 | `index.toml` | The accepted tasks | Nobody: `hm` writes it from the verdicts | `hm ledger verify` |
 
 - **Starting one.** `hm index new NAME [DIR]` writes these files from blank templates, lists the caller as the owner, and makes the folder a git repository with one commit. The owner fills in the lists, locks them with `hm protocol lock`, and shares the index with `hm index connect URL`.
@@ -443,6 +464,38 @@ listed = "2026-11-19"
 
 This is how Harbor's registry began. Its first form was one `registry.json` in the Harbor repository, read by the CLI from the main branch, with a pull request per dataset. In March 2026 Harbor replaced it with a hosted service, the Harbor Hub: `harbor publish` uploads an archive and writes to a database, names are `org/name`, a version is a content digest with tags, and data can be private. The file is still served, and holds 80 dataset versions and 51,625 tasks in 13.6 MB, because each entry lists every task. Ours lists only addresses, so it does not grow that way. A hosted service becomes worth building when listing must not wait for a maintainer, when a private index must be shown to some people and not others, or when the site needs search and download counts. None of that is needed for the first indexes.
 
+### Adapters
+
+A benchmark whose tasks are not Harbor task folders needs an adapter: code that reads the benchmark as its authors released it and writes one Harbor task per task. Its entry in `benchmarks.toml` says so with a `format` other than `harbor`.
+
+- **It belongs to the index, and is locked.** The adapter decides what the tasks are, so everyone who curates the benchmark must run the same one. It is in the index's repository under `adapters/<benchmark>/`, its checksum is in the owner's lock, and a run with a changed or unlocked adapter is refused, like any other locked file.
+- **It has Harbor's own adapter layout:** `README.md`, `adapter_metadata.json`, `parity_experiment.json`, `pyproject.toml`, and a package with `adapter.py`, `main.py` and `task-template/`. `main.py` takes Harbor's flags (`--output-dir`, `--limit`, `--overwrite`, `--task-ids`) and one more, `--source-dir`: the benchmark at its pinned release, which Harbor-Master fetches and passes in. So an adapter built here can be offered to Harbor later, and one written for Harbor can be taken in with `hm adapt ID --from PATH`.
+- **A run does it by itself.** `hm run` takes any benchmark on the index's list. It fetches one that is not here yet, at its pinned commit. If the benchmark is in another format and the index has no locked adapter for it, the owner's run builds one before anything else, with no one asked:
+  1. the worker model reads the benchmark's files and writes the adapter, and the checks below run;
+  2. a failing adapter goes back with its failures: to the worker model once more, then to the frontier model (`[adapt] frontier_after_round`, `max_rounds`);
+  3. one that passes is recorded, locked, and used at once. The lock adds this adapter's checksum to what was locked already, and nothing else;
+  4. only when the models cannot make it pass is a person asked, in the run screen, for one of two things. `/recheck BENCHMARK` checks the adapter again: the person's own fix if the files changed, otherwise one more try by the frontier model. `/abandon BENCHMARK` gives the benchmark up, and that is recorded in the ledger.
+  5. An abandoned benchmark is refused to everyone: the owner's later runs, other people's runs and simulated runs leave it out before fetching anything, and say who abandoned it, when and why. `hm run BENCHMARK` by name is refused outright. `hm benchmarks` marks it. Changing its files does not reopen it. Only the owner does, with `hm adapt BENCHMARK`: an adapter that passes is a later record, and the latest record of the stage decides.
+
+  Everyone else's run uses the locked adapter as it is. Until there is one, it skips that benchmark and says so. A simulated run never builds an adapter: it uses one that is there, or skips the benchmark. With `[adapt] require_review = true`, the owner is also asked to confirm an adapter that passes, with `/lock BENCHMARK`, before it is locked. It is off by default, so that a benchmark needs no one unless something fails.
+- **How a model writes it.** The session has read-only tools in the benchmark's folder, and returns `adapter.py` and the task template as text. It cannot write or run anything: Harbor-Master writes the files, and only those two kinds, into the adapter's package. The session is told to keep each task's own instruction, check and reference solution, and to invent nothing.
+- **`hm adapt ID`**, owner only, does the same apart from a run, or again: for an adapter brought from elsewhere (`--from PATH`), for one written again by the models (`--rewrite`), or after an abandon.
+- **The checks** need no model:
+  1. the layout is complete, the entry point takes its flags, and the code imports the standard library only;
+  2. it runs, and writes at least one task;
+  3. every task has a `task.toml` that parses, a non-empty `instruction.md`, an `environment/Dockerfile` and a `tests/test.sh`, and the number of tasks is the one `benchmarks.toml` gives;
+  4. a second run writes exactly the same tasks, by content digest;
+  5. the reference solution of a few generated tasks (two by default) passes its own test through Harbor.
+
+  One that passes leaves a `decision` record for the stage, with the adapter's digest, the number of tasks, who wrote it, the rounds and the cost.
+- **Its code runs in a container:** no network, the adapter and the benchmark mounted read-only, and one folder to write to. This holds for the owner building it and for everyone who later runs it, since it is code from a repository they joined. `--no-sandbox` runs it on the machine as it is, for code one has read.
+- **It holds back only its own benchmark.** An adapter that is changed, or not locked yet, stops that benchmark's tasks from being used. The other benchmarks of the index run as usual. `hm protocol` lists such adapters apart from the differences that refuse a run.
+- **The same tasks for everyone.** Whoever runs the locked adapter on the pinned source gets the same tasks, so their digests, and so the ledger's records, line up. `hm submit ID` does the fetch and the adapter run by hand, and says so if tasks differ from the ones the ledger already has under the same names.
+
+**What Harbor's own tooling is not used for.** Harbor has `harbor adapter init` and `harbor adapter review`, and a `create-adapter` skill that follows a nine-step tutorial. The first is an interactive wizard that waits for key presses. The second's structural part needs a checkout of the Harbor repository, and reports nothing from an installed Harbor. The tutorial ends in pull requests to Harbor and a parity plan agreed with its team. So Harbor-Master keeps Harbor's layout and contract, and does the scaffold and the checks itself.
+
+**Not built.** Parity: running the same agent on the original harness and on the Harbor tasks and comparing scores. `parity_experiment.json` is written empty and says so. An adapter that needs a library outside the standard one, for example to read Parquet, is refused.
+
 ### The two settings files
 
 Settings are in two files, split by one question: can this setting change a result?
@@ -459,7 +512,7 @@ Settings are in two files, split by one question: can this setting change a resu
 A curation must run under one fixed set of settings, or its results cannot be compared. So the protocol is locked, and the lock is checked with a checksum.
 
 - **The checksum.** The protocol hash covers every setting in `protocol.toml` except `[requires]`, and a digest of every curation skill in use, because changing what an agent is told changes results just as a threshold does. It leaves out `hm.toml` and `about.toml`.
-- **Locking.** `hm protocol lock`, which only the owner can run, writes a signed `protocol` event to the ledger with the hash, the settings themselves, and the checksums of `benchmarks.toml`, `roster.toml` and `contributors.toml`. It then commits the files, so that they travel with the lock that covers them. Changing one of the three lists needs a new lock, but not a new protocol: the hash is the same, and earlier records stand.
+- **Locking.** `hm protocol lock`, which only the owner can run, writes a signed `protocol` event to the ledger with the hash, the settings themselves, and the checksums of `benchmarks.toml`, `roster.toml`, `contributors.toml` and every adapter. It then commits the files, so that they travel with the lock that covers them. Changing one of the three lists needs a new lock, but not a new protocol: the hash is the same, and earlier records stand.
 - **Before every run.** A run computes its own hash and compares it with the locked one. If they differ it is refused, and the settings that differ are listed, each with its locked value and the local one. It is refused the same way when one of the three lists is not the locked copy. A real run is also refused when nothing is locked yet.
 - **During a run.** A run reads its settings once and keeps them, so editing a file mid-run cannot reach its results. The run notices the edit, says so, and the next run is refused.
 - **In the ledger.** Every record carries the hash it was made under. `hm ledger verify` fails if a lock was signed by anyone but the owner, or if any record was made under a hash that was never locked.
@@ -477,6 +530,12 @@ chat     = "worker"          # which tier answers questions typed in the session
 [escalation]
 min_confidence = 0.85        # below this, a tier D decision goes to tier W
 frontier_sample = 0.05       # share of settled audits re-judged by tier F
+
+[adapt]
+max_rounds = 3               # how many times a model may write an adapter before a person is asked
+frontier_after_round = 2     # the worker tier writes rounds 1 and 2, the frontier tier the rest
+oracle_tasks = 2             # generated tasks whose reference solution is run through Harbor as a check
+require_review = false       # if true, the owner confirms an adapter that passes before it is locked
 
 [triage]
 released_after = "2025-06-01"
@@ -548,12 +607,15 @@ Python, installed as `hm` with `uv tool install --editable .`, after which comma
 | `hm doctor` | Shows which keys are present and what this machine can run |
 | `hm brief <benchmark>` | Asks the field lead what is important and records it |
 | `hm benchmarks` | Lists the benchmarks this index may curate, from its `benchmarks.toml` |
-| `hm submit ID` | Fetches a supported benchmark at its pinned release and registers it. `--dev PATH` registers a local folder for simulated runs only |
-| `hm run [benchmarks] [--simulate] [--until STAGE] [--assume-after STAGE] [--plain] [--no-input]` | Runs benchmarks to the report stage, with the session screen. `--simulate` uses simulated models and trials and spends nothing. `--tasks` limits the run to named tasks. `--until` stops after select, verify, or probe. `--assume-after` runs up to that stage for real and assumes the rest |
+| `hm adapt ID` | Owner only: builds and checks the adapter for a benchmark that is not in Harbor format, apart from a run. `--from PATH` takes one that exists already, `--rewrite` has the models write it again |
+| `hm submit ID` | Fetches a listed benchmark by hand, which a run otherwise does itself. `--dev PATH` registers a local folder for simulated runs only |
+| `hm run [benchmarks] [--simulate] [--until STAGE] [--assume-after STAGE] [--plain] [--no-input]` | Runs benchmarks to the report stage, with the session screen. With no name, every benchmark the index lists. It fetches what is not here yet, and builds a missing adapter. `--simulate` uses simulated models and trials and spends nothing. `--tasks` limits the run to named tasks. `--until` stops after select, verify, or probe. `--assume-after` runs up to that stage for real and assumes the rest |
 | `hm watch` | Attaches the live view to a running job |
 | `hm status` | One-shot table of where every task stands. With `--simulated`, as with the other read commands, it shows what simulated runs recorded on this machine |
+| `hm stats` | Writes the statistics of the curation, over everyone's records, to `.hm/stats/`: `stats.md` and one CSV per table. It pulls first and names the commit it read. `--no-pull` skips the pull, `--out DIR` writes elsewhere, `--simulated` reads the simulated runs |
 | `hm review [--cell ID]` | Shows each report and records accept, drop, or send back with a reason |
-| `hm eval [benchmarks] --agent A --model M [--version V] [--effort E] [--tasks ...]` | Benchmarks an agent on the accepted tasks, or on named ones. Leaves the same records as the difficulty filter |
+| `hm eval [benchmarks] --agent A --model M [--version V] [--effort E] [--tasks ...]` | Benchmarks an agent on the accepted tasks, each at its accepted version, from this machine or from the task store. Refuses a task whose accepted version it cannot get. Leaves the same records as the difficulty filter |
+| `hm tasks` | Lists the accepted tasks and where a copy of each is. `hm tasks push` puts them in the task store, `hm tasks pull` brings them onto this machine |
 | `hm todo` | What is still to run: each roster configuration on each accepted task |
 | `hm contribute --budget N` | Claims open slots, runs them, submits the records |
 | `hm leaderboard` | Ranks agent configurations on the accepted tasks, from the ledger |
@@ -627,7 +689,7 @@ This is the real screen, captured from a simulated run by `tools/screenshot.py`.
 
 On a short terminal the working cells are kept and the least needed panels give way, in this order: recent, summary, benchmarks, header. They return when the answer or confirm panel closes. On a narrow terminal the header shortens the identity to the name and handle, and the summary shortens its labels, so nothing wraps. The same screen at 92 by 30 characters, with both panels open:
 
-![The same screen on a small terminal: only the header and the working cells remain above the answer and confirm panels](assets/tui-small.png)
+![The same screen on a small terminal: only the working cells remain above the answer and confirm panels and the tip](assets/tui-small.png)
 
 | Region | Shows |
 |---|---|
@@ -640,7 +702,7 @@ On a short terminal the working cells are kept and the least needed panels give 
 | Confirm | Opens when a plain-text message maps to a command that changes the run, or when the system needs an answer. Its lower edge shows how many requests are waiting |
 | Prompt | Free-text input for commands and questions, always focused. With nothing typed, `1`-`9` opens a cell, `?` shows help, and `y` `n` `e` answer a confirmation. `ctrl+p` pauses or resumes, `esc` closes a panel, `ctrl+q` quits. Letters are not shortcuts, because they would collide with typing a sentence |
 
-Color has one meaning throughout: teal for done or kept, purple for running, amber for needs attention (a fix, a tier F call, a pending request), red for dropped. A running cell shows a spinner, and its current stage name carries a sweeping highlight, as coding agents show while they think. Animation is off when the terminal reports no color support or `NO_COLOR` is set.
+Color has one meaning throughout: teal for done or kept, purple for running, amber for needs attention (a fix, a tier F call, a pending request), red for dropped. A running cell shows a spinner, and its stages as one track: solid teal for the ones done, a dot that slowly brightens and settles for the one running, and faint dots for the ones to come. The stage's name is beside it in one solid color, padded so that the details of all cells start in one column. Animation is off when the terminal reports no color support or `NO_COLOR` is set.
 
 Pressing a cell's number opens that task: its stage history, the tier and model behind each decision, the probabilities, and links to the trajectory and report. `Esc` returns.
 
@@ -698,6 +760,9 @@ The prompt accepts a command (`/pause terrabench`) or ordinary language (`hold t
 | | `/model tier NAME` | Switches the model of the decision, worker, frontier, or chat tier for work that has not started. Each record names its model, so earlier results stay valid |
 | | `/brief benchmark text` | Records the lead's brief. If a selection is waiting, ranks again with it |
 | | `/approve benchmark` | Signs off the selection, and its tasks start |
+| | `/recheck benchmark` | Checks its adapter again: your fix if you made one, otherwise one more try by the frontier model |
+| | `/abandon benchmark` | Gives the benchmark up, when its adapter cannot be made to pass. Confirmed |
+| | `/lock benchmark` | Locks an adapter that passes, where the index asks the owner to confirm it |
 | | `/replace OLD NEW [reason]` | For a full benchmark: OLD leaves the index and NEW takes its place, as two signed verdicts |
 | | `/accept ID [reason]`, `/reject ID reason`, `/sendback ID reason` | The reviewer's signed verdict on a report. Rejecting and sending back need a reason. Only people on the contributor list can sign |
 | | `/kill` | Stops everything now, including running containers |
@@ -766,7 +831,39 @@ With `--no-input`, or when there is no terminal, nothing prompts. A benchmark wh
 
 ## 12. What a run reports
 
-Tasks in and out per stage, cost per stage and per tier, the share of decisions made by each tier, escalation and overturn rates, and cost per accepted task. These are the paper's cost-effectiveness results.
+Everything a paper needs about how the system performed is computed from the ledger, so it can be made again at any time and by anyone who has the index.
+
+**Two records exist for this.** Most figures follow from the records that curation writes anyway. Two do not, so runs write them as well:
+
+- **`usage`**: what the model tiers were called for. Every model call is counted under the benchmark and the stage it was made in (adapt, triage, rank, probe, audit, fix, report, or the session for typed questions), with its tier, its model, its tokens and its cost. A run writes the counts as it goes, so one that is cut short loses at most its last stretch. Without this, ranking left no trace of what it cost.
+- **`skip`**: a benchmark that a run left out, with the reason. The same reason from the same person twice in a row is one record.
+
+**`hm stats`** writes `stats.md` and one CSV per table into `.hm/stats/`, which git ignores and nothing uploads.
+
+- **It covers everyone.** The ledger in a clone holds every person's records, so the tables are totals over all people, benchmarks and tasks. In a shared index it pulls first, so that what others pushed is in. `--no-pull` uses the ledger as it is on the machine, and a pull that fails falls back to that and says so.
+- **It says what it read.** The report opens with a source table, also written as `source.csv`: the commit of the index's repository that holds exactly these records, where the index is shared, whether it pulled, how many local commits are not pushed, a checksum over every ledger file, whether the ledger passes `hm ledger verify`, the protocols covered, the number of records and of people, and the tool's version. With the commit, anyone can make the same tables again: check that commit out and run `hm stats --no-pull`. Two copies of a ledger with the same checksum hold the same records.
+- **Where no commit holds the records**, the report says so and gives the checksum alone: in an index that is not shared, and for simulated runs.
+
+The tables:
+
+| Table | Says |
+|---|---|
+| `source` | What the tables were made from: commit, checksum, records, people, protocols |
+| `summary` | The whole curation in one column: tasks at each end of the funnel, calls, tokens and cost per tier, runs through Harbor and their cost, total cost and cost per accepted task, decisions by a person, skips |
+| `funnel` | Per benchmark: tasks submitted, failed a gate, not selected, selected, dropped at each later stage, in progress, report ready, accepted, rejected, replaced, and its last skip |
+| `gates` | Per benchmark and admission gate: tasks asked, dropped there, and sent up a tier |
+| `usage_by_stage`, `usage` | Model calls, tokens and cost per stage and tier, over all benchmarks and per benchmark |
+| `trials` | Runs through Harbor by purpose, agent and model: how many, passed, infrastructure errors, tokens, cost, container hours |
+| `adapters` | Each adapter built or given up: who wrote the last version, in how many rounds, at what cost |
+| `human_counts`, `human` | Each decision a person made that left a record (a brief, an approval, a verdict, an adapter given up or fixed, a lock), counted by kind and listed in order |
+| `skips` | Each time a run left a benchmark out, and why |
+| `tasks` | One row per task: status, the stage it reached, the reason, trials, cost. In the CSV only |
+
+With `--simulated` the same tables are made from the simulated runs' own records, into `.hm/stats/simulated/`, and the report says at its top that every figure in it is made up.
+
+**Not recorded yet.** How often the system asked a person something and how long it waited, and the commands a person typed to steer a run (`/pause`, `/stop`, `/budget`, `/recheck`). Those are in each run's `session.log` on the machine that ran it. Seconds per stage per task are in each run's `tasks.jsonl`, also local.
+
+**One thing the usage record shows already:** a second run of a benchmark reuses every gate decision and every trial, but ranks again. Ranking is on the decision tier and costs little, but it is not free.
 
 ## 13. Estimated curation cost
 
@@ -845,7 +942,7 @@ Where a new capability goes:
 | A panel on the screen | One function in `tui/render.py`, one line in `tui/app.py` |
 | An event type | `ledger/events.py`, and its rule in `ledger/fold.py` |
 
-**Built and tested** (59 tests, on simulated backends):
+**Built and tested** (74 tests, on simulated backends):
 
 - Config with a protocol hash, identity with an Ed25519 signing key, and keys kept in a git-ignored file.
 - The ledger: signed, hash-chained shards per runner and run, slot and decision reuse, the fold into task states, credits, the leaderboard, the contributor list, and `hm ledger verify`.
@@ -867,8 +964,13 @@ Where a new capability goes:
 - Skills as versioned files, recorded on each decision. Field permissions between contributors.
 - Lean storage: one task file per run, reports only where they exist, Harbor output kept only as evidence and packed, one admission record per task, one submission and one selection record per benchmark, no empty fields.
 - An index as a repository of its own: `hm index new`, `hm join`, `hm index connect`, `hm index`, the owner's key remembered on joining, the curation skills as the index's own files with `hm skills`, `diff` and `adopt`, the check that a reworded skill is still usable, and the tool version an index asks for. Tested through the commands with two people and a local git repository. Not yet tried against GitHub.
+- The task store with a folder behind it: keeping a task when it is accepted, `hm tasks`, and `hm eval` running the accepted version or refusing. The Hugging Face store is written and has never run.
+- Reports in the index's repository, with a checksum in their record, reaching a second clone.
+- The `usage` and `skip` records and `hm stats`. Tested by checking that the recorded calls and cost per tier equal the run's own totals, and tried on a simulated run of 40 tasks, where the report's totals matched the run's summary. With two clones of one index, `hm stats` in the one that ran nothing pulled the other's records and named the commit they are in.
+- A later run lists the reports that still wait for the reviewer's verdict. Before, only the run that wrote a report listed it.
 - The home screen, the checklist and the tips, `hm guide`, `hm demo`, `hm key`, and the tip line on the run screen. Tested by driving the home screen from an empty folder to a run, and by checking the tip in each state. The path from the home screen to the run screen and back was also driven once in a real terminal. Leaving a run that waits for an answer now works: `/quit` stops waiting, and the benchmark asks again in the next run.
 - Simulated runs kept apart from the index: their own folder, a signed mark on every record, readers of a real ledger that leave them out, and a verify rule that reports them. Tested by copying simulated records into a real ledger, by removing the mark, and by simulating in a shared index and checking what was pushed.
+- Adapters, built by the run itself: fetching a listed benchmark, the worker and then the frontier model writing the adapter, the checks, the container run, the lock of one adapter, `/recheck` and `/abandon` when the models fail, and `hm adapt` for doing it by hand. Tested with an adapter written by hand and with stand-ins for the models. Tried for real with the hand-written adapter: `hm adapt` ran it in the container, wrote the same tasks twice, and a reference solution passed through Harbor, and a simulated `hm run` with nothing submitted fetched the benchmark and ran the adapter in the container. **A model has never written one:** the sessions and the `adapt/write-adapter` skill are not exercised.
 - The list of indexes: `indexes.toml`, `hm indexes`, `hm join NAME`, `hm index entry`, and the listing check. Tested against a list in a file and local repositories. The list is empty, the default address answers only once this repository is on GitHub, and the workflow that runs the check has never run.
 - The roster, `hm roster`, `hm todo`, the accepted-task list `index.toml` with its check, and the leaderboard over accepted tasks only.
 - `hm eval`: benchmarking any agent configuration on tasks, through the same trial function as the difficulty filter, with claims and no reruns. Tried in simulation only: a real benchmark trial has never been run.
@@ -891,9 +993,9 @@ Where a new capability goes:
 **Not built.**
 
 - The rest of the real backend: the audit, second opinion, repair, and report on real trajectories. Real agent trials for the difficulty filter are wired but have never been run: one trial can take hours and many dollars.
-- Adapter building for input that is not in Harbor format, parity runs, and the exploit agent.
+- Parity runs against a benchmark's original harness, adapters that need more than the standard library, and the exploit agent.
 - Recalibrating escalation thresholds from overturned decisions.
-- `hm watch`, `contribute`, and `publish`. The pull-request flow and CI for outside contributors, and the Hugging Face artifact store.
+- `hm watch`, `contribute`, and `publish`. The pull-request flow and CI for outside contributors. The task store has never run against Hugging Face.
 - Session commands `/logs`, `/trajectory`, `/sync`, `/restart`, `/retry`, `/escalate`, `/limit`. They answer "not built yet". (A run syncs by itself. `/sync` inside the session is not wired.)
 - Acting on a verdict of "send back": it is recorded, but no later run picks the task up for repair yet.
 - Example tasks in the lead's brief, and the agreement check between the lead's examples and tier D.

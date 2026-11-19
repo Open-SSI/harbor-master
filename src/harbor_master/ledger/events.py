@@ -5,7 +5,8 @@ import hashlib
 import json
 from typing import Any
 
-EVENT_TYPES = {"submission", "decision", "trial", "repair", "report", "verdict", "claim", "brief", "roster", "protocol"}
+EVENT_TYPES = {"submission", "decision", "trial", "repair", "report", "verdict", "claim", "brief", "roster", "protocol",
+               "usage", "skip"}       # usage: what the model tiers were called for. skip: a benchmark a run left out, and why
 TRIAL_PURPOSES = {"oracle", "noop", "probe", "difficulty", "parity", "benchmark"}
 TIER_RANK = {"code": 0, "decision": 1, "worker": 2, "frontier": 3, "human": 4}
 CONTRIBUTORS = "contributors.toml"

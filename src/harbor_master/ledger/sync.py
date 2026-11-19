@@ -14,9 +14,9 @@ import subprocess
 from pathlib import Path
 
 
-from .store import SHARDS
+from .store import REPORTS, SHARDS
 
-DEFINITION = ("about.toml", "protocol.toml", "benchmarks.toml", "roster.toml", "contributors.toml", "skills",
+DEFINITION = ("about.toml", "protocol.toml", "benchmarks.toml", "roster.toml", "contributors.toml", "skills", "adapters",
               ".gitignore", "README.md")
 
 
@@ -39,6 +39,16 @@ class Sync:
     def enabled(self) -> bool:
         """True when the index is a git clone with a remote to share through."""
         return (self.dir / ".git").exists() and bool(self._git("remote", check=False).stdout.strip())
+
+    def where(self) -> dict[str, str]:
+        """Which state of the repository the ledger on disk is: its commit, where it is shared, how many commits
+        are not pushed, and whether every record on disk is in that commit."""
+        if not (self.dir / ".git").exists():
+            return {"commit": "", "remote": "", "unpushed": "", "committed": "no"}
+        out = lambda *args: self._git(*args, check=False).stdout.strip()  # noqa: E731
+        ahead = out("rev-list", "--count", "origin/main..HEAD") if self._remote_has_branch() else ""
+        return {"commit": out("rev-parse", "HEAD"), "remote": out("remote", "get-url", "origin"), "unpushed": ahead,
+                "committed": "yes" if not (self.dir / SHARDS).exists() or not out("status", "--porcelain", "--", SHARDS) else "no"}
 
     def _remote_has_branch(self) -> bool:
         return self._git("rev-parse", "--verify", "--quiet", "origin/main", check=False).returncode == 0
@@ -74,9 +84,10 @@ class Sync:
         self.publish(message)
 
     def _commit(self, message: str) -> bool:
-        """Commit this machine's new records, and nothing else."""
-        if (self.dir / SHARDS).exists():
-            self._git("add", "-A", "--", SHARDS)
+        """Commit this machine's new records and the reports that go with them, and nothing else."""
+        found = [name for name in (SHARDS, REPORTS) if (self.dir / name).exists()]
+        if found:
+            self._git("add", "-A", "--", *found)
         if self._git("diff", "--cached", "--quiet", check=False).returncode == 0:
             return False
         self._git("commit", "--quiet", "-m", message)

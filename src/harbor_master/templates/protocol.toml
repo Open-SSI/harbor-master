@@ -44,6 +44,13 @@ exclude_formats = ["multiple_choice", "question_answering", "short_answer"]
 allow_llm_judge_verifier = false
 max_verifier_seconds = 300      # CPU only, no paid API
 
+# ----- adapters: for a benchmark that is not in Harbor format -----
+[adapt]
+max_rounds = 3                  # how many times a model may write the adapter before a person is asked
+frontier_after_round = 2        # the worker tier writes rounds 1 and 2, the frontier tier the rest
+oracle_tasks = 2                # generated tasks whose reference solution is run through Harbor as a check
+require_review = false          # if true, the owner confirms an adapter that passes before it is locked
+
 # ----- selection: which tasks of a benchmark go through the costly stages -----
 [select]
 top_k = 24                      # at most this many tasks per benchmark

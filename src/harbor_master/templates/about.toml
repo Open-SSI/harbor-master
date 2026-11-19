@@ -13,8 +13,7 @@ homepage = ""
 # The licence of the index itself. Each task keeps its benchmark's own.
 license = ""
 
-# Hugging Face repositories for what a run produces. Empty until the index has them.
-# artifacts holds trial archives and reports. restricted holds probes and repair diffs,
-# which reveal solutions and so stay private.
-artifacts = ""
-restricted = ""
+# Where the accepted tasks are kept, each as one archive named by its digest, so that a later
+# benchmark run gets exactly the version that was accepted. A Hugging Face dataset repository,
+# written as "org/name", or a folder. Empty keeps them on each machine only.
+tasks = ""

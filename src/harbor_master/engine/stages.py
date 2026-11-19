@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 from ..backends import NotImplementedBackend
 from ..curation import difficulty
 from ..tasks import Task
-from .state import CellState
+from .state import STAGE, STAGES, CellState
 
 if TYPE_CHECKING:
     from .session import Session
@@ -65,6 +65,7 @@ async def process(s: Session, cell: CellState, task: Task) -> None:
 
 def enter(cell: CellState, stage: int, detail: str, attention: bool = False) -> float:
     cell.stage, cell.detail, cell.attention = stage, detail, attention
+    STAGE.set(STAGES[stage])        # model calls from here on are counted under this stage
     return time.time()
 
 
@@ -260,9 +261,10 @@ async def report(s: Session, cell: CellState, task: Task) -> None:
         lines.append(f"- **{done['stage']}** ({done['seconds']}s): {detail}")
     if s.notes.get(task.task_id):
         lines += ["", "## Notes", ""] + [f"- {n}" for n in s.notes[task.task_id]]
-    path.write_text("\n".join(lines) + "\n")
+    text = "\n".join(lines) + "\n"
+    path.write_text(text)
     s.record(task.benchmark, "report", task, recommendation="accept", cost=written.get("cost", 0.0),
-                location=str(path.relative_to(s.ws)))
+             location=str(path.relative_to(s.ws)), report_digest=hashlib.sha256(text.encode()).hexdigest()[:16])
     s.stage_done(task, 8, t0)
 
 

@@ -79,10 +79,14 @@ async def test_a_run_leaves_a_small_readable_folder(workspace, session):
     await session.run()
     kept = session.benches["demo-bench"].kept
     files = sorted(p.relative_to(session.run_dir).as_posix() for p in session.run_dir.rglob("*") if p.is_file())
-    reports = [f for f in files if f.startswith("reports/")]
-    assert len(reports) == kept                                        # a report only for a task that reached one
-    # no copy of the ledger and no folder per task. requests.json is there because reports wait for a verdict
-    assert sorted(set(files) - set(reports)) == ["requests.json", "run.json", "tasks.jsonl"]
+    # no copy of the ledger, no folder per task, no reports. requests.json is there because reports wait for a verdict
+    assert files == ["requests.json", "run.json", "tasks.jsonl"]
+    reports = sorted((workspace / "reports" / "demo-bench").glob("*.md"))    # a report is beside the ledger, where a reviewer
+    assert len(reports) == kept                                              # on another machine gets it. One per task that reached one
+    written = {e["location"]: e["report_digest"] for e in session.ledger.events if e["type"] == "report"}
+    assert set(written) == {str(p.relative_to(workspace)) for p in reports} and ledger.verify(workspace) == []
+    reports[0].write_text(reports[0].read_text().replace("accept", "reject"))
+    assert any("its report was changed after it was recorded" in p for p in ledger.verify(workspace))     # and cannot be edited unseen
     lines = [json.loads(line) for line in (session.run_dir / "tasks.jsonl").read_text().splitlines()]
     assert len(lines) == 20 and all({"task_id", "status", "stages", "digest"} <= set(line) for line in lines)
 

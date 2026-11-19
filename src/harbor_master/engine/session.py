@@ -16,10 +16,10 @@ from ..backends import make_backend
 from ..core.config import LOCAL, Config
 from ..core.config import simulated as simulated_dir
 from ..core.identity import Identity
-from ..ledger import Ledger, Shard, Sync, active, fields_of, load_contributors, write_index
+from ..ledger import REPORTS, Ledger, Shard, Sync, active, fields_of, load_contributors, write_index
 from ..tasks import Task
 from . import shared, stages
-from .state import STAGES, BenchState, CellState, Request
+from .state import BENCH, STAGE, STAGES, BenchState, CellState, Request
 
 
 class Session:
@@ -41,6 +41,9 @@ class Session:
         self.protocol = cfg.protocol
         self._file_protocol, self._config_changed, self._config_checked = self.protocol, False, time.time()
         self.calls: Counter[str] = Counter()
+        self._keeping: list = []            # accepted tasks on their way into the task store
+        self.usage_by: dict[tuple[str, str, str], list] = {}        # (benchmark, stage, tier) -> [calls, tokens, cost]
+        self._usage_written: dict[tuple[str, str, str], tuple] = {}
         self.cost_by_tier: Counter[str] = Counter()
         self.trial_cost = 0.0
         self.backend = make_backend(cfg, self._usage, simulate, speed, self.run_dir, assume_after)
@@ -49,8 +52,8 @@ class Session:
         self.sync = Sync(self.ledger_dir, ident.name, ident.github)
         self._sync_lock = asyncio.Lock()
         self.simulate = simulate
-        self.benches = {b: BenchState(b, info.get("field", "general"), Path(info["path"]), info.get("released", ""),
-                                   info.get("license", ""))
+        self.benches = {b: BenchState(b, info.get("field", "general"), Path(info["path"]) if info.get("path") else Path(),
+                                   info.get("released", ""), info.get("license", ""), entry=info.get("entry"))
                         for b, info in benchmarks.items()}
         self.cells = [CellState(i + 1) for i in range(cfg.run.cells)]
         self.active_cells = cfg.run.cells
@@ -74,12 +77,36 @@ class Session:
         self.ready: list[Task] = []  # reports waiting for this user's verdict
         people = load_contributors(workspace)
         self.is_reviewer = any(c["github"] == ident.github for c in active(people))
+        self.is_owner = any(c.get("github") == ident.github and c.get("role") == "owner" and c.get("key") for c in people)
         self.fields = fields_of(people, ident.github)     # None: every field. A set: only these
         self.claimed: dict[str, list[str]] = {}            # benchmark -> the task ids this run holds
 
     def _usage(self, tier: str, cost: float, tokens: int) -> None:
         self.calls[tier] += 1
         self.cost_by_tier[tier] += cost
+        slot = self.usage_by.setdefault((BENCH.get(), STAGE.get(), tier), [0, 0, 0.0])
+        slot[0], slot[1], slot[2] = slot[0] + 1, slot[1] + int(tokens or 0), slot[2] + cost
+
+    def flush_usage(self, benchmark: str | None = None) -> None:
+        """Record what the model tiers were called for since the last time: one record per benchmark, with a
+        row per stage and tier. The rows add up, so a run that is cut short loses at most its last stretch."""
+        rows: dict[str, list[dict]] = {}
+        for (bench, stage, tier), (calls, tokens, cost) in sorted(self.usage_by.items()):
+            done = self._usage_written.get((bench, stage, tier), (0, 0, 0.0))
+            if (benchmark is None or bench == benchmark) and calls > done[0]:
+                model = self.cfg.tier(tier).model if tier in ("decision", "worker", "frontier", "chat") else ""
+                rows.setdefault(bench, []).append({"stage": stage, "tier": tier, "model": model, "calls": calls - done[0],
+                                                   "tokens": tokens - done[1], "spent": round(cost - done[2], 6)})
+                self._usage_written[(bench, stage, tier)] = (calls, tokens, cost)
+        for bench, found in rows.items():
+            self.record(bench, "usage", rows=found)
+
+    def note_skip(self, bench: BenchState) -> None:
+        """Record that this run left a benchmark out, and why. The same reason twice in a row is recorded once."""
+        last = next((e for e in reversed(self.ledger.events) if e["type"] == "skip" and e["benchmark"] == bench.id
+                     and e["runner"] == self.ident.github), None)
+        if last is None or (last.get("value"), last.get("reason")) != (bench.skip or "skipped", bench.detail):
+            self.record(bench.id, "skip", value=bench.skip or "skipped", reason=bench.detail)
 
     @property
     def spent(self) -> float:
@@ -164,9 +191,11 @@ class Session:
             f.write(json.dumps(line, separators=(",", ":")) + "\n")
 
     def report_path(self, task: Task) -> Path:
-        d = self.run_dir / "reports"
-        d.mkdir(exist_ok=True)
-        return d / (task.task_id.replace("/", "__") + ".md")
+        """Where a task's report goes: in the index repository beside the ledger, so that a reviewer on
+        another machine can read what they sign. One file per version of the task."""
+        d = self.ledger_dir / REPORTS / task.benchmark.replace("/", "__")
+        d.mkdir(parents=True, exist_ok=True)
+        return d / f"{task.name}.{task.digest[:12]}.md"
 
     def stage_done(self, task: Task, stage: int, started: float, **record) -> None:
         seconds = time.time() - started
@@ -214,7 +243,32 @@ class Session:
         write_index(self.ledger_dir, self.sandbox)      # the accepted list follows every verdict
         self.requests[:] = [r for r in self.requests if not (r.kind == "replace" and r.target == task.task_id)]
         self._verdict_request()
+        if value == "accept" and not self.sandbox:
+            self.keep(task, digest or task.digest)
         return event
+
+    def keep(self, task: Task, digest: str) -> None:
+        """Put the accepted version of a task in the task store. Packing and uploading can take a while, so
+        it happens beside the run, and says how it went in the recent outcomes."""
+        from ..tasks import store
+
+        def work() -> None:
+            try:
+                ok, how = store.put(self.ws, self.cfg, task.benchmark, task.name, digest, task.path)
+            except (store.StoreError, OSError) as err:
+                ok, how = False, f"not kept: {str(err)[:200]}"
+            self.note_recent("checked" if ok else "stopped", task.task_id, f"accepted version {how}")
+
+        try:
+            self._keeping.append(asyncio.get_running_loop().run_in_executor(None, work))
+        except RuntimeError:            # no event loop: a command, not the screen
+            work()
+
+    async def kept(self) -> None:
+        """Wait until every accepted task has been put in the store."""
+        pending, self._keeping = self._keeping, []
+        for job in pending:
+            await job
 
     def ask_replacement(self, task: Task, text: str) -> None:
         """The benchmark is full. Ask which accepted task this one replaces, without blocking anything."""
@@ -256,6 +310,7 @@ class Session:
             pass
         for benchmark in list(self.claimed):              # let go of whatever this run still holds
             self.release(benchmark, list(self.claimed[benchmark]))
+        self.flush_usage()
         with contextlib.suppress(Exception):
             await self.publish("end of run")
         self.finished = True
@@ -290,6 +345,7 @@ class Session:
                 continue
             cell.task, cell.started, cell.cost, cell.attention, cell.stopping = task, time.time(), 0.0, False, False
             cell.runner = asyncio.current_task()
+            BENCH.set(task.benchmark)
             bench = self.benches[task.benchmark]
             try:
                 await stages.process(self, cell, task)
@@ -310,6 +366,7 @@ class Session:
             # Finished, failed, or stopped: either way this run no longer holds the task. A finished
             # task is protected by its records from here on, and an unfinished one is free for others.
             self.flush_board(task)
+            self.flush_usage(task.benchmark)
             self.release(task.benchmark, [task.task_id])
             with contextlib.suppress(Exception):
                 await self.publish(f"records for {task.name}")

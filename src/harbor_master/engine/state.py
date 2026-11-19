@@ -2,12 +2,18 @@
 from __future__ import annotations
 
 import asyncio
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..tasks import Task
 
 STAGES = ["intake", "triage", "adapt", "verify", "probe", "difficulty", "audit", "fix", "report", "verdict"]
+
+# What the work in hand is for: every model call is counted under the benchmark and the stage it was made in.
+# A context variable, because many tasks are in flight at once and each must see its own.
+BENCH: ContextVar[str] = ContextVar("hm_benchmark", default="")
+STAGE: ContextVar[str] = ContextVar("hm_stage", default="session")
 
 
 @dataclass
@@ -18,7 +24,9 @@ class BenchState:
     released: str = ""           # the release date from benchmarks.toml, for the recency gate
     license: str = ""            # the benchmark's own license, shown to the license gate
     tasks: list[Task] = field(default_factory=list)
-    phase: str = "queued"        # queued | triage | brief | ranking | signoff | adapt | ready | skipped
+    phase: str = "queued"        # queued | fetch | adapt | review | triage | brief | ranking | signoff | ready | skipped
+    entry: dict | None = None    # its entry on the index's benchmark list, when it is on it
+    skip: str = ""               # why it was skipped, as one word for the record: fetch_failed, no_brief, ...
     detail: str = ""
     selected: int = 0
     done: int = 0
@@ -51,7 +59,7 @@ class CellState:
 @dataclass
 class Request:
     id: int
-    kind: str                    # brief | selection | budget block work; replace | verdict wait without blocking
+    kind: str                    # brief | selection | budget | adapter | lock block work; replace | verdict wait without blocking
     text: str
     target: str = ""
     choices: list[str] = field(default_factory=list)
@@ -59,7 +67,7 @@ class Request:
 
     @property
     def blocking(self) -> bool:
-        return self.kind in ("brief", "selection", "budget")
+        return self.kind in ("brief", "selection", "budget", "adapter", "lock")
 
     def public(self) -> dict:
         return {"id": self.id, "kind": self.kind, "text": self.text, "target": self.target, "choices": self.choices}

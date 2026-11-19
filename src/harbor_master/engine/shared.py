@@ -13,8 +13,8 @@ from .. import ledger as ledger_mod
 from ..backends import Decision
 from ..curation import gates, ranking
 from ..tasks import Task, load_benchmark
-from . import claims
-from .state import BenchState
+from . import claims, prepare
+from .state import BENCH, STAGE, BenchState
 
 if TYPE_CHECKING:
     from .session import Session
@@ -22,30 +22,41 @@ if TYPE_CHECKING:
 
 async def run_shared(s: Session, bench: BenchState) -> None:
     """The benchmark's shared phase. A failure here skips this benchmark and leaves the others running."""
+    BENCH.set(bench.id)
+    STAGE.set("intake")
     try:
         holder = await claims.screen(s, bench)
         if holder:
-            bench.phase, bench.detail = "skipped", f"@{holder} is screening this benchmark now. Run again when they are done."
+            bench.phase, bench.skip = "skipped", "being_screened"
+            bench.detail = f"@{holder} is screening this benchmark now. Run again when they are done."
             s.note_recent("rejected", bench.id, bench.detail)
-            return
-        try:
-            await _run_shared(s, bench)
-        finally:
-            s.release(bench.id, [claims.SCREEN])
-            await s.publish(f"screening of {bench.id} done")      # others must see that it is free again
+        else:
+            try:
+                await _run_shared(s, bench)
+            finally:
+                s.release(bench.id, [claims.SCREEN])
+                await s.publish(f"screening of {bench.id} done")      # others must see that it is free again
     except asyncio.CancelledError:
         raise
     except Exception as err:
-        bench.phase, bench.detail = "skipped", f"stopped at {bench.phase}: {type(err).__name__}: {str(err)[:160]}"
+        bench.phase, bench.skip = "skipped", "error"
+        bench.detail = f"stopped at {bench.phase}: {type(err).__name__}: {str(err)[:160]}"
         s.note_recent("error", bench.id, bench.detail)
+    if bench.phase == "skipped":        # which benchmark a run left out, and why, is part of the record
+        s.note_skip(bench)
+    s.flush_usage(bench.id)
 
 
 async def _run_shared(s: Session, bench: BenchState) -> None:
+    if not await prepare.ready(s, bench):       # fetched, and adapted if it is in another format
+        s.note_recent("rejected", bench.id, bench.detail)
+        return
     bench.phase, bench.detail = "triage", "loading tasks"
+    STAGE.set("triage")
     try:
         bench.tasks = load_benchmark(bench.path, bench.id)
     except ValueError as err:
-        bench.phase, bench.detail = "skipped", str(err)
+        bench.phase, bench.detail, bench.skip = "skipped", str(err), "not_harbor_format"
         return
     for task in bench.tasks:
         task.meta["_benchmark_license"] = bench.license
@@ -53,7 +64,7 @@ async def _run_shared(s: Session, bench: BenchState) -> None:
     if not s.simulate and s.fields is not None:      # a contributor curates only the fields they are listed for
         mine = [t for t in bench.tasks if t.domain in s.fields]
         if not mine:
-            bench.phase = "skipped"
+            bench.phase, bench.skip = "skipped", "outside_fields"
             bench.detail = ("none of its tasks are in your fields (" + (", ".join(sorted(s.fields)) or "none set") + ")")
             return
         if len(mine) < len(bench.tasks):
@@ -93,13 +104,14 @@ async def _run_shared(s: Session, bench: BenchState) -> None:
         text = await s.ask("brief", f"{bench.id} needs a brief from its field lead: what counts as "
                               "important in this field and this benchmark?", bench.id)
         if not text:
-            bench.phase, bench.detail = "skipped", "no brief, skipped (answer with hm brief, then run again)"
+            bench.phase, bench.detail, bench.skip = "skipped", "no brief, skipped (answer with hm brief, then run again)", "no_brief"
             return
         brief = s.record(bench.id, "brief", text=text, examples=[], version=1)
 
     limit_n = ranking.cap(len(bench.tasks), s.cfg.select.top_k, s.cfg.select.max_fraction)
     while True:
         bench.phase, bench.detail = "ranking", f"scoring {len(kept)} tasks, then comparing the top ones"
+        STAGE.set("rank")
         brief_text = brief["text"] if brief else ""
         ranked = await ranking.rank_two_step(
             kept, lambda t: s.backend.importance(brief_text, t), lambda a, b: s.backend.compare(brief_text, a, b),
@@ -116,6 +128,7 @@ async def _run_shared(s: Session, bench: BenchState) -> None:
         answer = await s.ask("selection", selection_brief(bench, limit_n), bench.id)
         if answer is None:
             bench.phase, bench.detail = "skipped", "selection not approved, skipped (run with the screen to approve)"
+            bench.skip = "selection_not_approved"
             return
         if answer == "approve":
             s.record(bench.id, "decision", stage="select", gate="signoff", tier="human", value="approved",

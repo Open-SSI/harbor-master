@@ -2,7 +2,7 @@
 
 A skill's version is a short hash of its file, recorded on every ledger event made with it.
 
-Two kinds. The curation skills (triage, rank, probe, audit) decide what gets into an index,
+Two kinds. The curation skills (adapt, triage, rank, probe, audit) decide what gets into an index,
 so each index has its own copies under `skills/` in its repository, locked with its protocol.
 The files here are the templates those copies start from. The session skills read what is
 typed on the run screen. They change no result, so they stay in the tool, the same for every
@@ -20,7 +20,7 @@ from importlib import resources
 from pathlib import Path
 from string import Template
 
-CURATION = ("audit", "probe", "rank", "triage")      # the folders an index keeps its own copies of
+CURATION = ("adapt", "audit", "probe", "rank", "triage")      # the folders an index keeps its own copies of
 
 
 @dataclass(frozen=True)

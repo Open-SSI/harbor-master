@@ -8,7 +8,7 @@ from rich.text import Text
 
 from .. import __version__
 from ..engine import STAGES, Session
-from .theme import AM, BORDER, KIND_COLOR, MU, PU, RD, SE, TE, clock, shimmer, spinner, t
+from .theme import AM, BORDER, KIND_COLOR, MU, PU, RD, SE, TE, clock, pulse, spinner, t
 
 
 def header(s: Session, width: int = 120) -> Table:
@@ -61,7 +61,7 @@ def benchmarks(s: Session, now: float) -> Table:
                 progress = t(("paused  ", AM), progress)
             cols = [t((str(b.queued), SE)), t((str(b.kept), TE)), t((str(b.dropped), RD))]
         else:
-            color = AM if b.phase in ("brief", "signoff", "skipped") else PU
+            color = AM if b.phase in ("brief", "signoff", "review", "skipped") else PU
             mark = "!" if b.phase == "skipped" else spinner(now)
             progress = t((f"{mark} ", color), (b.detail or b.phase, color))
             cols = [t(("-", MU))] * 3
@@ -69,8 +69,13 @@ def benchmarks(s: Session, now: float) -> Table:
     return tb
 
 
-def stage_marks(stage: int, color: str) -> Text:
-    return t(("●" * stage, TE), ("◐", color), ("○" * (len(STAGES) - stage - 1), "#55555f"))
+TO_COME = "#4b4b57"
+NAME_WIDTH = max(len(name) for name in STAGES)
+
+
+def stage_marks(stage: int, color: str, now: float) -> Text:
+    """The stages as one track: done ones solid, the running one breathing, the ones to come faint."""
+    return t(("●" * stage, TE), ("●", pulse(color, now)), ("•" * (len(STAGES) - stage - 1), TO_COME))
 
 
 def cells(s: Session, now: float) -> Table:
@@ -88,9 +93,9 @@ def cells(s: Session, now: float) -> Table:
             continue
         color = AM if c.attention else PU
         name = STAGES[c.stage] if c.stage != 7 else "fix"
-        now_text = Text.assemble(shimmer(name, color, now), ("  " + c.detail, SE))
+        now_text = t((f"{name:<{NAME_WIDTH}}", f"bold {color}"), ("  " + c.detail, SE))     # one color, and details in a column
         tb.add_row(t((spinner(now), color)), t((str(c.n), MU)), c.task.task_id.split("/", 1)[-1][-28:],
-                   stage_marks(c.stage, color), now_text, t((clock(now - c.started), SE)))
+                   stage_marks(c.stage, color, now), now_text, t((clock(now - c.started), SE)))
     return tb
 
 

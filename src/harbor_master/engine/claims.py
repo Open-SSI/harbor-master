@@ -41,6 +41,11 @@ async def take(s: Session, bench: BenchState, chosen: list[Task]) -> list[Task]:
     free = [t for t in chosen if t.task_id not in done and t.task_id not in held]
     if finished:
         s.note_recent("rejected", bench.id, f"{len(finished)} already completed, not run again: {_names(finished)}")
+        states = fold(e for e in s.ledger.events if e.get("benchmark") == bench.id and e["protocol"] == s.protocol)
+        for t in finished:              # a report written in an earlier run still waits for this reviewer's verdict
+            if done[t.task_id] == "report_ready":
+                t.digest = states[t.task_id].digest or t.digest
+                s.report_ready(t)
     if running:
         who = sorted({held[t.task_id][0] for t in running})
         s.note_recent("rejected", bench.id, f"{len(running)} being run by @{', @'.join(who)}, left to them: {_names(running)}")

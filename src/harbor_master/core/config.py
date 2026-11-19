@@ -13,7 +13,7 @@ LOCAL = ".hm"                      # this machine's own files inside the clone o
 CONFIG_NAME = "hm.toml"            # in .hm: parallelism and budget. The user's to change
 PROTOCOL_NAME = "protocol.toml"    # the protocol: everything that can change a result. Locked
 ABOUT_NAME = "about.toml"          # what the index is: its name and description. Not locked
-PROTOCOL_SECTIONS = ("tiers", "escalation", "triage", "select", "verify", "difficulty", "fix", "index")
+PROTOCOL_SECTIONS = ("tiers", "escalation", "triage", "adapt", "select", "verify", "difficulty", "fix", "index")
 
 
 class Tier(BaseModel):
@@ -42,6 +42,14 @@ class Triage(BaseModel):
     exclude_formats: list[str] = ["multiple_choice", "question_answering", "short_answer"]
     allow_llm_judge_verifier: bool = False
     max_verifier_seconds: int = 300
+
+
+class Adapt(BaseModel):
+    """Building the adapter for a benchmark that is not in Harbor format."""
+    max_rounds: int = 3               # how many times a model may write it before a person is asked
+    frontier_after_round: int = 2     # the worker tier writes rounds up to this one, the frontier tier the rest
+    oracle_tasks: int = 2             # generated tasks whose reference solution is run through Harbor as a check
+    require_review: bool = False      # if true, the owner confirms an adapter that passes before it is locked
 
 
 class Select(BaseModel):
@@ -122,14 +130,14 @@ class About(BaseModel):
     description: str = ""
     homepage: str = ""
     license: str = ""
-    artifacts: str = ""            # Hugging Face repository for trial archives and reports
-    restricted: str = ""           # Hugging Face repository for probes and repair diffs, which stay private
+    tasks: str = ""                # where accepted tasks are kept: a Hugging Face dataset repository, or a folder
 
 
 class Config(BaseModel):
     tiers: Tiers = Field(default_factory=Tiers)
     escalation: Escalation = Field(default_factory=Escalation)
     triage: Triage = Field(default_factory=Triage)
+    adapt: Adapt = Field(default_factory=Adapt)
     select: Select = Field(default_factory=Select)
     verify: Verify = Field(default_factory=Verify)
     difficulty: Difficulty = Field(default_factory=Difficulty)
