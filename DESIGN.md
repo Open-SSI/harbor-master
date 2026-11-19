@@ -252,7 +252,7 @@ Little, and all of it readable. The rule is that nothing is stored twice, and no
   about.toml                               what the index is
   protocol.toml                            the curation protocol, locked
   roster.toml                               which agents are benchmarked. Locked
-  benchmarks/<id>.toml                      a readable copy of each listed benchmark, written from the signed records
+  benchmarks.toml                           the list of benchmarks, written from the signed records that added them
   contributors.toml                        who may curate. Locked
   index.toml                               the accepted tasks, written from the verdicts
   reports/<benchmark>/<task>.<digest>.md   the report on each task that reached one, for the reviewer
@@ -425,7 +425,7 @@ Harbor-Master is the tool, and holds no index. Each index is a git repository of
 |---|---|---|---|
 | `about.toml` | The index's name, title, description, homepage, licence, and artifact repositories | The owner, at any time | Not locked: it changes no result |
 | `protocol.toml` | The protocol: every setting that can change a result | The owner, by locking | Its hash is locked. A run with different settings is refused |
-| `benchmarks/<id>.toml` | One listed benchmark: name, description, paper, repository, pinned release | Nobody by hand: `hm` writes it from the signed record that added the benchmark | Editing it changes nothing. The list is what the records say |
+| `benchmarks.toml` | The one list of benchmarks: each with its name, description, paper, repository and pinned release | Nobody by hand: `hm` writes it from the signed records that added the benchmarks | Editing it changes nothing. The list is what the records say |
 | `roster.toml` | Which agent configurations are benchmarked on the index | The owner, by locking | Its checksum is locked beside the protocol |
 | `contributors.toml` | Who may curate, in which fields, and their signing keys | The owner, by locking | Its checksum is locked beside the protocol, and every record is checked against it |
 | `skills/` | What the agents that curate this index are told: the adapter, the gates, the ranking, the probe, the audit | The owner, by locking | Part of the protocol hash |
@@ -471,7 +471,8 @@ This is how Harbor's registry began. Its first form was one `registry.json` in t
 Anyone who can curate adds a benchmark, and the owner does nothing for it.
 
 - **An addition is a signed record.** `/benchmarks add URL` ends in a `benchmark` record in the adder's own shard under `ledger/_benchmarks/`. It is shared like every other record, so two people adding at once never write the same file, and nothing has to be locked again.
-- **The list is what the records say.** `benchmarks/<id>.toml` is a readable copy of each entry, written from the records on every machine after each pull. Editing a copy changes nothing.
+- **One list, which is what the records say.** `benchmarks.toml` holds every listed benchmark, written from the records on every machine after each pull and committed with them. Editing it changes nothing. When two people add at the same moment, both changed that one file: the pull takes either copy to go on, and the file is then written again from both records, so nobody resolves anything by hand.
+- **It is checked before and after.** `/benchmarks add URL` first pulls, then refuses a repository or an ID that is on the list already, and says who added it and when. The confirmation pulls and checks again, so an addition made meanwhile is caught too.
 - **The pin stays.** The first record for an ID stands. Only the person who added it, or the owner, may replace it with a new release or take it off. The same ID or the same repository is refused a second time.
 - **Who may add what.** Someone on the contributor list, in a field they may curate. `hm ledger verify` reports a record that breaks this.
 - **A person gives an address, and little else.** The code reads what needs no judgment. An agent of the worker tier reads the repository, with read-only tools, and drafts the name, description, paper, fields and homepage. With no model credential, the first paragraph of the README and the first link to arXiv, a DOI or OpenReview stand in. The person sees the draft and replies `y`, or says what to change, and nothing is signed before the yes. Its instructions are the session skill `session/describe-benchmark`, which is the tool's own: it changes no result.
@@ -624,7 +625,7 @@ Python, installed as `hm` with `uv tool install --editable .`, after which comma
 | `hm benchmarks` | Lists the benchmarks this index may curate, and who added each |
 | `hm benchmarks add URL` | Drafts a benchmark's entry, for anyone who can curate. The code pins the newest tag and its commit (or `--ref`), fetches it, finds the folder that holds the `task.toml` folders and counts them, and reads the release date and the licence file. An agent of the worker tier then reads the repository and fills in the name, description, paper, fields and homepage. Nothing is added yet |
 | `hm benchmarks revise TEXT` | Changes the draft: `paper: URL` is taken as it stands, and plain words go to the agent |
-| `hm benchmarks confirm` | Signs the draft into the ledger as a `benchmark` record, writes `benchmarks/<id>.toml`, and shares both. Refused while the name, description, paper or fields are missing (`paper: none` for a benchmark with no paper), and outside the adder's own fields |
+| `hm benchmarks confirm` | Signs the draft into the ledger as a `benchmark` record, writes it into `benchmarks.toml`, and shares both. Refused while the name, description, paper or fields are missing (`paper: none` for a benchmark with no paper), and outside the adder's own fields |
 | `hm benchmarks remove ID` | Takes a benchmark off the list. Only the person who added it, or the owner, can |
 | `hm adapt ID` | Owner only: builds and checks the adapter for a benchmark that is not in Harbor format, apart from a run. `--from PATH` takes one that exists already, `--rewrite` has the models write it again |
 | `hm submit ID` | Fetches a listed benchmark by hand, which a run otherwise does itself. `--dev PATH` registers a local folder for simulated runs only |

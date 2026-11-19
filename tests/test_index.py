@@ -218,7 +218,11 @@ def test_anyone_who_can_curate_adds_a_benchmark_with_no_step_by_the_owner(two, t
     hm("sync", "-w", alice_ws)
     entry = tasks.supported.find(alice_ws, "toy-bench")
     assert (entry["added_by"], entry["ref"], entry["fields"], entry["paper"]) == ("bob", "main", ["chemistry"], "none")
-    assert (alice_ws / "benchmarks" / "toy-bench.toml").exists() and ledger.verify(alice_ws) == []
+    import tomllib
+    listed = lambda ws: [b["id"] for b in tomllib.loads((ws / "benchmarks.toml").read_text()).get("benchmark", [])]  # noqa: E731
+    assert listed(alice_ws) == ["toy-bench"] and ledger.verify(alice_ws) == []
+    again = hm("benchmarks", "add", str(repo) + "/", "--id", "other-name", "--no-agent", "-w", alice_ws)      # the same repository, under any name
+    assert again.startswith("1 That repository is on this index's list already, as toy-bench, added by @bob")
     assert len(ledger.protocol.locks(ledger.Ledger(alice_ws).events)) == locks              # no new lock, and the old one still holds
     check_lock(ledger.protocol.current(ledger.Ledger(alice_ws).events), config_mod.load(alice_ws), alice_ws)
 
@@ -228,4 +232,20 @@ def test_anyone_who_can_curate_adds_a_benchmark_with_no_step_by_the_owner(two, t
     assert "Only they, or the owner" in hm("benchmarks", "remove", "toy-bench", "-w", alice_ws)
     act_as("alice")
     assert hm("benchmarks", "remove", "toy-bench", "-w", alice_ws).startswith("0 Took toy-bench off")
-    assert tasks.supported.supported(alice_ws) == [] and not (alice_ws / "benchmarks" / "toy-bench.toml").exists()
+    assert tasks.supported.supported(alice_ws) == [] and listed(alice_ws) == []
+
+    entry = {**entry, "added_by": "", "added": ""}                                          # two people add at the same moment:
+    for who, ws, name in (("alice", alice_ws, "one"), ("bob", bob_ws, "two")):              # each commits the list with their own in it
+        me = act_as(who)
+        if who == "bob":
+            hm("sync", "-w", bob_ws)
+            subprocess.run(["git", "reset", "-q", "--hard", "HEAD~1"], cwd=bob_ws, check=True)     # as it was before Alice's reached him
+        ledger.benchmarks.add(ws, me, "p", {**entry, "id": name, "github": f"https://example.org/{name}"})
+        ledger.Sync(ws, who, who)._commit(f"add {name}")
+        if who == "alice":
+            hm("sync", "-w", alice_ws)
+    assert hm("sync", "-w", bob_ws).startswith("0 ")                                        # the one list merges by itself
+    act_as("alice")
+    hm("sync", "-w", alice_ws)
+    assert listed(bob_ws) == ["one", "two"] == listed(alice_ws)
+    assert subprocess.run(["git", "status", "--porcelain"], cwd=bob_ws, capture_output=True, text=True).stdout == ""

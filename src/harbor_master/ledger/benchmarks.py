@@ -2,8 +2,8 @@
 
 Adding a benchmark is a `benchmark` record in the adder's own shard, like every other record, so
 it needs no lock and no permission from the owner, and two people adding at once never write the
-same file. The list is what the records say. `benchmarks/<id>.toml` is a readable copy of each
-entry, written from the records: editing one by hand changes nothing.
+same record file. The list is what the records say. `benchmarks.toml` is that list as one readable
+file, written from the records: editing it by hand changes nothing.
 """
 from __future__ import annotations
 
@@ -17,12 +17,12 @@ from .events import CONTRIBUTORS  # noqa: F401
 from .store import MANUAL, Ledger, Shard
 
 BENCH = "_benchmarks"       # the shard folder that holds these records
-FOLDER = "benchmarks"       # the readable copies, one file per benchmark
+FILE = "benchmarks.toml"    # the list as one readable file
 REQUIRED = ("id", "name", "description", "github", "ref", "commit", "tasks", "version", "released", "fields", "paper")
 ORDER = ("id", "name", "description", "paper", "github", "homepage", "license", "fields", "version", "released", "ref", "commit",
          "tasks", "task_count", "format", "added_by", "added")
-HEADER = "# Written by Harbor-Master from the signed record in ledger/. Editing this file changes nothing:\n" \
-         "# a benchmark is added or changed on the hm screen, with /benchmarks add URL\n\n"
+HEADER = "# The benchmarks this index may curate. Written by Harbor-Master from the signed records in ledger/.\n" \
+         "# Editing this file changes nothing: a benchmark is added on the hm screen, with /benchmarks add URL\n\n"
 
 
 def missing(entry: dict) -> list[str]:
@@ -60,21 +60,17 @@ def remove(index_dir: Path, ident, protocol: str, name: str, reason: str = "") -
     return Shard(index_dir, BENCH, ident, MANUAL, protocol).append("benchmark", value="remove", target=name, reason=reason)
 
 
-def text(entry: dict) -> str:
-    ordered = {k: entry[k] for k in ORDER if entry.get(k) not in (None, "", [])}
-    return HEADER + tomli_w.dumps({**ordered, **{k: v for k, v in entry.items() if k not in ordered and v not in (None, "", [])}})
+def text(found: list[dict]) -> str:
+    rows = [{**{k: e[k] for k in ORDER if e.get(k) not in (None, "", [])},
+             **{k: v for k, v in e.items() if k not in ORDER and v not in (None, "", [])}} for e in sorted(found, key=lambda e: e["id"])]
+    return HEADER + (tomli_w.dumps({"benchmark": rows}) if rows else "")
 
 
-def write_views(index_dir: Path) -> None:
-    """Make benchmarks/ say what the records say: one file per listed benchmark, and no other."""
-    folder, now = index_dir / FOLDER, {e["id"]: e for e in entries(index_dir)}
-    if not now and not folder.exists():
+def write_list(index_dir: Path) -> None:
+    """Make benchmarks.toml say what the records say: every listed benchmark, in one file."""
+    path, found = index_dir / FILE, entries(index_dir)
+    if not found and not path.exists():
         return
-    folder.mkdir(exist_ok=True)
-    for name, entry in now.items():
-        path, body = folder / f"{name}.toml", text(entry)
-        if not path.exists() or path.read_text() != body:
-            path.write_text(body)
-    for path in folder.glob("*.toml"):
-        if path.stem not in now:
-            path.unlink()
+    body = text(found)
+    if not path.exists() or path.read_text() != body:
+        path.write_text(body)

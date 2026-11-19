@@ -86,14 +86,14 @@ def test_the_benchmark_list_comes_from_signed_records_and_the_roster_from_the_in
     astra = roster(tmp_path)[0]
     assert (astra.name, astra.agent, astra.model, astra.reasoning_effort, astra.version) == ("astra", "codex", "gpt-6-astra", "max", "0.162.1")
 
-    ledger.benchmarks.write_views(tmp_path)                                     # a readable copy, which changes nothing when edited
-    view = tmp_path / "benchmarks" / "tb-science.toml"
-    assert tomllib.loads(view.read_text())["commit"] == entry["commit"]
+    ledger.benchmarks.write_list(tmp_path)                                      # one readable list, which changes nothing when edited
+    view = tmp_path / "benchmarks.toml"
+    assert tomllib.loads(view.read_text())["benchmark"][0]["commit"] == entry["commit"]
     view.write_text(view.read_text().replace(entry["commit"], "1" * 40))
     assert tasks.supported.find(tmp_path, "tb-science")["commit"] == entry["commit"]
     ledger.benchmarks.remove(tmp_path, ident, "p", "tb-science")
-    ledger.benchmarks.write_views(tmp_path)
-    assert tasks.supported.supported(tmp_path) == [] and not view.exists()
+    ledger.benchmarks.write_list(tmp_path)
+    assert tasks.supported.supported(tmp_path) == [] and "benchmark" not in tomllib.loads(view.read_text())
 
 
 def test_the_protocol_comes_from_the_index_and_run_settings_from_this_machine(tmp_path):

@@ -129,9 +129,9 @@ async def test_the_home_screen_walks_a_new_person_from_nothing_to_a_run(tmp_path
         assert (entry["ref"], entry["version"], entry["tasks"], entry["format"], entry["license"]) == ("v1.2.0", "1.2.0", "tasks", "harbor", "Apache-2.0")
         assert (entry["name"], entry["fields"], entry["paper"], entry["added_by"]) == ("Toy Bench", ["mathematics"], "https://arxiv.org/abs/2601.00001", "ada")
         assert len(entry["commit"]) == 40 and (config_mod.local(app.ws) / "sources" / "toy-bench" / "tasks" / "one").is_dir()
-        assert "Sums of two small integers." in (app.ws / "benchmarks" / "toy-bench.toml").read_text()
+        assert "Sums of two small integers." in (app.ws / "benchmarks.toml").read_text()
         await enter(pilot, f"/benchmarks add {repo}")
-        assert app.last[2] and "already" in app.last[1]
+        assert app.last[2] and "on this index's list already, as toy-bench, added by @ada" in app.last[1]
 
         await enter(pilot, "/run")                                                             # a real run by the owner: the lock is asked for here
         assert app.confirming is not None and app.then == [] and "start the run" in text_of(app, "#tip")

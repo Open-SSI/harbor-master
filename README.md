@@ -76,7 +76,7 @@ Harbor-Master holds no index. Each index is a git repository of its own, and a c
 |---|---|---|
 | `about.toml` | What the index is: name, title, description, and where its accepted tasks are kept | The owner |
 | `protocol.toml` | The curation protocol: every setting that can change a result | The owner, by locking |
-| `benchmarks/` | The benchmarks that may be curated, one file each: name, description, paper, repository, pinned release | Anyone who can curate, with `/benchmarks add`. `hm` writes the files from the signed records |
+| `benchmarks.toml` | The one list of benchmarks that may be curated, each with its name, description, paper, repository and pinned release | Anyone who can curate, with `/benchmarks add`. `hm` writes the file from the signed records |
 | `roster.toml` | The agent configurations benchmarked on the index | The owner, by locking |
 | `contributors.toml` | Who may curate, in which fields, and their signing keys | The owner, by locking |
 | `skills/` | What the agents that curate this index are told. Copied from the tool's templates, and the owner's to reword | The owner, by locking |
@@ -120,9 +120,9 @@ The owner adds you to `contributors.toml` with the fields you may curate, and lo
 
 A run takes any benchmark on the index's list, and nothing else: `/benchmarks` shows the list. **Anyone who can curate adds one, with no step by the owner:**
 
-1. `/benchmarks add URL`. The code pins the newest tag and its commit (`--ref` names another), finds where the tasks are, and reads the licence. A small agent reads the repository and drafts the rest: name, description, paper, fields.
+1. `/benchmarks add URL`. It first brings in what others added, and refuses a repository or an ID that is on the list already, saying who added it. Then the code pins the newest tag and its commit (`--ref` names another), finds where the tasks are, and reads the licence. A small agent reads the repository and drafts the rest: name, description, paper, fields.
 2. Reply `y` to add it, or say what to change, in plain words or as `paper: https://...`. A benchmark needs a name, a description, a repository, a paper (`paper: none` if it has none) and at least one field.
-3. Your signed record puts it on the list for everyone, and `benchmarks/<id>.toml` is its readable copy. Only you or the owner can take it off, with `/benchmarks remove ID`.
+3. Your signed record puts it on the list for everyone, and writes it into `benchmarks.toml`, the one list. Only you or the owner can take it off, with `/benchmarks remove ID`.
 
 Adding spends nothing and admits nothing: the brief, the selection and the verdicts still decide what enters the index. A run does the rest.
 

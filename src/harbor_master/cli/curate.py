@@ -56,6 +56,19 @@ def _may_add(ws: Path, ident) -> None:
         fail(f"@{ident.github} cannot curate in this index yet, so cannot add a benchmark to it. See: /contributors")
 
 
+def _clash(ws: Path, name: str, github: str) -> None:
+    """Refuse a benchmark that is on the list already, by its ID or by its repository."""
+    same = lambda a, b: a.lower().rstrip("/").removesuffix(".git") == b.lower().rstrip("/").removesuffix(".git")  # noqa: E731
+    found = next((e for e in tasks_mod.supported.supported(ws) if same(e["github"], github)), None)
+    if found:
+        fail(f"That repository is on this index's list already, as {found['id']}, added by @{found.get('added_by', '?')} "
+             f"on {found.get('added', '?')}. See: /benchmarks")
+    found = tasks_mod.supported.find(ws, name)
+    if found:
+        fail(f"{found['id']} is on this index's list already, for another repository ({found['github']}). "
+             "Give this one another name with --id.")
+
+
 def _draft(ws: Path) -> dict:
     path = config_mod.local(ws) / DRAFT
     if not path.exists():
@@ -108,15 +121,14 @@ def benchmarks_add(url: str = typer.Argument(..., help="The address of the bench
     ws, ident = need_workspace(workspace), need_identity()
     _may_add(ws, ident)
     github = url.rstrip("/").removesuffix(".git")
+    sync = ledger_mod.Sync(ws, ident.name, ident.github)
     try:
+        if sync.enabled:            # the list as everyone has it now, so that what someone else just added is seen
+            sync.pull()
+        _clash(ws, id_ or github, github)
         ref, commit = tasks_mod.supported.pin(url, ref)
-        clash = tasks_mod.supported.find(ws, id_ or github) or next(
-            (e for e in tasks_mod.supported.supported(ws) if e["github"] == github), None)
-        if clash:
-            fail(f"{clash['id']} is on this index's list already, added by @{clash.get('added_by', '?')}."
-                 + ("" if clash["github"] == github else " Give this one another name with --id."))
         entry = tasks_mod.supported.describe(url, ref, commit, config_mod.local(ws) / "sources", id_)
-    except (ValueError, subprocess.CalledProcessError) as err:
+    except (ValueError, subprocess.CalledProcessError, ledger_mod.SyncError) as err:
         fail(str(getattr(err, "stderr", "") or err).strip())
     describe.merge(entry, describe.guess(config_mod.local(ws) / "sources" / entry["id"]))
     why = _agent(ws, entry) if agent else ""
@@ -156,17 +168,16 @@ def benchmarks_confirm(workspace: Optional[Path] = Workspace):
     try:
         if sync.enabled:
             sync.pull()
-        if tasks_mod.supported.find(ws, entry["id"]):
-            fail(f"{entry['id']} was added by someone else meanwhile. See: /benchmarks")
+        _clash(ws, entry["id"], entry["github"])
         ledger_mod.benchmarks.add(ws, ident, config_mod.load(ws).protocol, entry)
-        ledger_mod.benchmarks.write_views(ws)
+        ledger_mod.benchmarks.write_list(ws)
         if sync.enabled:
             sync.publish(f"add benchmark {entry['id']}")
     except ledger_mod.SyncError as err:
         fail(str(err))
     (config_mod.local(ws) / DRAFT).unlink(missing_ok=True)
     console.print(f"[{theme.TE}]Added {entry['id']}[/] to this index, signed by @{ident.github}"
-                  + (" and shared." if sync.enabled else ".") + f" Its entry is in benchmarks/{entry['id']}.toml. Run it with: /run {entry['id']}",
+                  + (" and shared." if sync.enabled else ".") + f" The list is in benchmarks.toml. Run it with: /run {entry['id']}",
                   highlight=False)
 
 
@@ -182,7 +193,7 @@ def benchmarks_remove(name: str, reason: str = typer.Option("", help="Why it is 
         fail(f"{entry['id']} was added by @{entry.get('added_by', '?')}. Only they, or the owner, can take it off.")
     sync = ledger_mod.Sync(ws, ident.name, ident.github)
     ledger_mod.benchmarks.remove(ws, ident, config_mod.load(ws).protocol, entry["id"], reason)
-    ledger_mod.benchmarks.write_views(ws)
+    ledger_mod.benchmarks.write_list(ws)
     if sync.enabled:
         try:
             sync.publish(f"remove benchmark {entry['id']}")
