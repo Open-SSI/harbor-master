@@ -247,6 +247,21 @@ def approve(session, args):
     return f"Selection approved for {waiting.target}."
 
 
+@command("leave", "view", "/leave")
+def leave(session, args):
+    session.leaving = True
+    return "Leaving the screen. The run goes on: open it again with hm run."
+
+
+@command("add", "control", "/add benchmark", "the benchmark joins this run: fetched, screened, and its tasks queued")
+def add(session, args):
+    from .. import tasks as tasks_mod
+    if not args:
+        return "Name a benchmark from the index's list: /add BENCHMARK"
+    info, why = tasks_mod.resolve(session.ws, args[0], session.simulate)
+    return why if info is None else session.add_benchmark(args[0], info)
+
+
 def _adapter_request(session, args, kind: str):
     return next((r for r in session.requests if r.kind == kind and (not args or r.target == args[0])), None)
 

@@ -65,6 +65,7 @@ class Session:
         self.notes: dict[str, list[str]] = {}
         self.budget = cfg.run.budget_usd
         self.paused = self.quitting = self.finished = False
+        self.leaving = False            # the user asked to leave the screen: the screen does it and clears this
         self.started = time.time()
         self.containers = asyncio.Semaphore(cfg.run.max_containers)
         self.containers_used = 0
@@ -302,10 +303,36 @@ class Session:
     async def run(self) -> None:
         self._shared_tasks = [asyncio.create_task(shared.run_shared(self, b)) for b in self.benches.values()]
         self._workers = [asyncio.create_task(self._cell_loop(c)) for c in self.cells]
+        await self._until_done()
+
+    def add_benchmark(self, benchmark: str, info: dict) -> str:
+        """Take one more benchmark into this run, while it is going or after it has finished."""
+        if benchmark in self.benches:
+            return f"{benchmark} is already in this run."
+        if self.quitting:
+            return "This run is ending, so it takes nothing more."
+        self.benches[benchmark] = BenchState(benchmark, info.get("field", "general"), Path(info["path"]) if info.get("path") else Path(),
+                                             info.get("released", ""), info.get("license", ""), entry=info.get("entry"))
+        self._shared_tasks.append(asyncio.create_task(shared.run_shared(self, self.benches[benchmark])))
+        for i, cell in enumerate(self.cells):           # cells that had run out of work take tasks again
+            if i >= len(self._workers) or self._workers[i].done():
+                worker = asyncio.create_task(self._cell_loop(cell))
+                self._workers[i:i + 1] = [worker]
+        if self.finished:                               # the run had finished: it is a run again
+            self.finished = False
+            self._more = asyncio.create_task(self._until_done())
+        self.command = (self.command or "hm run") + f" + {benchmark}"
+        return f"{benchmark} is added to this run."
+
+    async def _until_done(self) -> None:
+        """Wait until every benchmark and every cell has nothing left to do, then close the run's books.
+        Benchmarks and cells that are added on the way are waited for too."""
         try:
-            await asyncio.gather(*self._shared_tasks)
-            while any(not w.done() for w in self._workers):   # /cells can add workers mid-run
-                await asyncio.gather(*self._workers)
+            while True:
+                pending = [t for t in (*self._shared_tasks, *self._workers) if not t.done()]
+                if not pending:
+                    break
+                await asyncio.wait(pending)
         except asyncio.CancelledError:
             pass
         for benchmark in list(self.claimed):              # let go of whatever this run still holds

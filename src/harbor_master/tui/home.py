@@ -316,7 +316,7 @@ class HomeApp(App[tuple[list[str], Path] | None]):
             self.show("left", f"Back in {self.folder}. Pick an index with /use, /join or /new.")
             self.look()
         elif name == "run":
-            if not (s.registered or s.listed):
+            if not (s.registered or s.listed or s.running):
                 self.show("nothing to run", "This index lists no benchmark yet. Its owner adds one to benchmarks.toml. Or add a made-up one with /demo.", failed=True)
                 return
             self.exit((args, self.ws))

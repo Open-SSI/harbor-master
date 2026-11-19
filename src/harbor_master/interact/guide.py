@@ -39,6 +39,7 @@ class State:
     missing_keys: list[tuple[str, str]] = field(default_factory=list)   # (what for, variable)
     keys_file: Path | None = None
     registered: dict[str, dict] = field(default_factory=dict)
+    running: dict | None = None                         # the run that is going in this index now, if one is
     ran: bool = False                                   # the ledger has records of a run
     ready: int = 0                                      # reports waiting for a verdict
     accepted: int = 0
@@ -96,6 +97,8 @@ def look(start: Path | None = None) -> State:
     s.missing_keys = [(what, var) for what, var, present, _ in keys_mod.doctor(cfg) if not present and what != "task store"]
     s.keys_file = keys_mod.secrets_path()
     s.registered = tasks_mod.read_registry(ws)
+    from .. import host
+    s.running = host.active(ws)
     s.ran, s.ready, s.accepted = _counts(events)
     s.sim_ran, s.sim_ready, s.sim_accepted = _counts(ledger_mod.Ledger(config_mod.simulated(ws), simulated=True).events)
     return s
@@ -131,7 +134,8 @@ def steps(s: State) -> list[tuple[str, str, str]]:
             ("A benchmark", bool(set(s.registered) | set(s.listed) - set(s.abandoned)),
              ", ".join(f"{b} (abandoned)" if b in s.abandoned else b if b in s.registered else f"{b} (the run fetches it)"
                        for b in dict.fromkeys([*s.registered, *s.listed])) or "none listed yet"),
-            ("A run", s.ran or (s.trying and s.sim_ran), "the ledger has records" if s.ran else
+            ("A run", s.ran or (s.trying and s.sim_ran), f"going now: {host_line(s.running)}" if s.running else
+             "the ledger has records" if s.ran else
              "simulated only: kept on this machine, not in the index" if s.sim_ran else "nothing has run yet"),
             ("Your verdicts", bool(s.accepted) and not s.ready, f"{s.ready} report{'s' if s.ready != 1 else ''} waiting, {s.accepted} accepted")
             if not (s.trying and s.sim_ran) else
@@ -186,8 +190,20 @@ def _meanwhile(s: State, without: str) -> tuple[str, str]:
     return ("/run --simulate", f"Meanwhile, a simulated run needs no {without}, and leaves the index untouched")
 
 
+def host_line(info: dict) -> str:
+    import time
+    return ("simulated" if info.get("simulate") else "real") + ", started " + time.strftime("%H:%M", time.localtime(info.get("started", 0)))
+
+
 def tip(s: State) -> Tip:
     """Advice for the step `next_step` names: what it is for, and the commands that do it."""
+    if s.ident is not None and s.ws is not None and s.running:
+        flag = " --simulate" if s.running.get("simulate") else ""
+        return Tip("A run is going in this index", [
+            (f"/run{flag}", "Opens its screen. The run keeps going when you leave the screen or close the window"),
+            (f"/run NAME{flag}", "Adds a benchmark to it. There is one run per index, and it takes as many benchmarks as you give it"),
+            ("", "On its screen, ctrl+l leaves and the run goes on. ctrl+q ends the run."),
+            ("/status" + (" --simulated" if s.running.get("simulate") else ""), "Where every task stands, without opening it")])
     step = next_step(s)
     if step == "Who you are":
         return Tip("Start here: say who you are", [

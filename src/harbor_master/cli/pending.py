@@ -8,12 +8,6 @@ from .common import app, not_built
 
 
 @app.command()
-def watch():
-    """Attach the live view to a running job."""
-    not_built("Attaching to a running job")
-
-
-@app.command()
 def contribute(budget: float = typer.Option(...)):
     """Claim open slots, run them, and submit the records."""
     not_built("Auto mode")

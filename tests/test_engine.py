@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from harbor_master import ledger, tasks
+from harbor_master import interact, ledger, tasks
 from harbor_master.backends import NotImplementedBackend
 from harbor_master.core import config as config_mod
 from harbor_master.engine import Session
@@ -124,3 +124,18 @@ def test_harbor_output_is_kept_only_when_it_is_evidence(tmp_path):
         names = set(tar.getnames())
     # one file: the trajectory whole, however long, without the task's bulky output or Harbor's bookkeeping
     assert names == {"result.json", "verifier/reward.txt", "agent/trajectory.json", "OMITTED.txt"}
+
+
+async def test_a_finished_run_takes_one_more_benchmark(workspace, ident, tmp_path):
+    from conftest import make_benchmark
+    s = Session(workspace, config_mod.load(workspace), ident, tasks.read_registry(workspace), simulate=True, speed=0, no_input=True, run_id="r1")
+    await s.run()
+    assert s.finished and s.benches["demo-bench"].phase == "ready"
+    tasks.register(workspace, "second", make_benchmark(tmp_path / "more", "second", 12), "chemistry", dev=True)
+    assert "not on this index's list" in interact.execute(s, interact.Command("add", ["nothing"]))
+    assert "second is added to this run" in interact.execute(s, interact.Command("add", ["second"]))
+    assert not s.finished and "already in this run" in interact.execute(s, interact.Command("add", ["second"]))
+    await s._more                                                            # it is a run again, and finishes again
+    assert s.finished and s.benches["second"].phase == "ready" and len(s.benches["second"].tasks) == 12
+    assert s.benches["second"].kept + s.benches["second"].dropped == s.benches["second"].selected > 0
+    assert "+ second" in s.command and (s.run_dir / "run.json").exists()

@@ -60,7 +60,9 @@ hm
 | `/demo` | It starts an index called `hm-demo` in this folder, with a made-up benchmark in it |
 | `/run --simulate` | The run screen opens, on simulated models and trials. It spends nothing |
 
-**3. Answer the run.** On the run screen, commands start with `/`, and `tab` completes them and their arguments. The line marked `tip` says what the run needs from you. It stops twice to ask, in the amber panel: first for the lead's brief (`/brief demo-bench <what matters>`), then to approve the selection (`/approve demo-bench`). When reports are ready it tells you: `/review` lists them, and `/accept` or `/reject` signs your verdict. `ctrl+q` goes back to the home screen.
+**3. Answer the run.** On the run screen, commands start with `/`, and `tab` completes them and their arguments. The line marked `tip` says what the run needs from you. It stops twice to ask, in the amber panel: first for the lead's brief (`/brief demo-bench <what matters>`), then to approve the selection (`/approve demo-bench`). When reports are ready it tells you: `/review` lists them, and `/accept` or `/reject` signs your verdict.
+
+**The run does not need its terminal.** `ctrl+l` leaves the screen and the run goes on. So does closing the window. `hm run` opens it again, and `hm run NAME` adds another benchmark to it. There is one run per index, and it stays, also when it has finished, until you end it with `ctrl+q`.
 
 **4. Look at what happened.** `/status --simulated` shows where every task stands, and `/stats --simulated` writes the statistics.
 
@@ -178,7 +180,7 @@ Real runs call models and need keys. `hm keys init` copies [`secrets.env.example
 | An index | `hm index`, `hm index new`, `hm join`, `hm indexes`, `hm index connect`, `hm index entry`, `hm contributors` |
 | What it runs under | `hm protocol`, `hm protocol lock`, `hm skills`, `hm skills diff`, `hm skills adopt`, `hm roster` |
 | Benchmarks | `hm benchmarks`, `hm adapt`, `hm submit` |
-| Curating | `hm run`, `hm brief`, `hm review`, `hm claims`, `hm requests`, `hm sync` |
+| Curating | `hm run` (starts the run, or opens the one that is going), `hm run NAME` (adds a benchmark to it), `hm brief`, `hm review`, `hm claims`, `hm requests`, `hm sync` |
 | Results | `hm status`, `hm stats`, `hm credits`, `hm ledger verify`, `hm tasks` |
 | Benchmarking agents | `hm eval`, `hm todo`, `hm leaderboard` |
 | This machine | `hm keys init`, `hm keys set`, `hm doctor` |

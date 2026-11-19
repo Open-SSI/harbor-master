@@ -6,6 +6,9 @@ text that maps to commands, and questions.
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+import signal
 import time
 
 from textual.app import App, ComposeResult
@@ -21,12 +24,14 @@ from .theme import AM, BG, BORDER, FG, MU, PU, RD, SE, TE, t
 from .widgets import Completer, Prompt, TaskScreen
 
 KEYS = t(("1-9", SE), (" open cell   ", MU), ("ctrl+p", SE), (" pause   ", MU), ("esc", SE), (" close panel   ", MU),
-         ("/", SE), (" commands   ", MU), ("?", SE), (" help   ", MU), ("ctrl+q", SE), (" quit", MU))
+         ("/", SE), (" commands   ", MU), ("?", SE), (" help   ", MU), ("ctrl+l", SE), (" leave, run goes on   ", MU),
+         ("ctrl+q", SE), (" end the run", MU))
+DETACH = "\x1b_hm-detach\x1b\\"        # tells the relay behind this screen that the user has left it
 
 
 class SessionApp(App[None]):
     ENABLE_COMMAND_PALETTE = False
-    BINDINGS = [("ctrl+p", "toggle_pause", "Pause"), ("ctrl+q", "quit_run", "Quit")]
+    BINDINGS = [("ctrl+p", "toggle_pause", "Pause"), ("ctrl+q", "quit_run", "Quit"), ("ctrl+l", "leave", "Leave")]
     CSS = f"""
     Screen {{ background: {BG}; color: {FG}; }}
     #top {{ height: 1fr; scrollbar-size: 0 0; }}
@@ -73,6 +78,38 @@ class SessionApp(App[None]):
         self._run = asyncio.create_task(self.session.run())
         self.set_interval(0.1, self.refresh_view)
         self.refresh_view()
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGHUP):         # told to end: close the run's books, then go
+            try:
+                loop.add_signal_handler(sig, self._end)
+            except (NotImplementedError, RuntimeError, ValueError):
+                pass
+        if os.environ.get("HM_CONTROL"):                    # the door another `hm run` knocks on, to add a benchmark
+            self._door = asyncio.create_task(self._listen(os.environ["HM_CONTROL"]))
+
+    def _end(self) -> None:
+        """Told to end from outside. A run that is still going closes its books first, and the screen goes when it has."""
+        if self.session.finished:
+            self.exit()
+        else:
+            self.session.kill()
+
+    async def _listen(self, path: str) -> None:
+        async def answer(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            try:
+                request = json.loads(await reader.readline() or b"{}")
+                lines = [interact.execute(self.session, Command("add", [name])) for name in request.get("add", [])]
+                reply = {"ok": bool(lines) and all("is added" in line or "already in" in line for line in lines), "text": "\n".join(lines)}
+            except (ValueError, OSError) as err:
+                reply = {"ok": False, "text": f"The run could not read that: {err}"}
+            writer.write(json.dumps(reply).encode() + b"\n")
+            await writer.drain()
+            writer.close()
+
+        server = await asyncio.start_unix_server(answer, path)
+        os.chmod(path, 0o600)
+        async with server:
+            await server.serve_forever()
 
     # ----- drawing -----
 
@@ -92,6 +129,11 @@ class SessionApp(App[None]):
         self.query_one("#tip", Static).update(t(("tip  ", f"bold {TE}"), (guide.session_tip(s), SE)))
         self._fit()
         self._draw_requests()
+        if s.leaving:
+            s.leaving = False
+            self.action_leave()
+        if not s.finished:
+            self._told_finished = False     # a benchmark was added to a finished run: it is a run again
         if s.finished and not self._told_finished:
             self._told_finished = True
             if s.quitting or self.exit_when_done:
@@ -102,7 +144,8 @@ class SessionApp(App[None]):
             body = interact.execute(s, Command("status")) + "\nThe run is finished." + waiting
             if s.ready:
                 body += f"\n{len(s.ready)} reports are waiting for your verdict. Start with /review."
-            self.show_result("finished", body + "\nPress ctrl+q to leave.")
+            self.show_result("finished", body + "\nThe run stays open: add a benchmark with /add NAME, or leave it with ctrl+l "
+                             "and come back with hm run. ctrl+q ends it.")
 
     def _fit(self) -> None:
         """Keep the working cells on screen. When rows run short, the least needed panels go first."""
@@ -254,6 +297,14 @@ class SessionApp(App[None]):
     def action_toggle_pause(self) -> None:
         name = "resume" if self.session.paused else "pause"
         self.show_result("done", interact.execute(self.session, Command(name)))
+
+    def action_leave(self) -> None:
+        """Leave the screen. Behind a relay the run goes on, and `hm run` opens it again."""
+        if not os.environ.get("HM_HOSTED") or self._driver is None:
+            self.show_result("cannot leave", "This run is tied to this terminal, so leaving would end it. End it with ctrl+q.")
+            return
+        self._driver.write(DETACH)
+        self._driver.flush()
 
     def action_quit_run(self) -> None:
         if self.session.finished:

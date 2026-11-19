@@ -130,12 +130,31 @@ def run(benchmarks: list[str] = typer.Argument(None, help="Benchmarks to run. De
         until: str = typer.Option("", help="Stop after this point: select (screen and rank only), verify, or probe. Default: all stages."),
         assume_after: str = typer.Option("", help="Run stages up to this one for real (verify or probe) and assume "
                                          "the rest. Assumed results cost nothing, are marked, and cannot be accepted."),
+        foreground: bool = typer.Option(False, "--foreground", hidden=True),      # set by the relay: this process is the run itself
         workspace: Optional[Path] = Workspace):
-    """Run benchmarks through the stages, to the report a reviewer reads."""
+    """Run benchmarks through the stages, to the report a reviewer reads. The run goes on when its terminal closes:
+    hm run opens it again, and hm run NAME adds a benchmark to it. There is one run per index."""
+    from .. import host
     from ..backends import NotImplementedBackend
     from ..engine import Session
     from ..tui import render, run_app, run_plain
     ws, ident = need_workspace(workspace), need_identity()
+    plain = plain or not (sys.stdout.isatty() and sys.stdin.isatty())
+    going = None if foreground else host.active(ws)
+    if going is not None:           # one run per index: join the one that is going
+        if plain or not going.get("socket"):
+            fail(f"A run is going in this index already: {host.describe(going)}. There is one run per index. "
+                 + ("Open it in a terminal with: hm run" if going.get("socket") else "It has no screen: wait for it to end."))
+        if going.get("simulate") != simulate and (benchmarks or simulate):
+            fail(f"The run that is going is {host.describe(going)}. A {'simulated' if simulate else 'real'} one cannot join it: "
+                 "end that run first, with ctrl+q on its screen.")
+        for b in benchmarks or []:
+            reply = host.tell(ws, {"add": [b]})
+            console.print(reply["text"], highlight=False)
+            if not reply["ok"]:
+                raise typer.Exit(1)
+        _view(ws)
+        return
     cfg = config_mod.load(ws)
     if cells:
         cfg.run.cells = cells
@@ -146,15 +165,10 @@ def run(benchmarks: list[str] = typer.Argument(None, help="Benchmarks to run. De
     wanted = benchmarks or [*listed, *(b for b in registry if b not in listed and (simulate or registry[b].get("supported")))]
     resolved = {}
     for b in wanted:
-        if b not in registry and b not in listed:
-            fail(f"{b} is not on this index's list of benchmarks, and is not a folder registered here. See: hm benchmarks")
-        entry = listed.get(b)       # on the list: the run fetches it, and adapts it, when that is not done yet
-        info = dict(registry[b]) if b in registry else {
-            "path": "", "field": ", ".join(entry.get("fields", [])) or "general", "supported": b,
-            "license": entry.get("license", ""), "released": entry.get("released", "")}
-        resolved[b] = {**info, **({"entry": entry} if entry else {})}
-        if not simulate and not resolved[b].get("supported"):
-            fail(f"{b} is not on the list of supported benchmarks, so it only runs with --simulate. See: hm benchmarks")
+        info, why = tasks_mod.resolve(ws, b, simulate)
+        if info is None:
+            fail(why)
+        resolved[b] = info
     gone = ledger_mod.abandoned(ledger_mod.Ledger(ws).events)
     for b in benchmarks or []:          # asked for by name: refused outright. Otherwise the run leaves it out and says so
         if b in gone:
@@ -171,25 +185,51 @@ def run(benchmarks: list[str] = typer.Argument(None, help="Benchmarks to run. De
         mine = ledger_mod.fields_of(ledger_mod.load_contributors(ws), ident.github)
         if mine is not None and not mine:
             fail(f"@{ident.github} has no fields on the contributor list, so cannot curate. See: hm contributors")
-    plain = plain or not sys.stdout.isatty()
     if until not in ("", "select", "verify", "probe") or assume_after not in ("", "verify", "probe"):
         fail("--until takes select, verify or probe. --assume-after takes verify or probe.")
     command = "hm run " + " ".join([b.split("/")[-1] for b in resolved] + (["--simulate"] if simulate else [])
                                    + ([f"--assume-after {assume_after}"] if assume_after else []))
+    if not plain and not foreground:        # everything checks out: start the run behind a relay, and view it from here
+        argv = [*(benchmarks or []), *(["--simulate"] if simulate else []), "--speed", str(speed),
+                *(["--cells", str(cells)] if cells else []), *(["--budget", str(budget)] if budget else []),
+                *(["--no-input"] if no_input else []), *(["--tasks", only] if only else []),
+                *(["--until", until] if until else []), *(["--assume-after", assume_after] if assume_after else [])]
+        try:
+            host.start(ws, argv, command, simulate)
+        except RuntimeError as err:
+            fail(str(err))
+        _view(ws)
+        return
     try:
         session = Session(ws, cfg, ident, resolved, simulate=simulate, speed=speed,
                           no_input=no_input or plain, command=command, until=until,
                           assume_after=assume_after, only=[t.strip() for t in only.split(",") if t.strip()])
     except NotImplementedBackend as err:
         fail(str(err))
-    if plain:
-        asyncio.run(run_plain(session, console))
-    else:
-        run_app(session)
-        console.print(render.final_table(session))
+    mark = None if foreground else host.claim(ws, command, simulate)        # a run without a screen is the one run too
+    try:
+        if plain:
+            asyncio.run(run_plain(session, console))
+        else:
+            run_app(session)
+            console.print(render.final_table(session))
+    finally:
+        if mark is not None:
+            mark.unlink(missing_ok=True)
     console.print(f"[{theme.MU}]Run {session.run_id}: {session.run_dir}[/]")
     if any(r.blocking for r in session.requests):     # something blocked part of the run
         raise typer.Exit(3)
+
+
+def _view(ws: Path) -> None:
+    """Show the run that is going, and say where it stands when the screen is left."""
+    from .. import host
+    state = host.attach(ws)
+    if state == "going":
+        console.print(f"[{theme.TE}]The run goes on.[/] Open it again with: hm run. Add a benchmark to it with: hm run NAME",
+                      highlight=False)
+    else:
+        console.print("The run has ended. What it did: hm status", highlight=False)
 
 
 @app.command()

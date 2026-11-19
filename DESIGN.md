@@ -610,7 +610,7 @@ Python, installed as `hm` with `uv tool install --editable .`, after which comma
 | `hm adapt ID` | Owner only: builds and checks the adapter for a benchmark that is not in Harbor format, apart from a run. `--from PATH` takes one that exists already, `--rewrite` has the models write it again |
 | `hm submit ID` | Fetches a listed benchmark by hand, which a run otherwise does itself. `--dev PATH` registers a local folder for simulated runs only |
 | `hm run [benchmarks] [--simulate] [--until STAGE] [--assume-after STAGE] [--plain] [--no-input]` | Runs benchmarks to the report stage, with the session screen. With no name, every benchmark the index lists. It fetches what is not here yet, and builds a missing adapter. `--simulate` uses simulated models and trials and spends nothing. `--tasks` limits the run to named tasks. `--until` stops after select, verify, or probe. `--assume-after` runs up to that stage for real and assumes the rest |
-| `hm watch` | Attaches the live view to a running job |
+| `hm run` again | Opens the run that is going in this index. `hm run NAME` adds a benchmark to it. There is one run per index |
 | `hm status` | One-shot table of where every task stands. With `--simulated`, as with the other read commands, it shows what simulated runs recorded on this machine |
 | `hm stats` | Writes the statistics of the curation, over everyone's records, to `.hm/stats/`: `stats.md` and one CSV per table. It pulls first and names the commit it read. `--no-pull` skips the pull, `--out DIR` writes elsewhere, `--simulated` reads the simulated runs |
 | `hm review [--cell ID]` | Shows each report and records accept, drop, or send back with a reason |
@@ -669,9 +669,29 @@ Which step is next follows what the person can do now, not the order alone. A be
 
 To look at what simulated runs did, `hm status`, `hm credits`, `hm leaderboard`, `hm todo`, `hm claims`, `hm review` and `hm ledger verify` take `--simulated`, and say so at the top of what they print. Without it they show the index, and mention that simulated records exist. The checklist shows simulated runs only where nothing can run for real, and labels them.
 
+### A run outlives its terminal
+
+A curation takes hours, and a terminal does not last that long: a window gets closed, a laptop sleeps, an SSH connection drops. So the run does not live in the terminal.
+
+- **Where it lives.** `hm run` starts the run, and its screen, in a background process attached to a pseudo-terminal. A small relay owns that pseudo-terminal. What the person has in front of them is a view: it carries keys to the screen and the screen to the terminal.
+
+  ```
+  terminal  <->  view (hm run)  <- socket ->  relay  <- pseudo-terminal ->  the run and its screen
+  ```
+
+- **Leaving.** `ctrl+l`, or `/leave`, closes the view. Closing the window, or losing the connection, does the same. The run goes on either way.
+- **Coming back.** `hm run` in the index opens a view on the run that is going. From the home screen, `/run` does. The screen draws itself again in full at the size of the new terminal.
+- **One run per index.** A second `hm run` never starts a second run. With a benchmark's name it adds that benchmark to the run that is going, as `/add NAME` does on its screen, and then opens the view. A simulated run and a real one do not mix: one cannot join the other.
+- **A finished run stays.** When everything is done the run does not go away. It waits, with its reports, for verdicts or for more benchmarks, and a benchmark added to it makes it a run again. `ctrl+q` ends it.
+- **Ending cleanly.** A run that is told to end from outside (the process is terminated) closes its books first: it releases its claims, writes its usage and its summary, and pushes. A Harbor job that is no longer wanted is interrupted, as `ctrl+c` would, so that Harbor can stop its containers, and killed only if it does not go within 30 seconds.
+- **Without a terminal** (`--plain`, or output that is not a terminal) the run stays in the foreground, as a command. It is still the one run of its index.
+- **What it does not survive:** a reboot, or the machine going down. The next `hm run` then starts a new run, which reuses everything that was recorded.
+
+`.hm/run.active` says which run is going. The sockets are in the user's runtime folder, since a socket's path must be short. `.hm/host.log` has what the background process printed.
+
 ### The session screen
 
-`hm run`, `hm watch`, `hm contribute`, and `hm eval` open one full-screen Textual app. The run continues underneath whatever the user is doing on screen.
+`hm run` opens one full-screen Textual app. The run continues underneath whatever the user is doing on screen, and after the screen is gone: see "A run outlives its terminal" below.
 
 ![The Harbor-Master session screen during a simulated run: header, summary, benchmarks, working cells, recent outcomes, an answer panel, a confirmation panel, and the prompt](assets/tui.png)
 
@@ -750,6 +770,8 @@ The prompt accepts a command (`/pause terrabench`) or ordinary language (`hold t
 | | `/note ID text` | Attaches a note to a task, shown to the fixer and in the report |
 | | `/sync` | Pulls the ledger and submits finished records now |
 | | `/quit` | Ends the session after running stages finish, keeping everything for resume |
+| | `/add benchmark` | Takes one more benchmark into this run: fetched, screened, and its tasks queued |
+| | `/leave` | Leaves the screen. The run goes on, and `hm run` opens it again. Also `ctrl+l` |
 | Spends, discards, or decides (always confirmed) | `/stop ID or cell` | Stops a running task now and kills its containers. The unfinished stage is discarded, finished stages are kept, and the task is marked incomplete |
 | | `/restart ID` | Runs an incomplete task again. See below |
 | | `/retry ID [stage]` | Runs a failed stage again |
@@ -942,7 +964,7 @@ Where a new capability goes:
 | A panel on the screen | One function in `tui/render.py`, one line in `tui/app.py` |
 | An event type | `ledger/events.py`, and its rule in `ledger/fold.py` |
 
-**Built and tested** (74 tests, on simulated backends):
+**Built and tested** (76 tests, on simulated backends):
 
 - Config with a protocol hash, identity with an Ed25519 signing key, and keys kept in a git-ignored file.
 - The ledger: signed, hash-chained shards per runner and run, slot and decision reuse, the fold into task states, credits, the leaderboard, the contributor list, and `hm ledger verify`.
@@ -968,6 +990,7 @@ Where a new capability goes:
 - Reports in the index's repository, with a checksum in their record, reaching a second clone.
 - The `usage` and `skip` records and `hm stats`. Tested by checking that the recorded calls and cost per tier equal the run's own totals, and tried on a simulated run of 40 tasks, where the report's totals matched the run's summary. With two clones of one index, `hm stats` in the one that ran nothing pulled the other's records and named the commit they are in.
 - A later run lists the reports that still wait for the reviewer's verdict. Before, only the run that wrote a report listed it.
+- A run that outlives its terminal: the relay, leaving and coming back, one run per index, adding a benchmark to a run that is going or finished, and ending cleanly. Tested with real processes in pseudo-terminals: leave, close the window, open again, add, end, and end from outside. Whether an interrupted Harbor job stops its containers has not been tried.
 - The home screen, the checklist and the tips, `hm guide`, `hm demo`, `hm key`, and the tip line on the run screen. Tested by driving the home screen from an empty folder to a run, and by checking the tip in each state. The path from the home screen to the run screen and back was also driven once in a real terminal. Leaving a run that waits for an answer now works: `/quit` stops waiting, and the benchmark asks again in the next run.
 - Simulated runs kept apart from the index: their own folder, a signed mark on every record, readers of a real ledger that leave them out, and a verify rule that reports them. Tested by copying simulated records into a real ledger, by removing the mark, and by simulating in a shared index and checking what was pushed.
 - Adapters, built by the run itself: fetching a listed benchmark, the worker and then the frontier model writing the adapter, the checks, the container run, the lock of one adapter, `/recheck` and `/abandon` when the models fail, and `hm adapt` for doing it by hand. Tested with an adapter written by hand and with stand-ins for the models. Tried for real with the hand-written adapter: `hm adapt` ran it in the container, wrote the same tasks twice, and a reference solution passed through Harbor, and a simulated `hm run` with nothing submitted fetched the benchmark and ran the adapter in the container. **A model has never written one:** the sessions and the `adapt/write-adapter` skill are not exercised.
@@ -995,7 +1018,7 @@ Where a new capability goes:
 - The rest of the real backend: the audit, second opinion, repair, and report on real trajectories. Real agent trials for the difficulty filter are wired but have never been run: one trial can take hours and many dollars.
 - Parity runs against a benchmark's original harness, adapters that need more than the standard library, and the exploit agent.
 - Recalibrating escalation thresholds from overturned decisions.
-- `hm watch`, `contribute`, and `publish`. The pull-request flow and CI for outside contributors. The task store has never run against Hugging Face.
+- `hm contribute` and `publish`. The pull-request flow and CI for outside contributors. The task store has never run against Hugging Face.
 - Session commands `/logs`, `/trajectory`, `/sync`, `/restart`, `/retry`, `/escalate`, `/limit`. They answer "not built yet". (A run syncs by itself. `/sync` inside the session is not wired.)
 - Acting on a verdict of "send back": it is recorded, but no later run picks the task up for repair yet.
 - Example tasks in the lead's brief, and the agreement check between the lead's examples and tier D.

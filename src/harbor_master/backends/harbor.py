@@ -34,6 +34,20 @@ def agent_limit(task_dir: Path) -> float:
         return 0.0
 
 
+async def _stop(proc: asyncio.subprocess.Process, grace: float = 30.0) -> None:
+    """End a Harbor job that is no longer wanted. It is interrupted first, as ctrl+c would, so that Harbor
+    can stop the containers it started. Only if it does not go in time is it killed."""
+    import contextlib
+    import signal
+    with contextlib.suppress(ProcessLookupError):
+        proc.send_signal(signal.SIGINT)
+    try:
+        await asyncio.wait_for(proc.wait(), grace)
+    except (asyncio.TimeoutError, asyncio.CancelledError):
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+
+
 async def run(task_dir: Path, jobs_dir: Path, agent: str, model: str = "", agent_kwargs: dict | None = None,
               with_keys: bool = False, timeout: float = 3 * 3600, max_agent_seconds: float = 0,
               agent_env: dict[str, str] | None = None) -> TrialResult:
@@ -61,7 +75,7 @@ async def run(task_dir: Path, jobs_dir: Path, agent: str, model: str = "", agent
     try:
         out, _ = await asyncio.wait_for(proc.communicate(), timeout)
     except (asyncio.TimeoutError, asyncio.CancelledError):
-        proc.kill()
+        await _stop(proc)
         raise
     job = jobs_dir / name
     results = [p for p in job.glob("*/result.json")]
