@@ -14,7 +14,7 @@
   <em>One run. Each working cell carries a task through the stages. The prompt takes commands, plain instructions, and questions, and asks before anything changes the run.</em>
 </p>
 
-> **Status.** The pipeline, the ledger, and the screen are built and tested on a **simulated backend**, which spends nothing. On real tasks, the admission gates and ranking (on Jev), and the verify stage (Harbor runs in Docker) work. The audit, repair, and report on real trajectories are not built, and real agent trials for the difficulty filter have never been run. [DESIGN.md](DESIGN.md), Section 14, lists exactly what is and is not.
+> **Status.** The pipeline, the ledger, and both screens are built and tested on a **simulated backend**, which spends nothing. On real tasks, the admission gates and ranking (on Jev) and the verify stage (Harbor runs in Docker) work, and an adapter runs in its container. Not built: the audit, repair, and report on real trajectories. Never run: real agent trials for the difficulty filter, a model writing an adapter, and the Hugging Face task store. [DESIGN.md](DESIGN.md), Section 14, lists exactly what is and is not.
 
 ## How it works
 
@@ -22,14 +22,15 @@ Three model tiers share the work. A fast **decision** model makes every gate and
 
 For each benchmark, Harbor-Master:
 
-1. **Admits** tasks that an agent must execute, that ship a reference solution, and that a program can verify quickly. Multiple choice and question answering are filtered out.
-2. **Ranks** the admitted tasks by importance under a brief from the field lead: each is scored once, and the ones near the top are then compared in pairs. It **selects** the top ones: at most 24 per benchmark, and at most a quarter of it. The lead approves the selection before any trial is spent.
-3. **Verifies and probes** each selected task: the reference solution must pass, a no-op must fail, and the verifier must reject wrong answers and accept right ones in another form.
-4. **Filters by difficulty**: two frontier agents attempt the task, for at most 4 hours a trial, and it is kept only if at most 40% of trials pass.
-5. **Audits and repairs**: an auditor reads the trajectories, and broken tasks are fixed and sent back through the checks.
-6. **Reports** to a reviewer, who accepts, rejects, or sends back. A benchmark may have at most 8 tasks in the index, so a ninth must replace one.
+1. **Fetches** it at its pinned release, and **adapts** it if its tasks are not in Harbor format.
+2. **Admits** tasks that an agent must execute, that ship a reference solution, and that a program can verify quickly. Multiple choice and question answering are filtered out.
+3. **Ranks** the admitted tasks by importance under a brief from the field lead: each is scored once, and the ones near the top are then compared in pairs. It **selects** the top ones: at most 24 per benchmark, and at most a quarter of it. The lead approves the selection before any trial is spent.
+4. **Verifies and probes** each selected task: the reference solution must pass, a no-op must fail, and the verifier must reject wrong answers and accept right ones in another form.
+5. **Filters by difficulty**: two frontier agents attempt the task, for at most 4 hours a trial, and it is kept only if at most 40% of trials pass.
+6. **Audits and repairs**: an auditor reads the trajectories, and broken tasks are fixed and sent back through the checks.
+7. **Reports** to a reviewer, who accepts, rejects, or sends back. A benchmark may have at most 8 tasks in the index, so a ninth must replace one.
 
-Tasks run in parallel in working cells. The design, the cost estimate, and the reasons behind each choice are in [DESIGN.md](DESIGN.md).
+Tasks run in parallel in working cells. A person decides three things: the brief, the selection, and each verdict. The design, the cost estimate, and the reasons behind each choice are in [DESIGN.md](DESIGN.md).
 
 ## Quick start
 
@@ -39,17 +40,11 @@ You need Python 3.11 or later and [uv](https://docs.astral.sh/uv/). A simulated 
 
 ```bash
 cd harbor-master        # after cloning this repository
-```
-
-```bash
 uv tool install --editable .
-```
-
-```bash
 hm
 ```
 
-`uv tool install` puts the `hm` command on your path, so nothing needs `uv run`. `--editable` makes it follow the code in this folder. If you would rather not install it, `uv sync` and then `hm ...` works the same.
+`uv tool install` puts the `hm` command on your path, so nothing needs `uv run`. `--editable` makes it follow the code in this folder.
 
 `hm` on its own opens the home screen. It needs nothing set up: a checklist shows the steps and where you are, and the tip under it says what to do now, with the commands for it.
 
@@ -65,62 +60,143 @@ hm
 | `/demo` | It starts an index called `hm-demo` in this folder, with a made-up benchmark in it |
 | `/run --simulate` | The run screen opens, on simulated models and trials. It spends nothing |
 
-To work on a real index, the tip offers the other ways in: `/indexes` shows the ones that are listed, `/join NAME` joins one, and `/new NAME` starts your own. From there the tips lead through what a real run needs: your place on the index's contributor list, a locked protocol, and keys (`/doctor`). The benchmarks the index lists need nothing from you: the run fetches them itself.
+**3. Answer the run.** On the run screen, commands start with `/`, and `tab` completes them and their arguments. The line marked `tip` says what the run needs from you. It stops twice to ask, in the amber panel: first for the lead's brief (`/brief demo-bench <what matters>`), then to approve the selection (`/approve demo-bench`). When reports are ready it tells you: `/review` lists them, and `/accept` or `/reject` signs your verdict. `ctrl+q` goes back to the home screen.
 
-**3. Answer the run.** On the run screen, commands start with `/`, and `tab` completes them and their arguments. The line marked `tip` says what the run needs from you. It stops twice to ask, in the amber panel: first for the lead's brief (`/brief demo-bench <what matters>`), then to approve the selection (`/approve demo-bench`). When reports are ready it tells you, and `/review` lists them. If it pauses on the $200 budget (simulated money), raise it with `/budget 500`. `ctrl+q` goes back to the home screen.
+**4. Look at what happened.** `/status --simulated` shows where every task stands, and `/stats --simulated` writes the statistics.
 
-**4. Read the results.** From the home screen, `/status --simulated` shows where every simulated task stands. For real runs, `/status` shows the index itself, `/verify` checks that the record is sound, and `/credits` shows who contributed what.
+Every command on the home screen is also an `hm` command in a shell: `/run --simulate` is `hm run --simulate`. `hm guide` prints the checklist and the tip as text, and `hm --help` lists every command.
 
-**The accepted tasks themselves** are kept in a task store, each as one archive named by its digest, because they are too large for git and a later benchmark run must get exactly the version that was accepted. `tasks` in the index's `about.toml` names the store: a Hugging Face dataset repository or a folder. Accepting a task puts it there, `hm tasks` shows where each copy is, and `hm eval` runs the accepted version or refuses. Trial archives and mutants are not shared: they stay on the machine that made them.
+## An index
 
-**For a paper.** `hm stats` writes the statistics of the curation into `.hm/stats/`: a report, `stats.md`, and a folder `tables/` with one CSV per table. The report has four sections: what happened to the tasks, what it cost, what people had to do, and where the figures come from. The tables cover everyone's records: in a shared index it pulls first, and the report names the commit and a checksum of the ledger it read, so the same tables can be made again. The folder is git-ignored and stays on your machine. `hm stats --simulated` does the same for simulated runs.
+Harbor-Master holds no index. Each index is a git repository of its own, and a clone of it is your workspace: `hm` works from anywhere inside it.
 
-**Simulated is never real.** A simulated run keeps its records in `.hm/simulated/` on your machine, each one marked as simulated inside its signature. They are never written to the index's ledger and never pushed, and a real ledger ignores and reports any that are copied in. So `--simulate` is safe in any index. To see what simulated runs did, add `--simulated`: `/status --simulated`, `/leaderboard --simulated`.
+| In the repository | Says | Changed by |
+|---|---|---|
+| `about.toml` | What the index is: name, title, description, and where its accepted tasks are kept | The owner |
+| `protocol.toml` | The curation protocol: every setting that can change a result | The owner, by locking |
+| `benchmarks.toml` | The benchmarks that may be curated, each pinned to a release | The owner, by locking |
+| `roster.toml` | The agent configurations benchmarked on the index | The owner, by locking |
+| `contributors.toml` | Who may curate, in which fields, and their signing keys | The owner, by locking |
+| `skills/` | What the agents that curate this index are told. Copied from the tool's templates, and the owner's to reword | The owner, by locking |
+| `adapters/` | For a benchmark that is not in Harbor format: the code that turns it into Harbor tasks | The owner's run, or the owner |
+| `ledger/` | Every decision, trial and verdict, signed | Everyone on the contributor list, through `hm` |
+| `reports/` | The report on each task that reached one | `hm` |
+| `index.toml` | The accepted tasks | `hm`, from the signed verdicts |
 
-**Without the screen.** Every command on the home screen is an `hm` command in a shell: `hm init`, `hm demo`, `hm run --simulate`, `hm status`. `hm guide` prints the checklist and the tip as text, and so does `hm` where there is no terminal. `hm --help` lists them all.
+Your own machine's files are in `.hm/` inside the clone, which git ignores: your settings ([`hm.example.toml`](hm.example.toml)), the benchmarks you fetched, your runs, and what simulated runs recorded.
 
-An index is a git repository of its own, and its folder is your workspace: `hm` works from anywhere inside it. The file to know first is `protocol.toml`, the curation protocol: every setting that can change a result, the same for everyone, and locked by the owner with a checksum in the ledger. Your own machine's settings, such as parallelism and budget, are in `.hm/hm.toml`, which git ignores and is yours to change ([`hm.example.toml`](hm.example.toml)).
+**The lock.** `hm protocol lock`, which only the owner can run, signs the settings, the skills, the three lists and every adapter into the ledger. A run whose copy differs is refused, and a real run needs a lock. A workspace also remembers the owner's key from the day it joined, and refuses a copy that names another owner.
 
-**One tool, many indexes.** Harbor-Master holds no index. Each index is its own repository, and that repository is all of it:
+### Start your own
 
-| File | Says |
+```bash
+hm init                                   # once per person: who you are, and your signing key
+hm index new my-index --title "My Index"  # a new repository, with you as its owner
+cd my-index
+```
+
+Then:
+
+1. Describe it in `about.toml`, list benchmarks in `benchmarks.toml`, and list the agents to benchmark in `roster.toml`. Each file explains its fields.
+2. `hm protocol lock` signs it all.
+3. `hm keys init` creates the keys file for real runs, and `hm doctor` shows which keys are found.
+4. `hm index connect URL` shares it through an empty git repository, so that others can join.
+5. `hm run` curates. `hm run --simulate` tries it on simulated models, with no lock and no keys.
+
+`hm guide` says which of these is next at any time.
+
+### Join one
+
+```bash
+hm init              # once per person. It prints your public key
+hm indexes           # the indexes that are listed
+hm join NAME         # or: hm join URL
+```
+
+Send your public key to the index's owner, who adds you to `contributors.toml` with the fields you may curate, and locks the change. `hm sync` brings it in. Until then you can only run simulations.
+
+**The list of indexes.** [`indexes.toml`](indexes.toml) in this repository lists the indexes that asked to be listed, each with its repository and its owner's key. It holds addresses only: everything else about an index is read from its own repository. To list yours, run `hm index entry` in it and add what it prints in a pull request here. The check on the pull request clones the repository, so it must be readable by anyone.
+
+## Benchmarks
+
+A run takes any benchmark on the index's list, and nothing else: `hm benchmarks` shows the list. The owner adds a benchmark with one entry in `benchmarks.toml`, pinned to a tag and a commit, and locks the change. `hm run` does the rest.
+
+- **Fetching.** The run fetches a benchmark that is not on the machine yet, at its pinned commit.
+- **Adapting.** If the tasks are not Harbor task folders, the owner's run builds an adapter, in Harbor's own adapter layout. The worker model writes it, and it is checked without a model: it runs, its tasks are complete, a second run writes the same ones, and a few reference solutions pass through Harbor. A failing one goes back to the worker model, then to the frontier model.
+- **Asking a person only on failure.** If the models cannot make it pass, the run asks for one of two things: fix it and `/recheck`, or `/abandon` the benchmark. An abandoned benchmark is refused to every run, with the reason, until the owner builds an adapter that passes with `hm adapt ID`.
+- **The same tasks for everyone.** An adapter that passes is locked into the index and runs in a container with no network. `hm adapt ID --from PATH` takes an adapter that exists already, such as one written for Harbor.
+
+A local folder registered with `hm submit PATH --dev`, or made by `hm demo`, needs no entry and runs under `--simulate` only.
+
+## Working with others
+
+- **Who may contribute.** `contributors.toml` lists the people allowed to submit records and sign verdicts, each identified by a GitHub handle and a public key. `hm contributors` shows who can contribute, and each person curates only the fields listed for them.
+- **Nobody runs a task twice.** Everyone works in a clone of the same repository. A run pulls before it starts, claims its tasks, and pushes the claim: if someone else claimed first, the push is refused and the run gives those tasks up. A task someone holds, or one that already has an outcome, is not run again. `hm claims` shows who holds what.
+- **What a run pushes.** Its own records and reports, never a change to the files that define the index. `hm sync` pulls and pushes by hand.
+- **Reviewing.** A report reaches every clone, so a reviewer on another machine can read it and sign a verdict.
+
+## The accepted tasks and the leaderboard
+
+A task enters the index when a contributor accepts it. `index.toml` lists the accepted tasks, written from the signed verdicts.
+
+- **The task store.** Each accepted task is kept as one archive named by its digest, because tasks are too large for git and a later benchmark run must get exactly the version that was accepted. `tasks` in `about.toml` names the store: a Hugging Face dataset repository (`org/name`) or a folder. `hm tasks` shows where each copy is, `hm tasks push` and `hm tasks pull` move them.
+- **Benchmarking an agent.** `hm eval --config NAME` runs a roster configuration on the accepted tasks, each at its accepted version, from the machine or from the store. It refuses a task whose accepted version it cannot get. `hm todo` shows what is still to run.
+- **The leaderboard.** `hm leaderboard` ranks the configurations on the accepted tasks only, computed from the ledger.
+
+Trial archives and the probe's mutants are not shared: they stay on the machine that made them.
+
+## Simulated runs
+
+`--simulate` uses simulated models and trials, and spends nothing. A simulated run never counts as real:
+
+- its records are kept in `.hm/simulated/` on your machine, never in the index's ledger, and never pushed;
+- every record is marked as simulated inside its signature;
+- a real ledger leaves out any that are copied in, and `hm ledger verify` reports them.
+
+So `--simulate` is safe in any index. To see what simulated runs did, add `--simulated` to a read command: `hm status --simulated`, `hm leaderboard --simulated`.
+
+## Statistics
+
+`hm stats` writes the statistics of the curation into `.hm/stats/`: a report, `stats.md`, and a folder `tables/` with one CSV per table. The report has four sections:
+
+1. **What happened to the tasks**: the funnel from submitted to accepted, per benchmark, and why tasks stopped.
+2. **What it cost**: calls, tokens and cost per model tier and per stage, and the runs through Harbor.
+3. **What people had to do**: every decision a person made, and the benchmarks a run left out.
+4. **Where the figures come from**: the commit and a checksum of the ledger it read, so the same report can be made again.
+
+The figures cover everyone's records: in a shared index it pulls first. The folder is git-ignored and stays on your machine. `hm stats --simulated` does the same for simulated runs.
+
+## Keys
+
+Real runs call models and need keys. `hm keys init` copies [`secrets.env.example`](secrets.env.example) to `secrets.env` in the Harbor-Master folder, readable only by you and ignored by git. Fill in the keys you have: Claude and Codex each take an API key or a subscription sign-in. `hm doctor` shows which are found and what they let this machine run. A key is never typed into a screen, written to a settings file, or put in the ledger.
+
+## Commands
+
+| For | Commands |
 |---|---|
-| `about.toml` | What the index is: name, title, description |
-| `protocol.toml` | The curation protocol |
-| `benchmarks.toml` | The benchmarks that may be curated, each pinned to a release |
-| `roster.toml` | The agent configurations benchmarked on the index |
-| `contributors.toml` | Who may curate, in which fields, and their signing keys |
-| `skills/` | What the agents that curate this index are told. Copied from the tool's templates, and yours to reword |
-| `adapters/` | For a benchmark that is not in Harbor format: the code that turns it into Harbor tasks |
-| `ledger/`, `reports/` and `index.toml` | Every record, the report on each task that reached one, and the list of accepted tasks |
+| Getting started | `hm` (the home screen), `hm guide`, `hm init`, `hm key`, `hm demo` |
+| An index | `hm index`, `hm index new`, `hm join`, `hm indexes`, `hm index connect`, `hm index entry`, `hm contributors` |
+| What it runs under | `hm protocol`, `hm protocol lock`, `hm skills`, `hm skills diff`, `hm skills adopt`, `hm roster` |
+| Benchmarks | `hm benchmarks`, `hm adapt`, `hm submit` |
+| Curating | `hm run`, `hm brief`, `hm review`, `hm claims`, `hm requests`, `hm sync` |
+| Results | `hm status`, `hm stats`, `hm credits`, `hm ledger verify`, `hm tasks` |
+| Benchmarking agents | `hm eval`, `hm todo`, `hm leaderboard` |
+| This machine | `hm keys init`, `hm keys set`, `hm doctor` |
 
-Only the owner changes the first seven. `hm skills` shows where the index's skills differ from the templates, and `hm skills adopt` takes a newer template in. `hm protocol lock` signs their checksums into the ledger, and a run whose copy differs is refused. `hm index new NAME` starts an index with you as its owner, `hm index connect URL` shares it through a git repository, and `hm join URL` clones one. A workspace remembers the owner's key from the day it joined, and refuses a copy that names another owner.
-
-**The list of indexes.** [`indexes.toml`](indexes.toml) lists the indexes that asked to be listed, each with its repository and its owner's key. `hm indexes` shows them, and `hm join NAME` joins one by name. The list holds addresses only: everything else about an index is read from its own repository. To list yours, run `hm index entry` in it and add what it prints in a pull request here. The check on the pull request clones the repository and makes sure it is a sound index with the owner the entry names.
-
-**Which benchmarks.** The index's `benchmarks.toml` lists the benchmarks that may be curated into it, each with its release date, repository, and a pinned commit. Real runs work only on these: `hm benchmarks` shows the list, and `hm run` fetches each one at its pinned release. A local folder registered with `--dev`, like the synthetic one above, runs under `--simulate` only.
-
-**A new benchmark needs one line from the owner.** Once a benchmark is on the list, `hm run` does the rest: it fetches the benchmark at its pinned commit, and if the tasks are not Harbor task folders it builds the adapter that turns them into Harbor tasks. The worker model writes the adapter, in Harbor's own adapter layout. It is checked without a model: it runs, its tasks are complete, a second run writes the same ones, and a few reference solutions pass through Harbor. A failing one goes back to the worker model, then to the frontier model. A person is asked only if that still fails, and then for one of two things: fix it and `/recheck`, or `/abandon` the benchmark. An abandoned benchmark is then refused to every run, with the reason, until the owner builds an adapter that passes with `hm adapt ID`. An adapter that passes is locked into the index and runs in a container with no network, so everyone gets the same tasks from it. `hm adapt ID --from PATH` takes an adapter that exists already.
-
-**Who may contribute.** The index's `contributors.toml` lists the people allowed to submit records and sign verdicts, each identified by a GitHub handle and the public key that `hm init` prints. To be added, send that key to the index's owner. `hm contributors` shows who can contribute and who still needs a handle or a key. Each person curates only the fields listed for them.
-
-**Working with others.** Everyone who joined an index works in a clone of the same repository. A run pulls before it starts, claims its tasks, and pushes the claim: if someone else claimed first, the push is refused and the run gives those tasks up. A task someone holds, or one that already has an outcome, is not run again. A task that fails or is stopped is let go. A run pushes only its own records, never a change to the files that define the index. `hm claims` shows who holds what, and `hm sync` pulls and pushes by hand.
-
-**The index and the leaderboard.** A task enters the index when a contributor accepts it. The accepted tasks are listed in `index.toml`, which `hm` writes from the signed verdicts and nobody edits. `roster.toml` lists the agent configurations to benchmark on them. `hm todo` shows what is still to run, `hm eval --config NAME` runs one, and `hm leaderboard` ranks the configurations on the accepted tasks only.
-
-**Keys, for real runs.** `hm keys init` copies [`secrets.env.example`](secrets.env.example) to `secrets.env` in the Harbor-Master folder, readable only by you. `secrets.env` is in `.gitignore`, so git never picks it up. Fill in the keys you have: Claude and Codex each take an API key or a subscription sign-in. `hm doctor` shows which are found and what they let this machine run.
+`hm COMMAND --help` describes each one.
 
 ## Repository
 
 ```
-src/harbor_master/   one package per component: cli, tui, interact, engine, backends, curation, ledger, tasks, core
-src/harbor_master/skills/   the templates of what each agent is told, one file per job. Each index keeps its own copies
-tests/               one file per component
-tools/               screenshot.py, which captures the pictures in assets/ from the running screen
+src/harbor_master/             one package per component: cli, tui, interact, engine, backends, curation, ledger, tasks, core
+src/harbor_master/skills/      the templates of what each agent is told, one file per job. Each index keeps its own copies
 src/harbor_master/templates/   the blank files a new index starts from
-indexes.toml         the list of indexes: name, repository and owner of each
-hm.example.toml      one machine's own settings: parallelism and budget
-DESIGN.md            the design, the cost estimate, and the implementation status
+tests/                         one file per component
+tools/                         screenshot.py, which captures the pictures in assets/ from the running screen
+indexes.toml                   the list of indexes: name, repository and owner of each
+hm.example.toml                one machine's own settings: parallelism and budget
+secrets.env.example            the keys file to copy and fill in
+DESIGN.md                      the design, the cost estimate, and the implementation status
 ```
 
 ## Citation
