@@ -13,6 +13,7 @@ import typer
 from rich.table import Table
 
 from .. import ledger as ledger_mod
+from .. import skills
 from ..core import config as config_mod
 from ..core import identity as identity_mod
 from .. import templates
@@ -36,6 +37,14 @@ def init(name: str = typer.Option(None), affiliation: str = typer.Option(None), 
     console.print(f"[{theme.MU}]Your public key. Send it to the owner of an index to be added to its contributors.toml:[/]\n{ident.public_key}")
 
 
+def _skills_line(ws: Path) -> str:
+    states = [state for _, state in skills.status(ws / "skills")]
+    own, absent = states.count("own"), states.count("missing")
+    if absent:
+        return f"{absent} of {len(states)} not in the index yet: hm skills adopt"
+    return f"{len(states)} in the index, " + (f"{own} in its own wording" if own else "all as the templates have them")
+
+
 def _describe(ws: Path) -> None:
     """What an index is: the lines `hm index` and `hm join` both print."""
     cfg = config_mod.load(ws)
@@ -48,14 +57,14 @@ def _describe(ws: Path) -> None:
     console.print(f"[bold]{cfg.about.title or cfg.about.name or ws.name}[/]" + (f"  [{theme.MU}]{cfg.about.name}[/]" if cfg.about.title else ""))
     if cfg.about.description:
         console.print(cfg.about.description)
-    from .. import skills, tasks as tasks_mod
+    from .. import tasks as tasks_mod
     rows = [("owner", ", ".join(owners) or "none listed"),
             ("contributors", f"{len(ledger_mod.active(people))} can contribute, {len(people)} listed"),
             ("benchmarks", ", ".join(e["id"] for e in tasks_mod.supported.supported(ws)) or "none listed yet"),
             ("accepted tasks", str(len(ledger_mod.index_entries(led.events)))),
             ("protocol", f"{cfg.protocol}, " + ("locked" if lock and lock["protocol"] == cfg.protocol else
                                                  "not the locked one" if lock else "not locked yet")),
-            ("own skills", ", ".join(skills.replaced()) or "none: the defaults"),
+            ("skills", _skills_line(ws)),
             ("shared at", remote or "nowhere yet: hm index connect URL"),
             ("folder", str(ws))]
     for label, value in rows:
@@ -87,6 +96,7 @@ def index_new(name: str = typer.Argument(..., help="The index's short name: lowe
     (ws / config_mod.ABOUT_NAME).write_text(fill(templates.read("about.toml")))
     (ws / "README.md").write_text(fill(templates.read("index-readme.md")))
     (ws / ".gitignore").write_text(templates.read("gitignore"))
+    skills.adopt(ws / "skills", skills.names())         # what agents are told is the index's own, from the first commit
     (ws / ledger_mod.CONTRIBUTORS).write_text(templates.read("contributors.toml") + tomli_w.dumps({"contributor": [{
         "name": ident.name, "affiliation": ident.affiliation, "github": ident.github, "key": ident.public_key,
         "role": "owner", "added": time.strftime("%Y-%m-%d")}]}))

@@ -33,6 +33,7 @@ class State:
     listed: list[str] = field(default_factory=list)     # benchmarks the index may curate
     lock: str = "none"                                  # none | locked | differs
     shared: str = ""                                    # the repository it is shared through
+    skills_missing: int = 0                             # curation skills the index has no copy of
     missing_keys: list[tuple[str, str]] = field(default_factory=list)   # (what for, variable)
     keys_file: Path | None = None
     registered: dict[str, dict] = field(default_factory=dict)
@@ -82,6 +83,8 @@ def look(start: Path | None = None) -> State:
         s.lock = "locked" if same else "differs"
     if (ws / ".git").exists():
         s.shared = ledger_mod.Sync(ws)._git("remote", "get-url", "origin", check=False).stdout.strip()
+    from .. import skills
+    s.skills_missing = len(skills.missing(ws / "skills"))
     s.missing_keys = [(what, var) for what, var, present, _ in keys_mod.doctor(cfg) if not present and what != "artifact store"]
     s.keys_file = keys_mod.secrets_path()
     s.registered = tasks_mod.read_registry(ws)
@@ -207,6 +210,11 @@ def tip(s: State) -> Tip:
                 lines.append(("", "Describe the index in about.toml, so that others know what it is."))
             if not s.listed:
                 lines.append(("", "List the benchmarks it may curate in benchmarks.toml. The file explains each field."))
+            if s.skills_missing:
+                lines.append(("/skills adopt", f"Copies the {s.skills_missing} skills this index lacks into it. What agents are told is then "
+                                               "the index's own, and is locked with it"))
+            else:
+                lines.append(("/skills", "What agents are told in this index. Edit a file under skills/ to word it your way"))
             lines.append(("/protocol", "Shows the settings a run would use, and what differs from the locked ones"))
             lines.append(("/lock", "Signs the settings, the benchmark list, the roster and the contributor list. Real runs need it"))
             if not s.shared:

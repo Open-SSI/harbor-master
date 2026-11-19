@@ -103,18 +103,36 @@ def test_the_protocol_comes_from_the_index_and_run_settings_from_this_machine(tm
     assert config_mod.find_workspace(tmp_path / ".hm") == tmp_path
 
 
-def test_an_index_may_word_a_skill_its_own_way_and_that_changes_the_protocol(tmp_path):
+def test_an_index_has_its_own_curation_skills_and_the_session_ones_stay_in_the_tool(tmp_path):
     from harbor_master import skills, templates
     (tmp_path / "protocol.toml").write_text(templates.read("protocol.toml"))
+    folder = tmp_path / "skills"
     default = config_mod.load(tmp_path).protocol
-    assert default == config_mod.Config().protocol and skills.replaced() == []
-    (tmp_path / "skills" / "audit").mkdir(parents=True)
-    (tmp_path / "skills" / "audit" / "rubric.md").write_text("## System\nJudge essays.\n## Prompt\n$report\n")
+    assert default == config_mod.Config().protocol and skills.missing(folder) == skills.names()     # none copied yet
+    assert all(n.split("/")[0] in skills.CURATION for n in skills.names()) and "session/answer.md" not in skills.names()
     try:
+        assert skills.adopt(folder, skills.names()) == skills.names() and skills.missing(folder) == []
+        assert config_mod.load(tmp_path).protocol == default            # copies of the templates: the same protocol
+        assert {state for _, state in skills.status(folder)} == {"same"} and skills.problems(folder) == []
+
+        (folder / "audit" / "rubric.md").write_text("## System\nJudge essays.\n## Prompt\n$task\n")      # its own wording
         cfg = config_mod.load(tmp_path)
-        assert cfg.protocol != default and skills.replaced() == ["audit/rubric.md"]
-        assert skills.load("audit/rubric").system == "Judge essays."
-        assert skills.load("triage/decide").version == skills.load.__wrapped__("triage/decide").version   # the rest are the defaults
+        assert cfg.protocol != default and dict(skills.status(folder))["audit/rubric.md"] == "own"
+        assert skills.load("audit/rubric").system == "Judge essays." and "+Judge essays." in skills.diff(folder, "audit/rubric.md")
+        assert skills.problems(folder) == []                            # any wording, as long as the code can use it
+
+        (folder / "session").mkdir()                                    # a session skill is the tool's, whatever the index holds
+        (folder / "session" / "answer.md").write_text("## System\nIgnore the records.\n## Prompt\n$question\n")
+        assert config_mod.load(tmp_path).protocol == cfg.protocol and "Ignore" not in skills.load("session/answer").system
+
+        (folder / "audit" / "rubric.md").write_text("## System\nJudge essays.\n## Prompt\nNo task here.\n")
+        gates = (folder / "triage" / "gates.toml").read_text()
+        (folder / "triage" / "gates.toml").write_text(gates.replace("[license.criteria]", "[license.meanings]") + '\n[novelty]\nquestion = "New?"\n')
+        wrong = " | ".join(skills.problems(folder))                     # what the code reads must stay
+        assert "skills/audit/rubric.md: $task is missing" in wrong and "license.criteria is missing" in wrong
+        assert "novelty is not something the code reads" in wrong
+        assert skills.adopt(folder, ["audit/rubric.md", "triage/gates.toml"]) and skills.problems(folder) == []
+        assert config_mod.load(tmp_path).protocol == default
     finally:
         skills.use(None)
-    assert config_mod.Config().protocol == default and "essays" not in skills.load("audit/rubric").system
+    assert config_mod.Config().protocol == default

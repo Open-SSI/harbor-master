@@ -86,10 +86,10 @@ An index is a git repository of its own, and its folder is your workspace: `hm` 
 | `benchmarks.toml` | The benchmarks that may be curated, each pinned to a release |
 | `roster.toml` | The agent configurations benchmarked on the index |
 | `contributors.toml` | Who may curate, in which fields, and their signing keys |
-| `skills/` | Optional: instructions this index words its own way, in place of the defaults |
+| `skills/` | What the agents that curate this index are told. Copied from the tool's templates, and yours to reword |
 | `ledger/` and `index.toml` | Every record, and the accepted tasks |
 
-Only the owner changes the first six. `hm protocol lock` signs their checksums into the ledger, and a run whose copy differs is refused. `hm index new NAME` starts an index with you as its owner, `hm index connect URL` shares it through a git repository, and `hm join URL` clones one. A workspace remembers the owner's key from the day it joined, and refuses a copy that names another owner.
+Only the owner changes the first six. `hm skills` shows where the index's skills differ from the templates, and `hm skills adopt` takes a newer template in. `hm protocol lock` signs their checksums into the ledger, and a run whose copy differs is refused. `hm index new NAME` starts an index with you as its owner, `hm index connect URL` shares it through a git repository, and `hm join URL` clones one. A workspace remembers the owner's key from the day it joined, and refuses a copy that names another owner.
 
 **The list of indexes.** [`indexes.toml`](indexes.toml) lists the indexes that asked to be listed, each with its repository and its owner's key. `hm indexes` shows them, and `hm join NAME` joins one by name. The list holds addresses only: everything else about an index is read from its own repository. To list yours, run `hm index entry` in it and add what it prints in a pull request here. The check on the pull request clones the repository and makes sure it is a sound index with the owner the entry names.
 
@@ -107,7 +107,7 @@ Only the owner changes the first six. `hm protocol lock` signs their checksums i
 
 ```
 src/harbor_master/   one package per component: cli, tui, interact, engine, backends, curation, ledger, tasks, core
-src/harbor_master/skills/   what each agent is told, one file per job, versioned
+src/harbor_master/skills/   the templates of what each agent is told, one file per job. Each index keeps its own copies
 tests/               one file per component
 tools/               screenshot.py, which captures the pictures in assets/ from the running screen
 src/harbor_master/templates/   the blank files a new index starts from
@@ -120,7 +120,7 @@ DESIGN.md            the design, the cost estimate, and the implementation statu
 
 ```bibtex
 @misc{openssi2026harbormaster,
-  title={Harbor-Master: A Scalable Multi-Agent System for Continual Scientific Benchmark Curation},
+  title={Harbor-Master: Scalable Multi-Agent Infrastructure for Open, Continual Benchmark Indexes},
   author={The OpenSSI Team},
   year={2026}
 }

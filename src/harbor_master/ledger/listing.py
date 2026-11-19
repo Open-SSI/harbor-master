@@ -110,6 +110,8 @@ def inspect(entry: dict, directory: Path) -> tuple[dict, list[str]]:
         found.append(f"listed as {entry['name']}, but its about.toml says {cfg.about.name or '(no name)'}")
     if not owner_matches(entry, directory):
         found.append("the owner on its contributor list is not the owner on its entry")
+    found += skills.problems(directory / "skills")
+    found += [f"it has no copy of skills/{n}" for n in skills.missing(directory / "skills")]
     found += verify(directory, max_per_benchmark=cfg.index.max_per_benchmark)
     events = Ledger(directory).events
     lock = protocol.current(events)

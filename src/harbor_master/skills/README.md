@@ -3,9 +3,15 @@
 What each agent is told. One file per job, grouped by stage. Code holds the rules
 (which answers pass, what a stage does with a result); these files hold the wording.
 
-These are the defaults. An index words a skill its own way by putting a file of the same
-name under `skills/` in its own repository, for example `skills/triage/gates.toml`. That
-file is then used in place of the one here, and the protocol hash covers it.
+The curation skills (`triage/`, `rank/`, `probe/`, `audit/`) decide what gets into an index.
+Each index has its own copies under `skills/` in its repository: `hm index new` writes them,
+and they are locked with the index's protocol. The files here are the templates those copies
+start from. An index may change any wording. It may not change what the code reads: the keys
+of a TOML skill, and the `$placeholders` and the two sections of a prompt. `hm skills` shows
+where an index stands, `hm skills diff` what differs, and `hm skills adopt` takes a template in.
+
+The session skills (`session/`) read what is typed on the run screen. They change no result,
+so they are the same for every index and are not part of any protocol.
 
 | File | Read by | For |
 |---|---|---|

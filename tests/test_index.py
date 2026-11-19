@@ -42,8 +42,9 @@ def two(tmp_path, monkeypatch):
 def test_a_new_index_is_a_repository_with_its_owner_and_nothing_of_the_machine(two):
     act_as, alice_ws, _, _ = two
     tracked = subprocess.run(["git", "ls-files"], cwd=alice_ws, capture_output=True, text=True).stdout.split()
-    assert sorted(tracked) == [".gitignore", "README.md", "about.toml", "benchmarks.toml", "contributors.toml",
-                               "protocol.toml", "roster.toml"]
+    from harbor_master import skills
+    assert sorted(tracked) == sorted([".gitignore", "README.md", "about.toml", "benchmarks.toml", "contributors.toml",
+                                      "protocol.toml", "roster.toml", *(f"skills/{n}" for n in skills.names())])
     assert (alice_ws / ".hm" / "hm.toml").exists() and (alice_ws / ".hm" / "owner").read_text().startswith("alice ssh-ed25519 ")
     cfg = config_mod.load(alice_ws)
     assert (cfg.about.name, cfg.about.title) == ("demo", "Demo Index") and cfg.protocol == config_mod.Config().protocol
@@ -149,3 +150,35 @@ def test_a_listed_index_is_joined_by_name_and_held_to_its_entry(two, tmp_path):
     assert listing.problems(listing.read(str(here))) == []
     assert listing.DEFAULT == "https://raw.githubusercontent.com/Open-SSI/harbor-master/main/indexes.toml"
     assert listing.source("x") == "x" and listing.source() == listing.DEFAULT
+
+
+def test_the_skills_are_the_indexes_own_and_the_lock_needs_them(two):
+    act_as, alice_ws, bob_ws, remote = two
+    shown = hm("skills", "-w", alice_ws)
+    assert shown.startswith("0 ") and "skills/triage/gates.toml" in shown and "same as the template" in shown
+    assert "all as the templates have them" in hm("index", "-w", alice_ws)
+
+    rubric = alice_ws / "skills" / "audit" / "rubric.md"                  # the owner words one her own way
+    rubric.write_text(rubric.read_text().replace("You audit a benchmark task", "You audit a robotics task"))
+    assert "this index's own wording" in hm("skills", "-w", alice_ws) and "+You audit a robotics task" in hm("skills", "diff", "-w", alice_ws)
+    assert "1 in its own wording" in hm("index", "-w", alice_ws)
+    assert "Locked protocol" in hm("protocol", "lock", "-w", alice_ws)   # and her wording is locked with the rest
+
+    act_as("bob")
+    hm("join", remote, bob_ws)
+    assert "robotics" in (bob_ws / "skills" / "audit" / "rubric.md").read_text() and "They match" in hm("protocol", "-w", bob_ws)
+    assert hm("skills", "adopt", "audit/rubric", "-w", bob_ws).startswith("1 Only the owner")
+    lock = ledger.protocol.current(ledger.Ledger(bob_ws).events)
+    (bob_ws / "skills" / "rank" / "score.toml").unlink()                   # a skill gone from his copy: refused, not replaced by the tool's
+    with pytest.raises(typer.Exit):
+        check_lock(lock, config_mod.load(bob_ws), bob_ws)
+
+    act_as("alice")
+    (alice_ws / "skills" / "rank" / "score.toml").unlink()
+    assert hm("protocol", "lock", "-w", alice_ws).startswith("1 Not locked: this index has no copy of 1")
+    assert "skills/rank/score.toml" in hm("skills", "adopt", "-w", alice_ws)                 # with no name: only what is missing
+    assert "robotics" in rubric.read_text()
+    rubric.write_text("no sections, no task")
+    assert hm("skills", "-w", alice_ws).startswith("1 ") and hm("protocol", "lock", "-w", alice_ws).startswith("1 Not locked: the code cannot use")
+    assert "skills/audit/rubric.md" in hm("skills", "adopt", "audit/rubric", "-w", alice_ws)  # by name: the template again
+    assert "Nothing differs" in hm("skills", "diff", "-w", alice_ws)

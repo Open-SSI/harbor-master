@@ -166,7 +166,9 @@ A frontier run during curation and a run by a new agent six months later are the
 
 ### Skills: what each agent is told
 
-Every prompt, question, and criterion an agent reads is a file under `src/harbor_master/skills/`, grouped by stage. Code holds the rules, such as which answers pass a gate. Skills hold the wording.
+Every prompt, question, and criterion an agent reads is a file, grouped by stage. Code holds the rules, such as which answers pass a gate. Skills hold the wording.
+
+The curation skills (the first five rows below) decide what gets into an index, so they belong to the index: each index has its own copies under `skills/` in its repository, and the files under `src/harbor_master/skills/` are the templates those copies start from. The session skills (the last row) only read what is typed on the run screen. They change no result, so they stay in the tool, the same for every index, and are in no protocol.
 
 | Skill | Read by | For |
 |---|---|---|
@@ -405,7 +407,7 @@ Harbor-Master is the tool, and holds no index. Each index is a git repository of
 | `benchmarks.toml` | Which benchmarks may be curated, each pinned to a release | The owner, by locking | Its checksum is locked beside the protocol |
 | `roster.toml` | Which agent configurations are benchmarked on the index | The owner, by locking | Its checksum is locked beside the protocol |
 | `contributors.toml` | Who may curate, in which fields, and their signing keys | The owner, by locking | Its checksum is locked beside the protocol, and every record is checked against it |
-| `skills/` | Optional: skill files this index words its own way | The owner, by locking | Part of the protocol hash |
+| `skills/` | What the agents that curate this index are told: the gates, the ranking, the probe, the audit | The owner, by locking | Part of the protocol hash |
 | `ledger/` | Every record | Everyone on the list, through `hm` | Signed and chained: `hm ledger verify` |
 | `index.toml` | The accepted tasks | Nobody: `hm` writes it from the verdicts | `hm ledger verify` |
 
@@ -414,9 +416,13 @@ Harbor-Master is the tool, and holds no index. Each index is a git repository of
 - **Fetching.** Nothing is downloaded on each command. A run pulls the repository before it claims, as it always did for the ledger, and reads the definition from the clone. Offline, a run uses the last copy pulled, and the lock still refuses a copy that is not the locked one.
 - **What a run may commit.** Only files under `ledger/`. The files that define the index are committed by two of the owner's commands and nothing else: `hm protocol lock` commits all of them with the lock that covers them, and the owner's `hm sync` commits `about.toml`. Anyone else's edit to them stays on their machine, where it makes their own runs refuse.
 - **Whom a clone trusts.** Everything rests on the owner's signature: the lock is valid because the owner signed it, and the owner is whoever `contributors.toml` says. So a workspace writes down the owner's handle and key the first time it sees the index (`.hm/owner`), and refuses every command if a later copy of the list names a different owner. Trust starts from the address a person chose to join.
-- **Skills.** The tool's skills are defaults. An index that judges differently, for example one outside science, puts a file of the same name under `skills/`, and it is used in place of the default. The protocol hash covers the skills in use, so an index's own wording is locked like any setting. `hm index` lists which skills an index words itself.
+- **Skills.** What agents are told is part of what an index is, so the index holds it. `hm index new` copies the tool's templates of the curation skills into `skills/`, and from then on the index reads its own copies and nothing else. They are in the protocol hash, so they are locked like any setting, and git history shows what agents were told under each lock.
+  - **Why not defaults in the tool.** If an index read the tool's files, a release that reworded one prompt would change the protocol of every index, and what agents were told would depend on which version each person had installed.
+  - **Any wording, the same structure.** An index may reword a skill freely, for example to judge tasks outside science. It may not change what the code reads: the keys of a TOML skill, and the `$placeholders` and the two sections of a prompt. A copy that does is refused before any run, with the reason.
+  - **Taking in a newer template is the owner's choice.** `hm skills` shows each skill as the same as the template, the index's own wording, or missing. `hm skills diff` shows what differs. `hm skills adopt`, owner only, copies templates in: with no name only the missing ones, with a name that one. The owner then locks.
+  - **The lock needs them all.** `hm protocol lock` refuses while a skill is missing or unusable. After a lock, a clone that has lost one is refused too: it is never quietly replaced by the tool's.
 - **The tool's version.** `[requires] harbor_master` in `protocol.toml` is the oldest Harbor-Master that may run the index. It is recorded in the lock, and an older tool is refused. It is not part of the protocol hash, so raising it does not start a new protocol.
-- **`hm index`** prints what an index is: title, description, owner, contributors, benchmarks, accepted tasks, protocol and whether it is locked, its own skills, and where it is shared.
+- **`hm index`** prints what an index is: title, description, owner, contributors, benchmarks, accepted tasks, protocol and whether it is locked, how many skills are in its own wording, and where it is shared.
 
 **The list of indexes.** A site that shows every index needs one more thing: where the indexes are. That is one file, `indexes.toml`, at the top of the Harbor-Master repository (`Open-SSI/harbor-master`). The file, the commands and the check are built. The site is not.
 
@@ -452,7 +458,7 @@ Settings are in two files, split by one question: can this setting change a resu
 
 A curation must run under one fixed set of settings, or its results cannot be compared. So the protocol is locked, and the lock is checked with a checksum.
 
-- **The checksum.** The protocol hash covers every setting in `protocol.toml` except `[requires]`, and a digest of every skill file in use, because changing what an agent is told changes results just as a threshold does. It leaves out `hm.toml` and `about.toml`.
+- **The checksum.** The protocol hash covers every setting in `protocol.toml` except `[requires]`, and a digest of every curation skill in use, because changing what an agent is told changes results just as a threshold does. It leaves out `hm.toml` and `about.toml`.
 - **Locking.** `hm protocol lock`, which only the owner can run, writes a signed `protocol` event to the ledger with the hash, the settings themselves, and the checksums of `benchmarks.toml`, `roster.toml` and `contributors.toml`. It then commits the files, so that they travel with the lock that covers them. Changing one of the three lists needs a new lock, but not a new protocol: the hash is the same, and earlier records stand.
 - **Before every run.** A run computes its own hash and compares it with the locked one. If they differ it is refused, and the settings that differ are listed, each with its locked value and the local one. It is refused the same way when one of the three lists is not the locked copy. A real run is also refused when nothing is locked yet.
 - **During a run.** A run reads its settings once and keeps them, so editing a file mid-run cannot reach its results. The run notices the edit, says so, and the next run is refused.
@@ -534,6 +540,7 @@ Python, installed as `hm` with `uv tool install --editable .`, after which comma
 | `hm indexes [--check]` | Lists the indexes in `indexes.toml`. `--check` also fetches each one, shows what it holds, and checks it against its entry |
 | `hm join NAME-or-URL [DIR]` | Joins an index, by its name on the list or by its address: clones its repository, which is then the workspace for it |
 | `hm index entry` | Prints this index's entry for the list, to add in a pull request |
+| `hm skills` | Shows this index's copies of the curation skills. `hm skills diff` shows what differs from the templates, and `hm skills adopt`, owner only, copies templates in |
 | `hm index` | Shows what this index is: owner, benchmarks, accepted tasks, protocol, where it is shared |
 | `hm contributors` | Lists who may contribute, and who still needs a handle or a key |
 | `hm keys init` | Creates `secrets.env` in the repository folder from `secrets.env.example`, to fill in by hand |
@@ -838,7 +845,7 @@ Where a new capability goes:
 | A panel on the screen | One function in `tui/render.py`, one line in `tui/app.py` |
 | An event type | `ledger/events.py`, and its rule in `ledger/fold.py` |
 
-**Built and tested** (58 tests, on simulated backends):
+**Built and tested** (59 tests, on simulated backends):
 
 - Config with a protocol hash, identity with an Ed25519 signing key, and keys kept in a git-ignored file.
 - The ledger: signed, hash-chained shards per runner and run, slot and decision reuse, the fold into task states, credits, the leaderboard, the contributor list, and `hm ledger verify`.
@@ -859,7 +866,7 @@ Where a new capability goes:
 - Reading plain-text commands with Jev. Tried on ten messages against the real workspace: all ten read correctly after two fixes to the wording, at about 0.3 seconds each.
 - Skills as versioned files, recorded on each decision. Field permissions between contributors.
 - Lean storage: one task file per run, reports only where they exist, Harbor output kept only as evidence and packed, one admission record per task, one submission and one selection record per benchmark, no empty fields.
-- An index as a repository of its own: `hm index new`, `hm join`, `hm index connect`, `hm index`, the owner's key remembered on joining, an index's own skills, and the tool version an index asks for. Tested through the commands with two people and a local git repository. Not yet tried against GitHub.
+- An index as a repository of its own: `hm index new`, `hm join`, `hm index connect`, `hm index`, the owner's key remembered on joining, the curation skills as the index's own files with `hm skills`, `diff` and `adopt`, the check that a reworded skill is still usable, and the tool version an index asks for. Tested through the commands with two people and a local git repository. Not yet tried against GitHub.
 - The home screen, the checklist and the tips, `hm guide`, `hm demo`, `hm key`, and the tip line on the run screen. Tested by driving the home screen from an empty folder to a run, and by checking the tip in each state. The path from the home screen to the run screen and back was also driven once in a real terminal. Leaving a run that waits for an answer now works: `/quit` stops waiting, and the benchmark asks again in the next run.
 - Simulated runs kept apart from the index: their own folder, a signed mark on every record, readers of a real ledger that leave them out, and a verify rule that reports them. Tested by copying simulated records into a real ledger, by removing the mark, and by simulating in a shared index and checking what was pushed.
 - The list of indexes: `indexes.toml`, `hm indexes`, `hm join NAME`, `hm index entry`, and the listing check. Tested against a list in a file and local repositories. The list is empty, the default address answers only once this repository is on GitHub, and the workflow that runs the check has never run.

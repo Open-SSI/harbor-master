@@ -230,6 +230,13 @@ def protocol_lock(note: str = typer.Option("", help="Why the protocol is being s
     sync = ledger_mod.Sync(ws, ident.name, ident.github)
     if sync.enabled:
         sync.pull()
+    from .. import skills
+    absent, wrong = skills.missing(ws / "skills"), skills.problems(ws / "skills")
+    if absent:
+        fail(f"Not locked: this index has no copy of {len(absent)} of its skills, so what agents are told would depend on the "
+             "tool that is installed. Copy them in first: hm skills adopt")
+    if wrong:
+        fail("Not locked: the code cannot use some of this index's skills as they are. See: hm skills")
     lock = ledger_mod.protocol.current(ledger_mod.Ledger(ws).events)
     registry, requires = templates.digests(ws), cfg.requires.harbor_master
     if lock is not None and (lock["protocol"], lock.get("registry"), lock.get("requires", requires)) == (cfg.protocol, registry, requires):

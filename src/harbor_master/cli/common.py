@@ -112,11 +112,21 @@ def version_tuple(text: str) -> tuple[int, ...]:
 def check_lock(lock: dict | None, cfg, ws: Path) -> None:
     """Refuse to go on when this tool is older than the index asks for, or when this copy's protocol or
     locked files are not the ones the owner locked."""
+    from .. import skills
     need = max(cfg.requires.harbor_master, (lock or {}).get("requires", "0"), key=version_tuple)
     if version_tuple(__version__) < version_tuple(need):
         fail(f"Refused: this index needs Harbor-Master {need} or newer, and this is {__version__}. Update it, then run again.")
+    wrong = skills.problems(ws / "skills")
+    if wrong:
+        for p in wrong[:12]:
+            console.print(f"  {p}")
+        fail("Refused: the code cannot use these skills as they are. See: hm skills")
     if lock is None:
         return
+    absent = skills.missing(ws / "skills")
+    if absent:
+        fail(f"Refused: this index has no copy of {', '.join('skills/' + n for n in absent)}, so what agents are told would "
+             "depend on the tool that is installed. Put the files back (git checkout -- skills), or have the owner copy them: hm skills adopt")
     if lock["protocol"] != cfg.protocol:
         console.print(f"[{theme.RD}]This workspace's settings ({cfg.protocol}) are not the locked protocol ({lock['protocol']}).[/]")
         for line in ledger_mod.protocol.differences(lock.get("settings", {}), cfg.protocol_settings())[:12]:

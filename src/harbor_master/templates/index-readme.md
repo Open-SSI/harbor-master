@@ -11,7 +11,7 @@ trial and verdict made for it.
 | `benchmarks.toml` | Which benchmarks may be curated, each pinned to a release | The owner | Its checksum is locked in the ledger with the protocol |
 | `roster.toml` | Which agent configurations are benchmarked on the index | The owner | Its checksum is locked in the ledger with the protocol |
 | `contributors.toml` | Who may curate, in which fields, and their signing keys | The owner | Its checksum is locked in the ledger with the protocol, and every record is checked against it |
-| `skills/` | Optional: the instructions this index words its own way | The owner | Part of the protocol's checksum |
+| `skills/` | What the agents that curate this index are told: the gates, the ranking, the probe, the audit | The owner | Part of the protocol's checksum |
 | `ledger/` | Every record, in one file per person and run | Everyone on the list, through `hm` | Signed and chained: `hm ledger verify` |
 | `index.toml` | The accepted tasks | Nobody: `hm` writes it from the signed verdicts | `hm ledger verify` rejects anything the verdicts do not support |
 
