@@ -21,7 +21,7 @@ class BenchState:
     id: str
     field: str
     path: Path
-    released: str = ""           # the release date from benchmarks.toml, for the recency gate
+    released: str = ""           # the release date from the benchmark's entry, for the recency gate
     license: str = ""            # the benchmark's own license, shown to the license gate
     tasks: list[Task] = field(default_factory=list)
     phase: str = "queued"        # queued | fetch | adapt | review | triage | brief | ranking | signoff | ready | skipped

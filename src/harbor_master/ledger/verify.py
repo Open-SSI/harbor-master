@@ -135,6 +135,9 @@ def verify(ledger_dir: Path, fields: dict[str, str] | None = None, max_per_bench
                 problems.append(f"{at}: runner @{e['runner']} is not on the contributor list")
             elif not identity_mod.verify(who.get("key", ""), e["id"], e["sig"]):
                 problems.append(f"{at}: signature does not match @{e['runner']}'s key")
+            elif e["type"] == "benchmark" and e.get("value") == "add" and not any(
+                    may_curate(who, f) for f in (e.get("entry") or {}).get("fields", [])):
+                problems.append(f"{at}: @{e['runner']} may not add a benchmark in {', '.join((e.get('entry') or {}).get('fields', [])) or 'no field'}")
             elif e["type"] == "verdict":
                 domain = domains.get(e.get("task_id", ""), "")
                 if domain and not may_curate(who, domain):

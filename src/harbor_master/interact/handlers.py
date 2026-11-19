@@ -284,13 +284,13 @@ def abandon(session, args):
     return f"{waiting.target} is abandoned: its adapter could not be made to pass. To try again later: hm adapt {waiting.target}"
 
 
-@command("lock", "confirm", "/lock benchmark", "its adapter is signed into the lock, and its tasks start")
+@command("lock", "confirm", "/lock benchmark", "its adapter is recorded as passing, and its tasks start")
 def lock(session, args):
     waiting = _adapter_request(session, args, "lock")
     if waiting is None:
-        return "No adapter is waiting to be locked" + (f" for {args[0]}." if args else ".")
+        return "No adapter is waiting for a go-ahead" + (f" for {args[0]}." if args else ".")
     session.answer_request(waiting, "lock")
-    return f"The adapter for {waiting.target} is locked."
+    return f"The adapter for {waiting.target} may be used."
 
 
 def _verdict(session, args, name: str, value: str, need_reason: bool) -> str:
@@ -384,3 +384,21 @@ def kill(session, args):
 for _name, _usage in (("restart", "/restart ID"), ("retry", "/retry ID [stage]"), ("escalate", "/escalate ID"),
                       ("limit", "/limit tokens N")):
     planned(_name, "confirm", _usage)
+
+
+# ----- what the home screen and a shell also show, without leaving the run -----
+
+def _shown(cli: str, simulated: bool):
+    def show(session, args):
+        from ..cli.home import run_cli
+        apart = ["--simulated"] if simulated and session.sandbox else []
+        _, out = run_cli([*cli.split(), *apart, "-w", str(session.ws)], 110)
+        return out.plain or "Nothing to show."
+    return show
+
+
+for _name, (_cli, _simulated) in {
+        "leaderboard": ("leaderboard", True), "credits": ("credits", True), "todo": ("todo", True), "claims": ("claims", True),
+        "stats": ("stats --no-pull", True), "benchmarks": ("benchmarks", False), "contributors": ("contributors", False),
+        "index": ("index", False), "protocol": ("protocol", False), "tasks": ("tasks", False), "doctor": ("doctor", False)}.items():
+    command(_name, "view", "/" + _name)(_shown(_cli, _simulated))

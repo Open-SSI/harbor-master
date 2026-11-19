@@ -66,7 +66,7 @@ hm
 
 **4. Look at what happened.** `/status --simulated` shows where every task stands, and `/stats --simulated` writes the statistics.
 
-Every command on the home screen is also an `hm` command in a shell: `/run --simulate` is `hm run --simulate`. `hm guide` prints the checklist and the tip as text, and `hm --help` lists every command.
+Everything is done on these two screens. A shell needs only `hm`, `hm run`, and the commands that show results, such as `hm status` and `hm stats`: `hm --help` lists them.
 
 ## An index
 
@@ -76,59 +76,62 @@ Harbor-Master holds no index. Each index is a git repository of its own, and a c
 |---|---|---|
 | `about.toml` | What the index is: name, title, description, and where its accepted tasks are kept | The owner |
 | `protocol.toml` | The curation protocol: every setting that can change a result | The owner, by locking |
-| `benchmarks.toml` | The benchmarks that may be curated, each pinned to a release | The owner, by locking |
+| `benchmarks/` | The benchmarks that may be curated, one file each: name, description, paper, repository, pinned release | Anyone who can curate, with `/benchmarks add`. `hm` writes the files from the signed records |
 | `roster.toml` | The agent configurations benchmarked on the index | The owner, by locking |
 | `contributors.toml` | Who may curate, in which fields, and their signing keys | The owner, by locking |
 | `skills/` | What the agents that curate this index are told. Copied from the tool's templates, and the owner's to reword | The owner, by locking |
-| `adapters/` | For a benchmark that is not in Harbor format: the code that turns it into Harbor tasks | The owner's run, or the owner |
+| `adapters/` | For a benchmark that is not in Harbor format: the code that turns it into Harbor tasks | The run that first takes the benchmark |
 | `ledger/` | Every decision, trial and verdict, signed | Everyone on the contributor list, through `hm` |
 | `reports/` | The report on each task that reached one | `hm` |
 | `index.toml` | The accepted tasks | `hm`, from the signed verdicts |
 
 Your own machine's files are in `.hm/` inside the clone, which git ignores: your settings ([`hm.example.toml`](hm.example.toml)), the benchmarks you fetched, your runs, and what simulated runs recorded.
 
-**The lock.** `hm protocol lock`, which only the owner can run, signs the settings, the skills, the three lists and every adapter into the ledger. A run whose copy differs is refused, and a real run needs a lock. A workspace also remembers the owner's key from the day it joined, and refuses a copy that names another owner.
+**The lock.** `/lock`, which only the owner can run, signs the settings, the skills, the roster and the contributor list into the ledger. Benchmarks and adapters are not in it: each has its own signed record, so adding one needs nothing from the owner. A run whose copy differs is refused, and a real run needs a lock. A workspace also remembers the owner's key from the day it joined, and refuses a copy that names another owner.
 
 ### Start your own
 
-```bash
-hm init                                   # once per person: who you are, and your signing key
-hm index new my-index --title "My Index"  # a new repository, with you as its owner
-cd my-index
-```
+Type `hm` in the folder where the index should go. The tip names each of these in turn:
 
-Then:
+| Type | What happens |
+|---|---|
+| `/init` | Once per person: who you are, and your signing key |
+| `/new` | It asks the index's name, and then four things you may skip: its full name, a description, an empty git repository to share it through, and a Hugging Face repository for the accepted tasks. You become its owner |
+| `/benchmarks add URL` | Give the address of a benchmark's git repository. Its newest release is pinned, and an agent reads the repository and drafts the entry. Reply `y`, or say what to change |
+| `/keys`, then `/doctor` | Creates the keys file for real runs, and shows which keys are found |
+| `/run` | Curates. The first time, and after any change to a setting, the roster or the contributor list, it shows what is not locked and asks to lock it |
 
-1. Describe it in `about.toml`, list benchmarks in `benchmarks.toml`, and list the agents to benchmark in `roster.toml`. Each file explains its fields.
-2. `hm protocol lock` signs it all.
-3. `hm keys init` creates the keys file for real runs, and `hm doctor` shows which keys are found.
-4. `hm index connect URL` shares it through an empty git repository, so that others can join.
-5. `hm run` curates. `hm run --simulate` tries it on simulated models, with no lock and no keys.
-
-`hm guide` says which of these is next at any time.
+The agents to compare are listed in `roster.toml`, which explains its fields. `/run --simulate` tries it all on simulated models, with no lock and no keys. An index that was not shared when it was made is shared later with `/connect URL`.
 
 ### Join one
 
-```bash
-hm init              # once per person. It prints your public key
-hm indexes           # the indexes that are listed
-hm join NAME         # or: hm join URL
-```
+| Type | What happens |
+|---|---|
+| `/init` | Once per person. It makes your signing key |
+| `/indexes` | The indexes that are listed |
+| `/join NAME` | Or `/join URL`. The index is cloned into a folder here |
+| `/key` | Shows your public key, to send to the owner |
 
-Send your public key to the index's owner, who adds you to `contributors.toml` with the fields you may curate, and locks the change. `hm sync` brings it in. Until then you can only run simulations.
+The owner adds you to `contributors.toml` with the fields you may curate, and locks the change. `/sync` brings it in. Until then you can only run simulations.
 
-**The list of indexes.** [`indexes.toml`](indexes.toml) in this repository lists the indexes that asked to be listed, each with its repository and its owner's key. It holds addresses only: everything else about an index is read from its own repository. To list yours, run `hm index entry` in it and add what it prints in a pull request here. The check on the pull request clones the repository, so it must be readable by anyone.
+**The list of indexes.** [`indexes.toml`](indexes.toml) in this repository lists the indexes that asked to be listed, each with its repository and its owner's key. It holds addresses only: everything else about an index is read from its own repository. To list yours, type `/entry` in it and add what it prints in a pull request here. The check on the pull request clones the repository, so it must be readable by anyone.
 
 ## Benchmarks
 
-A run takes any benchmark on the index's list, and nothing else: `hm benchmarks` shows the list. The owner adds a benchmark with one entry in `benchmarks.toml`, pinned to a tag and a commit, and locks the change. `hm run` does the rest.
+A run takes any benchmark on the index's list, and nothing else: `/benchmarks` shows the list. **Anyone who can curate adds one, with no step by the owner:**
+
+1. `/benchmarks add URL`. The code pins the newest tag and its commit (`--ref` names another), finds where the tasks are, and reads the licence. A small agent reads the repository and drafts the rest: name, description, paper, fields.
+2. Reply `y` to add it, or say what to change, in plain words or as `paper: https://...`. A benchmark needs a name, a description, a repository, a paper (`paper: none` if it has none) and at least one field.
+3. Your signed record puts it on the list for everyone, and `benchmarks/<id>.toml` is its readable copy. Only you or the owner can take it off, with `/benchmarks remove ID`.
+
+Adding spends nothing and admits nothing: the brief, the selection and the verdicts still decide what enters the index. A run does the rest.
 
 - **Fetching.** The run fetches a benchmark that is not on the machine yet, at its pinned commit.
-- **Adapting.** If the tasks are not Harbor task folders, the owner's run builds an adapter, in Harbor's own adapter layout. The worker model writes it, and it is checked without a model: it runs, its tasks are complete, a second run writes the same ones, and a few reference solutions pass through Harbor. A failing one goes back to the worker model, then to the frontier model.
-- **Asking a person only on failure.** If the models cannot make it pass, the run asks for one of two things: fix it and `/recheck`, or `/abandon` the benchmark. An abandoned benchmark is refused to every run, with the reason, until the owner builds an adapter that passes with `hm adapt ID`.
-- **The same tasks for everyone.** An adapter that passes is locked into the index and runs in a container with no network. `hm adapt ID --from PATH` takes an adapter that exists already, such as one written for Harbor.
+- **Adapting.** If the tasks are not Harbor task folders, the run builds an adapter, in Harbor's own adapter layout. The worker model writes it, and it is checked without a model: it runs, its tasks are complete, a second run writes the same ones, and a few reference solutions pass through Harbor. A failing one goes back to the worker model, then to the frontier model.
+- **Asking a person only on failure.** If the models cannot make it pass, the run asks for one of two things: fix it and `/recheck`, or `/abandon` the benchmark. An abandoned benchmark is refused to every run, with the reason, until someone builds an adapter that passes with `/adapt ID`.
+- **The same tasks for everyone.** An adapter that passes is committed to the index with a signed record of its checks, and runs in a container with no network. Every later run uses that same version. `/adapt ID --from PATH` takes an adapter that exists already, such as one written for Harbor.
 
-A local folder registered with `hm submit PATH --dev`, or made by `hm demo`, needs no entry and runs under `--simulate` only.
+A made-up benchmark from `/demo` needs no entry and runs under `--simulate` only.
 
 ## Working with others
 
@@ -174,18 +177,29 @@ Real runs call models and need keys. `hm keys init` copies [`secrets.env.example
 
 ## Commands
 
-| For | Commands |
-|---|---|
-| Getting started | `hm` (the home screen), `hm guide`, `hm init`, `hm key`, `hm demo` |
-| An index | `hm index`, `hm index new`, `hm join`, `hm indexes`, `hm index connect`, `hm index entry`, `hm contributors` |
-| What it runs under | `hm protocol`, `hm protocol lock`, `hm skills`, `hm skills diff`, `hm skills adopt`, `hm roster` |
-| Benchmarks | `hm benchmarks`, `hm adapt`, `hm submit` |
-| Curating | `hm run` (starts the run, or opens the one that is going), `hm run NAME` (adds a benchmark to it), `hm brief`, `hm review`, `hm claims`, `hm requests`, `hm sync` |
-| Results | `hm status`, `hm stats`, `hm credits`, `hm ledger verify`, `hm tasks` |
-| Benchmarking agents | `hm eval`, `hm todo`, `hm leaderboard` |
-| This machine | `hm keys init`, `hm keys set`, `hm doctor` |
+**In a shell**, there are few:
 
-`hm COMMAND --help` describes each one.
+| Command | Does |
+|---|---|
+| `hm` | Opens the home screen, where everything else is done |
+| `hm run [NAME] [--simulate]` | Starts the run, opens the one that is going, or adds a benchmark to it |
+| `hm status`, `hm leaderboard`, `hm credits`, `hm todo` | Show where the tasks, the agents and the people stand |
+| `hm stats` | Writes the statistics: a report and CSV files |
+| `hm sync` | Pulls the shared index and pushes your records |
+
+**On the home screen**, `/help` lists the commands by step:
+
+| Step | Commands |
+|---|---|
+| Start | `/init`, `/indexes`, `/join`, `/new`, `/use`, `/demo` |
+| Set up an index | `/index`, `/benchmarks [add URL, remove ID]`, `/roster`, `/skills [diff, adopt]`, `/protocol`, `/lock`, `/connect`, `/entry`, `/contributors`, `/key` |
+| This machine | `/keys`, `/doctor` |
+| Run | `/run`, `/adapt`, `/claims` |
+| Results | `/status`, `/leaderboard`, `/todo`, `/tasks [push, pull]`, `/stats`, `/credits`, `/sync`, `/verify` |
+
+**On the run screen**, `/help` lists what steers the run (`/pause`, `/add`, `/budget`, ...) and what decides (`/brief`, `/approve`, `/accept`, `/reject`, ...). The results are there too: `/status`, `/leaderboard`, `/stats`, `/credits`, `/todo`.
+
+Every `/` command still answers as `hm NAME` in a shell, for scripts: `hm --help` does not list them, and `hm NAME --help` describes each.
 
 ## Repository
 

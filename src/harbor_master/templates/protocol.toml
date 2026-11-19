@@ -49,7 +49,7 @@ max_verifier_seconds = 300      # CPU only, no paid API
 max_rounds = 3                  # how many times a model may write the adapter before a person is asked
 frontier_after_round = 2        # the worker tier writes rounds 1 and 2, the frontier tier the rest
 oracle_tasks = 2                # generated tasks whose reference solution is run through Harbor as a check
-require_review = false          # if true, the owner confirms an adapter that passes before it is locked
+require_review = false          # if true, a person confirms an adapter that passes before it is used
 
 # ----- selection: which tasks of a benchmark go through the costly stages -----
 [select]

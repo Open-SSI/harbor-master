@@ -1,7 +1,7 @@
 """Getting a benchmark ready for a run with no one's help: fetched at its pinned release, and
 turned into Harbor tasks by the index's adapter if it is in another format (DESIGN.md Section 4, stage 2).
 
-Where the adapter is missing, the owner's run builds it: the worker model writes it, the checks
+Where the adapter is missing, the run of whoever takes the benchmark builds it: the worker model writes it, the checks
 run, and a failing one goes back with its failures, to the frontier model after a few rounds.
 A person is asked only when that still fails, and then for one of two things: to abandon the
 benchmark, or to fix the adapter and have it checked again.
@@ -53,7 +53,13 @@ def abandoned_text(benchmark: str, record: dict) -> str:
     import time
     when = time.strftime("%Y-%m-%d", time.localtime(record["time"]))
     return (f"abandoned by @{record['runner']} on {when}: no adapter could be made to pass"
-            + (f" ({record['reason'][:120]})" if record.get("reason") else "") + f". Its owner reopens it with: hm adapt {benchmark}")
+            + (f" ({record['reason'][:120]})" if record.get("reason") else "") + f". Anyone who can curate reopens it with: /adapt {benchmark}")
+
+
+def approved(events, digest: str) -> bool:
+    """An adapter may be used when someone on the contributor list signed that this very version passed its checks."""
+    return any(e["type"] == "decision" and e.get("stage") == "adapt" and e.get("outcome") == "pass" and e.get("digest") == digest
+               for e in events)
 
 
 def foreign(entry: dict | None) -> bool:
@@ -150,15 +156,10 @@ async def ready(s: Session, bench: BenchState) -> bool:
     sandbox, oracle = s.cfg.run.sandbox != "none", 0 if s.simulate else s.cfg.adapt.oracle_tasks
     trying = s.sandbox      # a simulated run, whose records are kept apart: it builds nothing and needs no lock
     have = adapter_mod.code_dir(adapter_dir) is not None and STUB not in (adapter_mod.code_dir(adapter_dir) / "adapter.py").read_text()
-    lock = ledger_mod.protocol.current(real)
-    name = f"{adapter_mod.FOLDER}/{bench.id}"
-    locked = have and lock is not None and (lock.get("registry") or {}).get(name) == adapter_mod.digest(adapter_dir)
     if trying and not have:
-        return _skip(bench, "it is not in Harbor format and has no adapter yet. The owner's real run builds one, or: hm adapt " + bench.id, "no_adapter")
-    if not trying and not locked:
-        if not s.is_owner:
-            return _skip(bench, "it is not in Harbor format, and the owner has not locked its adapter yet. Try again after: hm sync", "adapter_not_locked")
-        if not await _build_and_lock(s, bench, entry, source, adapter_dir, work, sandbox, oracle, have, lock):
+        return _skip(bench, "it is not in Harbor format and has no adapter yet. A real run builds one, or: /adapt " + bench.id, "no_adapter")
+    if not trying and not (have and approved(real, adapter_mod.digest(adapter_dir))):
+        if not await _build_and_share(s, bench, entry, source, adapter_dir, work, sandbox, oracle, have):
             return False
     bench.phase, bench.detail = "adapt", "the index's adapter writes the tasks"
     out = work / "tasks"
@@ -171,9 +172,10 @@ async def ready(s: Session, bench: BenchState) -> bool:
     return True
 
 
-async def _build_and_lock(s: Session, bench: BenchState, entry: dict, source: Path, adapter_dir: Path, work: Path,
-                          sandbox: bool, oracle: int, have: bool, lock: dict | None) -> bool:
-    """The owner's run: get an adapter that passes, asking a person only when the models cannot, then lock it."""
+async def _build_and_share(s: Session, bench: BenchState, entry: dict, source: Path, adapter_dir: Path, work: Path,
+                           sandbox: bool, oracle: int, have: bool) -> bool:
+    """Get an adapter that passes, asking a person only when the models cannot. The signed record that it passed
+    is what lets every later run use it, so it needs no lock from the owner."""
     bench.phase = "adapt"
     say = lambda text: setattr(bench, "detail", text)  # noqa: E731
 
@@ -195,11 +197,11 @@ async def _build_and_lock(s: Session, bench: BenchState, entry: dict, source: Pa
             answer = await s.ask("adapter", f"The adapter for {bench.id} does not pass after {built.rounds} round{'s' if built.rounds != 1 else ''}"
                                  f"{' by the models' if built.rounds else ''}: {shown}. It is in {adapter_dir}.", bench.id)
             if answer is None:
-                return _skip(bench, "its adapter does not pass yet, and nothing could ask you. Run with the screen, or: hm adapt " + bench.id, "adapter_needs_person")
+                return _skip(bench, "its adapter does not pass yet, and nothing could ask you. Run with the screen, or: /adapt " + bench.id, "adapter_needs_person")
             if answer == "abandon":
                 record(lambda *a, **k: s.record(bench.id, a[0], digest_override=k.pop("digest"), **k), s.cfg, adapter_dir, built, oracle,
                        "drop", built.problems[0][:200])
-                return _skip(bench, f"abandoned: its adapter could not be made to pass. Only hm adapt {bench.id} reopens it", "abandoned")
+                return _skip(bench, f"abandoned: its adapter could not be made to pass. Only /adapt {bench.id} reopens it", "abandoned")
             bench.phase = "adapt"
             if adapter_mod.digest(adapter_dir) != before:       # fixed by hand: check that
                 say("checking your fix")
@@ -214,23 +216,19 @@ async def _build_and_lock(s: Session, bench: BenchState, entry: dict, source: Pa
     except (RuntimeError, NotImplementedBackend) as err:
         return _skip(bench, f"the model did not return an adapter: {str(err)[:160]}", "model_error")
 
-    record(lambda *a, **k: s.record(bench.id, a[0], digest_override=k.pop("digest"), **k), s.cfg, adapter_dir, built, oracle)
     s.note_recent("checked", bench.id, f"its adapter passes: {built.tasks} tasks, the same on a second run"
                   + (f", written by the {built.tier} model in {built.rounds} round{'s' if built.rounds != 1 else ''} for ${built.cost:.2f}"
                      if built.tier != "human" else ""))
     if s.cfg.adapt.require_review:
-        bench.phase, bench.detail = "review", "its adapter waits for your lock"
+        bench.phase, bench.detail = "review", "its adapter waits for your go-ahead"
         answer = await s.ask("lock", f"The adapter for {bench.id} passes its checks: {built.tasks} tasks. It is in {adapter_dir}. "
-                             "Read it, then lock it so that its tasks can be used.", bench.id)
+                             "Read it, then let its tasks be used.", bench.id)
         if answer != "lock":
-            return _skip(bench, f"its adapter passes and is not locked. Lock it with /lock {bench.id} in a run, or: hm protocol lock", "adapter_not_locked")
-    bench.phase, bench.detail = "adapt", "locking the adapter"
-    name = f"{adapter_mod.FOLDER}/{bench.id}"
-    registry = {**((lock or {}).get("registry") or {}), name: adapter_mod.digest(adapter_dir)}       # this adapter, and nothing else new
-    event = ledger_mod.protocol.write(s.ws, s.ident, s.cfg, f"adapter for {bench.id}", registry)
-    s.ledger.add(event)
+            return _skip(bench, f"its adapter passes and waits for your go-ahead: /lock {bench.id} in a run", "adapter_not_locked")
+    record(lambda *a, **k: s.record(bench.id, a[0], digest_override=k.pop("digest"), **k), s.cfg, adapter_dir, built, oracle)
+    bench.phase, bench.detail = "adapt", "sharing the adapter"
     if s.sync.enabled:
         async with s._sync_lock:
-            await asyncio.to_thread(s.sync.define, f"adapter for {bench.id}", (name,))
+            await asyncio.to_thread(s.sync.define, f"adapter for {bench.id}", (f"{adapter_mod.FOLDER}/{bench.id}",))
         await s.publish(f"adapter for {bench.id}")
     return True

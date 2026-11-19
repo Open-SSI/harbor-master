@@ -47,21 +47,15 @@ TEMPLATE = {
     "tests/test.sh": "#!/bin/bash\nmkdir -p /logs/verifier\nif [ \"$(cat /app/answer.txt 2>/dev/null)\" = '__ANSWER__' ]; then echo 1 > /logs/verifier/reward.txt; "
                      "else echo 0 > /logs/verifier/reward.txt; fi\n",
 }
-ENTRY = '''
-[[benchmark]]
-id = "toy"
-name = "Toy Arithmetic"
-version = "1.0"
-released = "2026-09-01"
-github = "https://example.org/toy"
-ref = "v1.0"
-commit = "0000000000000000000000000000000000000000"
-tasks = "."
-task_count = 3
-format = "jsonl"
-license = "MIT"
-fields = ["mathematical sciences"]
-'''
+ENTRY = {"id": "toy", "name": "Toy Arithmetic", "description": "Sums of small numbers, one to a task.", "paper": "none",
+         "version": "1.0", "released": "2026-09-01", "github": "https://example.org/toy", "ref": "v1.0",
+         "commit": "0" * 40, "tasks": ".", "task_count": 3, "format": "jsonl", "license": "MIT", "fields": ["mathematical sciences"]}
+
+
+def passes(ws: Path) -> bool:
+    """Whether someone signed that the adapter in the index, as it is now, passed its checks."""
+    from harbor_master.engine import prepare
+    return prepare.approved(ledger.Ledger(ws).events, adapter.digest(ws / "adapters" / "toy"))
 
 
 def hm(*args: object) -> str:
@@ -90,8 +84,7 @@ def toy(tmp_path, monkeypatch):
     monkeypatch.setattr(tasks.supported, "fetch", lambda entry, sources: source)       # no network: the source is here
     ws = tmp_path / "index"
     assert hm("index", "new", "demo", ws).startswith("0 ")
-    with (ws / "benchmarks.toml").open("a") as f:
-        f.write(ENTRY)
+    ledger.benchmarks.add(ws, identity.load(), config_mod.load(ws).protocol, ENTRY)
     return ws, source, tmp_path
 
 
@@ -108,28 +101,21 @@ def test_the_owner_brings_an_adapter_and_everyone_gets_the_same_tasks(toy):
     assert (record["outcome"], record["tier"], record["value"]) == ("pass", "human", "3 tasks")
     assert record["digest"] == adapter.digest(ws / "adapters" / "toy") and guide.look(ws).to_adapt == []
 
-    assert "adapters/toy" not in hm("protocol", "-w", ws)                     # nothing is locked yet, so nothing differs
-    assert "Locked protocol" in hm("protocol", "lock", "-w", ws)
-    lock = ledger.protocol.current(ledger.Ledger(ws).events)
-    assert lock["registry"]["adapters/toy"] == adapter.digest(ws / "adapters" / "toy")     # the adapter is locked with the rest
+    assert passes(ws) and ledger.protocol.current(ledger.Ledger(ws).events) is None       # the signed check vouches for it: no lock
 
     done = hm("submit", "toy", "--no-sandbox", "-w", ws)
     assert done.startswith("0 ") and "3 tasks" in done and "written by the index's adapter" in done
     info = tasks.read_registry(ws)["toy"]
     found = tasks.load_benchmark(Path(info["path"]), "toy")
-    assert [t.name for t in found] == ["q1", "q2", "q3"] and info["adapter"] == lock["registry"]["adapters/toy"]
+    assert [t.name for t in found] == ["q1", "q2", "q3"] and info["adapter"] == adapter.digest(ws / "adapters" / "toy")
     assert found[0].instruction.startswith("What is 1 + 1?") and all(t.has_solution and t.has_tests for t in found)
     first = adapter.digests(Path(info["path"]))
     hm("submit", "toy", "--no-sandbox", "-w", ws)
     assert adapter.digests(Path(info["path"])) == first                       # the same tasks, whoever runs it and whenever
 
-    code = ws / "adapters" / "toy" / "src" / "toy" / "adapter.py"             # a changed adapter holds back its own benchmark,
-    code.write_text(code.read_text().replace('sorted(rows, key=lambda r: r["id"])', "rows"))       # and nothing else
-    write_good(ws / "adapters" / "other")
-    shown = hm("protocol", "-w", ws)
-    assert "They match. Runs are allowed." in shown and "Held back until locked, each for its own benchmark only" in shown
-    assert "adapters/toy: not the locked copy" in shown and "adapters/other: not locked yet" in shown
-    check_lock(lock, config_mod.load(ws), ws)
+    code = ws / "adapters" / "toy" / "src" / "toy" / "adapter.py"             # a changed adapter is one nobody vouched for:
+    code.write_text(code.read_text().replace('sorted(rows, key=lambda r: r["id"])', "rows"))       # the next run checks it again
+    assert not passes(ws)
 
 
 def test_an_adapter_that_cannot_be_trusted_is_reported(toy):
@@ -224,12 +210,11 @@ async def test_a_run_fetches_adapts_and_locks_with_no_one_asked(locked, monkeypa
     assert bench.phase == "ready" and len(bench.tasks) == 3 and asked == ["worker", "worker", "frontier"]
     assert not any(r.blocking for r in s.requests)                             # nobody was asked anything on the way
     assert s.cost_by_tier["worker"] >= 0.5 and s.cost_by_tier["frontier"] >= 0.25           # the models' work is in the run's cost
-    lock = ledger.protocol.current(ledger.Ledger(ws).events)
-    assert lock["registry"]["adapters/toy"] == adapter.digest(ws / "adapters" / "toy") and lock["note"] == "adapter for toy"
-    assert lock["protocol"] == config_mod.load(ws).protocol and ledger.verify(ws, max_per_benchmark=8) == []
+    assert passes(ws) and len(ledger.protocol.locks(ledger.Ledger(ws).events)) == 1        # vouched for by its record, with no new lock
+    assert ledger.verify(ws, max_per_benchmark=8) == []
     done = next(e for e in s.ledger.events if e.get("stage") == "adapt")
     assert (done["outcome"], done["tier"], done["rounds"]) == ("pass", "frontier", 3)
-    assert tasks.read_registry(ws)["toy"]["adapter"] == lock["registry"]["adapters/toy"]
+    assert tasks.read_registry(ws)["toy"]["adapter"] == adapter.digest(ws / "adapters" / "toy")
 
     again = run_of(ws, "r2")                                                   # the next run uses the locked adapter as it is
     await again.run()
@@ -284,7 +269,7 @@ async def test_a_person_is_asked_only_when_the_models_cannot(locked, monkeypatch
     interact.execute(s, Command("recheck", ["toy"]))
     await asyncio.wait_for(run, 10)
     assert s.benches["toy"].phase == "ready" and len(asked) == 4               # checked as it is: no model was asked again
-    assert ledger.protocol.current(ledger.Ledger(ws).events)["registry"]["adapters/toy"] == adapter.digest(ws / "adapters" / "toy")
+    assert passes(ws)
 
 
 async def test_an_abandoned_benchmark_is_refused_to_everyone_until_its_owner_reopens_it(locked, monkeypatch):
@@ -315,17 +300,17 @@ async def test_an_abandoned_benchmark_is_refused_to_everyone_until_its_owner_reo
     assert interact.needs_confirmation(interact.interpret(s, "/abandon toy"))                 # giving a benchmark up is confirmed
     assert "abandoned" in interact.execute(s, Command("abandon", ["toy"]))
     await asyncio.wait_for(run, 10)
-    assert s.benches["toy"].phase == "skipped" and "Only hm adapt toy reopens it" in s.benches["toy"].detail
+    assert s.benches["toy"].phase == "skipped" and "Only /adapt toy reopens it" in s.benches["toy"].detail
     dropped = ledger.abandoned(ledger.Ledger(ws).events)["toy"]
     assert (dropped["outcome"], dropped["value"], dropped["tier"]) == ("drop", "abandoned", "human")
-    assert "adapters/toy" not in ledger.protocol.current(ledger.Ledger(ws).events)["registry"]
+    assert not passes(ws)
 
     (ws / "adapters" / "toy" / "README.md").write_text("touched\n")           # a changed file does not reopen it
     monkeypatch.setattr(tasks.supported, "fetch", lambda entry, sources: pytest.fail("an abandoned benchmark is not even fetched"))
     for again in (run_of(ws, "r2"), run_of(ws, "r3", as_real=False)):          # the owner's next run, and a simulated one
         await again.run()
         assert again.benches["toy"].phase == "skipped" and "abandoned by @ada" in again.benches["toy"].detail
-        assert "hm adapt toy" in again.benches["toy"].detail and "no tests/test.sh" in again.benches["toy"].detail
+        assert "/adapt toy" in again.benches["toy"].detail and "no tests/test.sh" in again.benches["toy"].detail
     monkeypatch.setenv("HM_CONFIG_DIR", str(tmp / "config-bob"))               # and anyone else's
     bob = identity.create("Bob", "Other University", "bob@example.org", "bob")
     with (ws / "contributors.toml").open("a") as f:
@@ -346,7 +331,7 @@ async def test_an_abandoned_benchmark_is_refused_to_everyone_until_its_owner_reo
     back = run_of(ws, "r5")
     await back.run()
     assert back.benches["toy"].phase == "ready" and len(asked) == 3            # checked, locked and used: no model was asked
-    assert "adapters/toy" in ledger.protocol.current(ledger.Ledger(ws).events)["registry"]
+    assert passes(ws)
 
 
 async def test_a_run_fetches_a_listed_benchmark_that_is_in_harbor_format(locked, monkeypatch):

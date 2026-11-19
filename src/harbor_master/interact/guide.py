@@ -88,7 +88,7 @@ def look(start: Path | None = None) -> State:
     lock = ledger_mod.protocol.current(events)
     if lock is not None:
         from .. import templates
-        same = lock["protocol"] == cfg.protocol and all(templates.digests(ws).get(n) == d for n, d in (lock.get("registry") or {}).items())
+        same = lock["protocol"] == cfg.protocol and not templates.changed(lock, ws)
         s.lock = "locked" if same else "differs"
     if (ws / ".git").exists():
         s.shared = ledger_mod.Sync(ws)._git("remote", "get-url", "origin", check=False).stdout.strip()
@@ -213,7 +213,7 @@ def tip(s: State) -> Tip:
     if step == "An index":
         lines = [("/indexes", "See the indexes that are listed"),
                  ("/join NAME", "Join one, by its name on that list or by its address. It is cloned into a folder here"),
-                 ("/new NAME", "Start an index of your own. You become its owner")]
+                 ("/new", "Start an index of your own. It asks its name and a few optional things, and you become its owner")]
         if s.nearby:
             lines.insert(0, ("/use FOLDER", "Open one that is already in this folder: " + ", ".join(s.nearby)))
         return Tip("Next: pick an index to work on", lines + [TRY])
@@ -234,15 +234,13 @@ def tip(s: State) -> Tip:
             lines = []
             if not s.described:
                 lines.append(("", "Describe the index in about.toml, so that others know what it is."))
-            if not s.listed:
-                lines.append(("", "List the benchmarks it may curate in benchmarks.toml. The file explains each field."))
             if s.skills_missing:
                 lines.append(("/skills adopt", f"Copies the {s.skills_missing} skills this index lacks into it. What agents are told is then "
                                                "the index's own, and is locked with it"))
             else:
                 lines.append(("/skills", "What agents are told in this index. Edit a file under skills/ to word it your way"))
             lines.append(("/protocol", "Shows the settings a run would use, and what differs from the locked ones"))
-            lines.append(("/lock", "Signs the settings, the benchmark list, the roster and the contributor list. Real runs need it"))
+            lines.append(("/lock", "Signs the settings, the skills, the roster and the contributor list. Real runs need it, and /run asks for it too"))
             if not s.shared:
                 lines.append(("/connect URL", "Shares the index through a git repository, so that others can join it"))
             lines.append(_meanwhile(s, "lock"))
@@ -265,11 +263,12 @@ def tip(s: State) -> Tip:
         if s.abandoned:
             return Tip("Next: get a benchmark to curate", [
                 ("", f"{', '.join(s.abandoned)} was abandoned: no adapter could be made to pass, so no run takes it."),
-                (f"/adapt {s.abandoned[0]}", "Owner: try again. An adapter that passes reopens the benchmark") if s.is_owner else
-                ("", f"Only {s.owner or 'the owner'} can reopen it, by building an adapter that passes."),
+                (f"/adapt {s.abandoned[0]}", "Try again. An adapter that passes reopens the benchmark"),
                 ("/demo", "Adds a made-up benchmark, for simulated runs only. It spends nothing")])
-        lines = [("", "This index lists no benchmark yet." + (" List one in benchmarks.toml, pinned to a release, and lock the change "
-                      "with /lock. The file explains each field." if s.is_owner else f" {s.owner or 'Its owner'} adds them."))]
+        lines = [("", "This index lists no benchmark yet. Anyone who can curate may add one.")]
+        if s.can_curate:
+            lines.append(("/benchmarks add URL", "Give the address of its git repository. An agent reads it and drafts the entry: "
+                                                 "name, description, paper, fields. You confirm it, or reply with what to change"))
         lines.append(("/demo", "Adds a made-up benchmark, for simulated runs only. It spends nothing"))
         return Tip("Next: get a benchmark to curate", lines)
     if step == "A run":
@@ -283,9 +282,8 @@ def tip(s: State) -> Tip:
         if unfetched:
             lines.append(("", f"The run fetches {', '.join(unfetched)} itself, at the pinned release."))
         if s.to_adapt:
-            who = "your run builds its adapter by itself, and asks you only if the models cannot" if s.is_owner else \
-                f"it is skipped until {s.owner or 'the owner'} has run it once, which builds and locks its adapter"
-            lines.append(("", f"{', '.join(s.to_adapt)} is not in Harbor format: {who}."))
+            lines.append(("", f"{', '.join(s.to_adapt)} is not in Harbor format: your run builds its adapter by itself, "
+                              "and asks you only if the models cannot."))
         lines.append(("", "The run stops twice to ask you something: first for a brief on what matters in the benchmark, "
                           "then to approve its selection. A tip on that screen says how to answer."))
         if s.sim_ran:
@@ -307,7 +305,7 @@ def tip(s: State) -> Tip:
         return Tip("You have been through it all, on simulated tasks", [
             ("/leaderboard --simulated", "How each agent configuration did on the tasks you accepted"),
             ("/status --simulated", "Where every simulated task stands"),
-            ("/benchmarks", "For real work: the benchmarks this index may curate, then /submit ID"),
+            ("/benchmarks", "For real work: the benchmarks this index may curate. Add one with /benchmarks add URL"),
             APART])
     return Tip("The index has accepted tasks", [
         ("/leaderboard", "How each agent configuration does on the accepted tasks"),
@@ -325,7 +323,7 @@ def shell(command: str) -> str:
 
 
 # Where a home screen command is not simply `hm NAME` in a shell.
-IN_A_SHELL = {"/new": "hm index new", "/lock": "hm protocol lock", "/connect": "hm index connect", "/keys": "hm keys init",
+IN_A_SHELL = {"/new": "hm index new NAME", "/lock": "hm protocol lock", "/connect": "hm index connect", "/keys": "hm keys init",
               "/use": "cd", "/verify": "hm ledger verify", "/entry": "hm index entry", "/help": "hm --help"}
 
 
@@ -364,7 +362,7 @@ def session_tip(session) -> str:
     if session.paused:
         return "The run is paused. /resume continues it"
     if session.finished:
-        return "The run is finished. ctrl+q leaves, and what it did is in: hm status"
+        return "The run is finished. ctrl+q leaves. /status, /leaderboard and /stats show what it did"
     if any(b.phase in ("fetch", "adapt") for b in session.benches.values()) and not any(c.task for c in session.cells):
         return "Getting the benchmark ready: fetching it, and building its adapter if it needs one. Nothing is needed from you"
     if any(b.phase in ("queued", "triage", "ranking") for b in session.benches.values()) and not any(c.task for c in session.cells):

@@ -5,8 +5,9 @@ files under `ledger/`, so a pull never conflicts. A push is refused when someone
 first, and that refusal is what stops two people from claiming the same tasks: the one who
 is refused pulls, sees the other's claim, and gives way.
 
-A run commits nothing but `ledger/`. The files that define the index are committed only by
-the owner's own commands (`define`), so an edit anyone else makes to them stays on their machine.
+A run commits nothing but `ledger/`, the reports, and `benchmarks/`, the readable copies of the list
+that the records give. The files that define the index are committed only by the owner's own commands
+(`define`), so an edit anyone else makes to them stays on their machine.
 """
 from __future__ import annotations
 
@@ -14,9 +15,10 @@ import subprocess
 from pathlib import Path
 
 
+from . import benchmarks
 from .store import REPORTS, SHARDS
 
-DEFINITION = ("about.toml", "protocol.toml", "benchmarks.toml", "roster.toml", "contributors.toml", "skills", "adapters",
+DEFINITION = ("about.toml", "protocol.toml", "roster.toml", "contributors.toml", "skills", "adapters",
               ".gitignore", "README.md")
 
 
@@ -67,6 +69,7 @@ class Sync:
             if self._git("diff", "--quiet", "--diff-filter=U", check=False).returncode != 0:
                 raise SyncError("a file of the index that you edited here was also changed by the owner. Put yours "
                                 "back with: git checkout origin/main -- FILE")
+        benchmarks.write_views(self.dir)        # the list is what the records say, also the ones that just came in
 
     def _drop_derived(self) -> None:
         """index.toml is rebuilt from the records, so a local copy never stands in the way of a pull."""
@@ -85,7 +88,8 @@ class Sync:
 
     def _commit(self, message: str) -> bool:
         """Commit this machine's new records and the reports that go with them, and nothing else."""
-        found = [name for name in (SHARDS, REPORTS) if (self.dir / name).exists()]
+        benchmarks.write_views(self.dir)
+        found = [name for name in (SHARDS, REPORTS, benchmarks.FOLDER) if (self.dir / name).exists()]
         if found:
             self._git("add", "-A", "--", *found)
         if self._git("diff", "--cached", "--quiet", check=False).returncode == 0:

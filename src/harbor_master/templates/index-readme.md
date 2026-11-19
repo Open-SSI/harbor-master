@@ -8,11 +8,11 @@ trial and verdict made for it.
 |---|---|---|---|
 | `about.toml` | What the index is: its name and description | The owner | Not locked: it changes no result |
 | `protocol.toml` | The curation protocol: every setting that can change a result | The owner | Its checksum is locked in the ledger. A run with a different copy is refused |
-| `benchmarks.toml` | Which benchmarks may be curated, each pinned to a release | The owner | Its checksum is locked in the ledger with the protocol |
+| `benchmarks/` | Which benchmarks may be curated, one file each: name, description, paper, repository, pinned release | Nobody by hand: anyone who can curate adds one on the `hm` screen with `/benchmarks add URL` | The list is what the signed records say. Editing a file changes nothing |
 | `roster.toml` | Which agent configurations are benchmarked on the index | The owner | Its checksum is locked in the ledger with the protocol |
 | `contributors.toml` | Who may curate, in which fields, and their signing keys | The owner | Its checksum is locked in the ledger with the protocol, and every record is checked against it |
 | `skills/` | What the agents that curate this index are told: the adapter, the gates, the ranking, the probe, the audit | The owner | Part of the protocol's checksum |
-| `adapters/` | For a benchmark that is not in Harbor format: the code that turns it into Harbor tasks | The owner | Its checksum is locked in the ledger with the protocol |
+| `adapters/` | For a benchmark that is not in Harbor format: the code that turns it into Harbor tasks | The run that first takes the benchmark | A run uses only a version that a signed record says passed its checks |
 | `ledger/` | Every record, in one file per person and run | Everyone on the list, through `hm` | Signed and chained: `hm ledger verify` |
 | `reports/` | The report on each task that reached one, which a reviewer reads before signing a verdict | Nobody: `hm` writes them | Each record of a report holds its checksum |
 | `index.toml` | The accepted tasks | Nobody: `hm` writes it from the signed verdicts | `hm ledger verify` rejects anything the verdicts do not support |

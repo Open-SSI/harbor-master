@@ -1,6 +1,7 @@
 """Setting up: identity, an index to work on, keys."""
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import time
@@ -81,7 +82,10 @@ def index_show(ctx: typer.Context, workspace: Optional[Path] = Workspace):
 @index_app.command("new")
 def index_new(name: str = typer.Argument(..., help="The index's short name: lower case, digits and hyphens."),
               directory: Path = typer.Argument(None, help="Where to create it. Default: a folder called NAME."),
-              title: str = typer.Option("", help="Its full name, such as \"OpenSSI Index\".")):
+              title: str = typer.Option("", help="Its full name, such as \"OpenSSI Index\"."),
+              description: str = typer.Option("", help="One or two sentences: what it measures, and for whom."),
+              tasks: str = typer.Option("", help="Where accepted tasks are kept: a Hugging Face dataset repository, as org/name, or a folder."),
+              url: str = typer.Option("", help="An empty git repository to share the index through.")):
     """Start a new index with you as its owner: the files that define it, in a git repository of its own."""
     ident = need_identity()
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", name):
@@ -91,9 +95,12 @@ def index_new(name: str = typer.Argument(..., help="The index's short name: lowe
         fail(f"{ws} is not empty.")
     ws.mkdir(parents=True, exist_ok=True)
     fill = lambda text: Template(text).substitute(name=name, title=title or name)  # noqa: E731
-    for file in ("protocol.toml", "benchmarks.toml", "roster.toml"):
+    for file in ("protocol.toml", "roster.toml"):
         (ws / file).write_text(templates.read(file))
-    (ws / config_mod.ABOUT_NAME).write_text(fill(templates.read("about.toml")))
+    about = fill(templates.read("about.toml"))
+    for key, value in (("description", description), ("tasks", tasks)):
+        about = about.replace(f'{key} = ""', f"{key} = {json.dumps(value.strip(), ensure_ascii=False)}")
+    (ws / config_mod.ABOUT_NAME).write_text(about)
     (ws / "README.md").write_text(fill(templates.read("index-readme.md")))
     (ws / ".gitignore").write_text(templates.read("gitignore"))
     skills.adopt(ws / "skills", skills.names())         # what agents are told is the index's own, from the first commit
@@ -107,8 +114,15 @@ def index_new(name: str = typer.Argument(..., help="The index's short name: lowe
     set_up_local(ws)
     check_owner(ws)
     console.print(f"Started the [bold]{title or name}[/] index at {ws}, with you as its owner.")
-    console.print(f"[{theme.MU}]Next, in that folder: describe it in about.toml, list benchmarks in benchmarks.toml and agents "
-                  "in roster.toml, then lock it with: hm protocol lock. Share it with: hm index connect URL[/]")
+    if url:
+        try:
+            state = ledger_mod.Sync(ws, ident.name, ident.github).connect(url)
+            console.print(f"[{theme.TE}]It {state}[/] at {url}. Others join with: /join {url}", highlight=False)
+        except ledger_mod.SyncError as err:
+            console.print(f"[{theme.AM}]It is not shared yet:[/] {err}\nThe index itself is fine. Once the repository exists and is "
+                          "empty: /connect URL", highlight=False)
+    console.print(f"[{theme.MU}]Next: add a benchmark with /benchmarks add URL, and list the agents to compare in roster.toml. "
+                  "The first real run asks to lock the settings.[/]")
 
 
 @index_app.command("connect")

@@ -49,7 +49,7 @@ class Adapt(BaseModel):
     max_rounds: int = 3               # how many times a model may write it before a person is asked
     frontier_after_round: int = 2     # the worker tier writes rounds up to this one, the frontier tier the rest
     oracle_tasks: int = 2             # generated tasks whose reference solution is run through Harbor as a check
-    require_review: bool = False      # if true, the owner confirms an adapter that passes before it is locked
+    require_review: bool = False      # if true, a person confirms an adapter that passes before it is used
 
 
 class Select(BaseModel):

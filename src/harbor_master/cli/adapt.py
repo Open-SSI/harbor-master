@@ -16,7 +16,7 @@ from ..backends import NotImplementedBackend
 from ..engine import prepare
 from ..tasks import adapter as adapter_mod
 from ..tui import theme
-from .common import Workspace, app, console, fail, is_owner, need_identity, need_workspace
+from .common import Workspace, app, console, fail, need_identity, need_workspace
 
 def source_of(ws: Path, entry: dict) -> Path:
     """The benchmark at its pinned release, fetched if it is not here yet."""
@@ -37,16 +37,16 @@ def adapt(name: str = typer.Argument(..., help="A benchmark on this index's list
           no_sandbox: bool = typer.Option(False, "--no-sandbox", help="Run the adapter's code on this machine as it is, not in a "
                                                                     "container. Only for code you have read."),
           workspace: Optional[Path] = Workspace):
-    """Owner only: build the adapter for a benchmark in another format, and check it. A run does this by itself:
+    """Build the adapter for a benchmark in another format, and check it. A run does this by itself:
     this command is for doing it apart from a run, or again."""
     ws, ident = need_workspace(workspace), need_identity()
-    if not is_owner(ws, ident):
-        fail(f"An adapter decides what the tasks are for everyone, so only the owner builds one, and @{ident.github} is not the owner.")
+    if ledger_mod.fields_of(ledger_mod.load_contributors(ws), ident.github) == set():
+        fail(f"@{ident.github} cannot curate in this index yet, so cannot build an adapter for it. See: /contributors")
     entry = tasks_mod.supported.find(ws, name)
     if entry is None:
-        fail(f"{name} is not on this index's list of benchmarks. See: hm benchmarks")
+        fail(f"{name} is not on this index's list of benchmarks. See: /benchmarks")
     if entry.get("format", "harbor") == "harbor":
-        fail(f"{entry['id']} is in Harbor format already, so it needs no adapter. Fetch it with: hm submit {entry['id']}")
+        fail(f"{entry['id']} is in Harbor format already, so it needs no adapter. A run fetches it by itself.")
     cfg = config_mod.load(ws)
     if entry["id"] in ledger_mod.abandoned(ledger_mod.Ledger(ws).events):
         console.print(f"[{theme.AM}]{entry['id']} was abandoned.[/] An adapter that passes now reopens it.")
@@ -80,11 +80,18 @@ def adapt(name: str = typer.Argument(..., help="A benchmark on this index's list
     if built.cost:
         console.print(f"[{theme.MU}]Writing it cost ${built.cost:.2f} ({built.tokens:,} tokens).[/]")
     if built.problems:
-        fail(f"The adapter for {entry['id']} is in {adapter_dir} and does not pass yet. Correct it by hand and run hm adapt {entry['id']} "
+        fail(f"The adapter for {entry['id']} is in {adapter_dir} and does not pass yet. Correct it by hand and run /adapt {entry['id']} "
              "again, or have the models write it again with --rewrite.")
     shard = ledger_mod.Shard(ws, entry["id"], ident, ledger_mod.MANUAL, cfg.protocol)
     prepare.record(shard.append, cfg, adapter_dir, built, oracle)
     console.print(f"[{theme.TE}]The adapter for {entry['id']} passes:[/] {n} tasks, the same on a second run"
                   + (f", and the reference solution of {min(oracle, n)} passes through Harbor" if oracle else "") + ".")
-    console.print(f"[{theme.MU}]It is in {adapter_dir}. Read it, then lock it with the rest: hm protocol lock. "
-                  f"After that, everyone gets the same tasks with: hm submit {entry['id']}[/]")
+    sync = ledger_mod.Sync(ws, ident.name, ident.github)
+    sync.define(f"adapter for {entry['id']}", (f"{adapter_mod.FOLDER}/{entry['id']}",))
+    if sync.enabled:
+        try:
+            sync.publish(f"adapter for {entry['id']}")
+        except ledger_mod.SyncError as err:
+            console.print(f"[{theme.AM}]Not shared yet:[/] {err}. Try: /sync")
+    console.print(f"[{theme.MU}]It is in {adapter_dir}. Your signed record that it passes lets every run use it, "
+                  "and everyone gets the same tasks from it.[/]")

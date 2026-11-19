@@ -1,9 +1,11 @@
 """The home screen and the guide: a new person is told what to do at every step, from nothing to a run."""
 import asyncio
+import subprocess
 
 from textual.widgets import Static
 
 from harbor_master import interact
+from harbor_master import tasks as tasks_mod
 from harbor_master.cli.home import run_cli
 from harbor_master.core import config as config_mod
 from harbor_master.engine import Session
@@ -55,7 +57,7 @@ async def test_the_home_screen_walks_a_new_person_from_nothing_to_a_run(tmp_path
         for answer in ("Ada Lovelace", "Analytical University", "ada@example.org", "ada"):
             await enter(pilot, answer)
         assert app.state.ident.label() == "Ada Lovelace (Analytical University, @ada)" and app.form is None
-        assert guide.next_step(app.state) == "An index" and commands(app) == ["/indexes", "/join NAME", "/new NAME", "/demo"]
+        assert guide.next_step(app.state) == "An index" and commands(app) == ["/indexes", "/join NAME", "/new", "/demo"]
 
         await enter(pilot, "/indexes")
         assert "No index is listed yet" in app.last[1]
@@ -70,9 +72,16 @@ async def test_the_home_screen_walks_a_new_person_from_nothing_to_a_run(tmp_path
         await pilot.press("tab")
         assert prompt.value == "/new "
 
-        await enter(pilot, "/new my-index")
+        await enter(pilot, "/new my-index")                                                    # a short form: only the name is needed
+        assert "question 2 of 5" in app.query_one("#tip").border_title and "skips" in text_of(app, "#tip")
+        for answer in ("My Index", "Measures made-up things.", "", ""):
+            await enter(pilot, answer)
         assert app.ws == folder / "my-index" and app.state.is_owner and not app.last[2]
-        assert guide.next_step(app.state) == "A benchmark" and "/demo" in commands(app)
+        about = config_mod.load(app.ws).about
+        assert (about.title, about.description, about.tasks) == ("My Index", "Measures made-up things.", "")
+        assert guide.next_step(app.state) == "A benchmark" and commands(app) == ["/benchmarks add URL", "/demo"]
+        await enter(pilot, "/help")                                                            # by step, not one flat list
+        assert app.last[1].index("Start") < app.last[1].index("Set up an index") < app.last[1].index("Results")
         await enter(pilot, "/demo")
         assert list(app.state.registered) == ["demo-bench"] and guide.next_step(app.state) == "A run"
         assert commands(app) == ["/run --simulate"]                                            # no lock and no keys stand in the way
@@ -84,12 +93,63 @@ async def test_the_home_screen_walks_a_new_person_from_nothing_to_a_run(tmp_path
         assert app.confirming is None and app.state.lock == "none"
 
         await enter(pilot, "/leave")
+        assert app.last[0] == "no such command"                                                # on the run screen it means something else
+        await enter(pilot, "/close")
         assert app.ws is None and app.state.nearby == ["my-index"] and commands(app)[0] == "/use FOLDER"
         await enter(pilot, "/use my-index")
         assert app.ws == folder / "my-index" and "owner" in app.last[1]
 
-        await enter(pilot, "/run --simulate")                                                  # leaves for the run screen
-    assert app.return_value == (["--simulate"], folder / "my-index")
+        repo = tmp_path / "toy-bench"                                                          # a benchmark is added by its address
+        (repo / "tasks" / "one").mkdir(parents=True)
+        (repo / "tasks" / "one" / "task.toml").write_text('version = "1.0"\n')
+        (repo / "LICENSE").write_text("MIT License\n")
+        (repo / "README.md").write_text("# Toy Bench\n\nTasks that add small numbers.\n\nPaper: https://arxiv.org/abs/2601.00001.\n")
+        for args in (["init", "-q", "-b", "main"], ["add", "-A"], ["-c", "user.name=a", "-c", "user.email=a@b.c", "commit", "-q", "-m", "one"],
+                     ["tag", "v1.2.0"]):
+            subprocess.run(["git", *args], cwd=repo, check=True)
+        from harbor_master.backends import describe
+        notes: list[str] = []
+
+        async def agent(cfg, entry, source, note=""):                                          # stands in for the small model
+            notes.append(note)
+            return ({"name": "Toy Bench", "fields": ["Mathematics"]} if not note else {"description": "Sums of two small integers."}), 0.01
+
+        monkeypatch.setattr(describe, "fill", agent)
+        await enter(pilot, f"/benchmarks add {repo}")                                          # an address is all a person gives
+        assert not app.last[2] and app.drafting() and "waits for your answer" in app.query_one("#tip").border_title
+        assert "Toy Bench" in app.last[1] and "mathematics" in app.last[1] and "arxiv.org/abs/2601.00001" in app.last[1]
+        assert "Reply y to add it" in app.last[1] and tasks_mod.supported.supported(app.ws) == []     # nothing is added before a yes
+        await enter(pilot, "say that the numbers are integers")                                # a reply in plain words goes to the agent
+        assert notes[-1] == "say that the numbers are integers" and "Sums of two small integers." in app.last[1]
+        await enter(pilot, "license: Apache-2.0")                                              # and a field with its value is taken as it stands
+        assert len(notes) == 2 and "Apache-2.0" in app.last[1]
+        await enter(pilot, "y")
+        assert not app.last[2] and "Added toy-bench" in app.last[1] and not app.drafting()
+        entry = tasks_mod.supported.find(app.ws, "toy-bench")
+        assert (entry["ref"], entry["version"], entry["tasks"], entry["format"], entry["license"]) == ("v1.2.0", "1.2.0", "tasks", "harbor", "Apache-2.0")
+        assert (entry["name"], entry["fields"], entry["paper"], entry["added_by"]) == ("Toy Bench", ["mathematics"], "https://arxiv.org/abs/2601.00001", "ada")
+        assert len(entry["commit"]) == 40 and (config_mod.local(app.ws) / "sources" / "toy-bench" / "tasks" / "one").is_dir()
+        assert "Sums of two small integers." in (app.ws / "benchmarks" / "toy-bench.toml").read_text()
+        await enter(pilot, f"/benchmarks add {repo}")
+        assert app.last[2] and "already" in app.last[1]
+
+        await enter(pilot, "/run")                                                             # a real run by the owner: the lock is asked for here
+        assert app.confirming is not None and app.then == [] and "start the run" in text_of(app, "#tip")
+        await pilot.press("y")
+        for _ in range(400):
+            await pilot.pause(0.02)
+            if app.return_value is not None:
+                break
+    assert app.return_value == ([], folder / "my-index") and guide.look(folder / "my-index").lock == "locked"
+
+
+def test_a_shell_lists_only_the_run_and_the_results(workspace):
+    from typer.testing import CliRunner
+    from harbor_master.cli import SHELL, app
+    shown = CliRunner().invoke(app, ["--help"]).output
+    listed = [line.split()[1] for line in shown.split("Commands")[1].splitlines() if line.startswith("│ ") and line[2] != " "]
+    assert sorted(listed) == sorted(SHELL)
+    assert CliRunner().invoke(app, ["benchmarks", "-w", str(workspace)]).exit_code == 0           # the others still answer by name
 
 
 def test_the_guide_names_the_next_step_in_every_state(workspace, ident, monkeypatch):
@@ -129,6 +189,8 @@ async def test_the_run_screen_says_what_it_needs_at_each_point(workspace, ident)
                 break
         await pilot.pause(0.2)
         assert "/brief demo-bench" in guide.session_tip(s) and "/brief demo-bench" in text_of(app, "#tip")
+        assert ident.name in interact.execute(s, interact.Command("contributors"))      # what a shell shows is here too,
+        assert "Simulated" in interact.execute(s, interact.Command("leaderboard"))      # and reads this run's own records
 
         waiting = Session(workspace, cfg, ident, tasks.read_registry(workspace), simulate=True, speed=0, run_id="t0")
         run = asyncio.create_task(waiting.run())                     # a run that waits for an answer can still be left

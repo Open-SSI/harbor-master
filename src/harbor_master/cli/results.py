@@ -275,28 +275,19 @@ def protocol_show(ctx: typer.Context, workspace: Optional[Path] = Workspace):
     when = time.strftime("%Y-%m-%d %H:%M", time.localtime(lock["time"]))
     console.print(f"Locked: [bold]{lock['protocol']}[/], by @{lock['runner']} on {when}." + (f" {lock['note']}" if lock.get("note") else ""))
     diff = ledger_mod.protocol.differences(lock.get("settings", {}), cfg.protocol_settings())
-    here = templates.digests(ws)
-    listed = lock.get("registry") or {}
-    is_adapter = lambda name: name.startswith("adapters/")  # noqa: E731
-    diff += [f"{name}: not the locked copy" for name, digest in listed.items() if here.get(name) != digest and not is_adapter(name)]
-    held = [f"{name}: not the locked copy" for name, digest in listed.items() if here.get(name) != digest and is_adapter(name)]
-    held += [f"{name}: not locked yet" for name in here if name not in listed]
+    diff += [f"{name}: not the locked copy" for name in templates.changed(lock, ws)]
     if diff:
         console.print(f"[{theme.RD}]They differ, so runs are refused here:[/]")
         for line in diff:
             console.print(f"  {line}")
     else:
         console.print(f"[{theme.TE}]They match. Runs are allowed.[/]")
-    if held:        # an adapter holds back its own benchmark, and nothing else
-        console.print(f"[{theme.AM}]Held back until locked, each for its own benchmark only:[/]")
-        for line in held:
-            console.print(f"  {line}")
 
 
 @protocol_app.command("lock")
 def protocol_lock(note: str = typer.Option("", help="Why the protocol is being set or changed."),
                   workspace: Optional[Path] = Workspace):
-    """Owner only: lock this index's settings, benchmark list, roster and contributor list as they are here."""
+    """Owner only: lock this index's settings, skills, roster and contributor list as they are here."""
     ws, ident = need_workspace(workspace), need_identity()
     cfg = config_mod.load(ws)
     if not is_owner(ws, ident):
@@ -322,7 +313,7 @@ def protocol_lock(note: str = typer.Option("", help="Why the protocol is being s
         sync.publish(f"lock protocol {cfg.protocol}")
     same = lock is not None and lock["protocol"] == cfg.protocol
     console.print(f"[{theme.TE}]Locked protocol {cfg.protocol}.[/] " + (
-        "The settings are the same as before, so earlier records stand. The lists are the new ones." if same else
+        "The settings are the same as before, so earlier records stand. The roster and the contributor list are the new ones." if same else
         "Every run on this index must now use these settings."
         + (f" It replaces {lock['protocol']}: tasks finished under that one keep their records, and may be "
            "run again under the new one." if lock else "")))

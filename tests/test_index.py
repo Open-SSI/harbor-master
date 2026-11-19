@@ -5,7 +5,7 @@ import typer
 import pytest
 from typer.testing import CliRunner
 
-from harbor_master import ledger
+from harbor_master import ledger, tasks
 from harbor_master.cli import app
 from harbor_master.cli.common import check_lock
 from harbor_master.core import config as config_mod
@@ -43,7 +43,7 @@ def test_a_new_index_is_a_repository_with_its_owner_and_nothing_of_the_machine(t
     act_as, alice_ws, _, _ = two
     tracked = subprocess.run(["git", "ls-files"], cwd=alice_ws, capture_output=True, text=True).stdout.split()
     from harbor_master import skills
-    assert sorted(tracked) == sorted([".gitignore", "README.md", "about.toml", "benchmarks.toml", "contributors.toml",
+    assert sorted(tracked) == sorted([".gitignore", "README.md", "about.toml", "contributors.toml",
                                       "protocol.toml", "roster.toml", *(f"skills/{n}" for n in skills.names())])
     assert (alice_ws / ".hm" / "hm.toml").exists() and (alice_ws / ".hm" / "owner").read_text().startswith("alice ssh-ed25519 ")
     cfg = config_mod.load(alice_ws)
@@ -182,3 +182,50 @@ def test_the_skills_are_the_indexes_own_and_the_lock_needs_them(two):
     assert hm("skills", "-w", alice_ws).startswith("1 ") and hm("protocol", "lock", "-w", alice_ws).startswith("1 Not locked: the code cannot use")
     assert "skills/audit/rubric.md" in hm("skills", "adopt", "audit/rubric", "-w", alice_ws)  # by name: the template again
     assert "Nothing differs" in hm("skills", "diff", "-w", alice_ws)
+
+
+def test_anyone_who_can_curate_adds_a_benchmark_with_no_step_by_the_owner(two, tmp_path, monkeypatch):
+    act_as, alice_ws, bob_ws, remote = two
+    repo = tmp_path / "toy-bench"
+    (repo / "tasks" / "one").mkdir(parents=True)
+    (repo / "tasks" / "one" / "task.toml").write_text('version = "1.0"\n')
+    (repo / "README.md").write_text("# Toy\n\nTasks that add small numbers.\n")
+    for args in (["init", "-q", "-b", "main"], ["add", "-A"], ["-c", "user.name=a", "-c", "user.email=a@b.c", "commit", "-q", "-m", "one"]):
+        subprocess.run(["git", *args], cwd=repo, check=True)
+    assert "Locked protocol" in hm("protocol", "lock", "-w", alice_ws)
+    bob = act_as("bob")
+    hm("join", remote, bob_ws)
+    assert hm("benchmarks", "add", repo, "--no-agent", "-w", bob_ws).startswith("1 @bob cannot curate")      # not on the list yet
+    act_as("alice")
+    with (alice_ws / "contributors.toml").open("a") as f:
+        f.write(f'\n[[contributor]]\nname = "Bob"\ngithub = "bob"\nkey = "{bob.public_key}"\nfields = ["chemistry"]\n')
+    assert "Locked protocol" in hm("protocol", "lock", "-w", alice_ws)
+    locks = len(ledger.protocol.locks(ledger.Ledger(alice_ws).events))
+
+    act_as("bob")
+    hm("sync", "-w", bob_ws)
+    drafted = hm("benchmarks", "add", repo, "--no-agent", "-w", bob_ws)                     # pinned to the branch: it has no tag
+    assert drafted.startswith("0 ") and "Tasks that add small numbers." in drafted and "Still needed: fields, paper" in drafted
+    assert hm("benchmarks", "confirm", "-w", bob_ws).startswith("1 Not added yet: it still needs fields, paper")
+    assert "Still needed: fields" in hm("benchmarks", "revise", "paper: none", "-w", bob_ws)
+    hm("benchmarks", "revise", "fields: physics", "-w", bob_ws)
+    assert hm("benchmarks", "confirm", "-w", bob_ws).startswith("1 Not added: you curate can curate: chemistry")   # only in his fields
+    hm("benchmarks", "revise", "fields: chemistry", "-w", bob_ws)
+    added = hm("benchmarks", "confirm", "-w", bob_ws)
+    assert added.startswith("0 Added toy-bench") and "signed by @bob and shared" in added
+
+    act_as("alice")                                                                         # it reaches the owner by a sync, and that is all
+    hm("sync", "-w", alice_ws)
+    entry = tasks.supported.find(alice_ws, "toy-bench")
+    assert (entry["added_by"], entry["ref"], entry["fields"], entry["paper"]) == ("bob", "main", ["chemistry"], "none")
+    assert (alice_ws / "benchmarks" / "toy-bench.toml").exists() and ledger.verify(alice_ws) == []
+    assert len(ledger.protocol.locks(ledger.Ledger(alice_ws).events)) == locks              # no new lock, and the old one still holds
+    check_lock(ledger.protocol.current(ledger.Ledger(alice_ws).events), config_mod.load(alice_ws), alice_ws)
+
+    carol = act_as("carol")                                                                 # only the adder or the owner takes it off
+    with (alice_ws / "contributors.toml").open("a") as f:
+        f.write(f'\n[[contributor]]\nname = "Carol"\ngithub = "carol"\nkey = "{carol.public_key}"\nfields = ["*"]\n')
+    assert "Only they, or the owner" in hm("benchmarks", "remove", "toy-bench", "-w", alice_ws)
+    act_as("alice")
+    assert hm("benchmarks", "remove", "toy-bench", "-w", alice_ws).startswith("0 Took toy-bench off")
+    assert tasks.supported.supported(alice_ws) == [] and not (alice_ws / "benchmarks" / "toy-bench.toml").exists()

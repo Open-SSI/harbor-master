@@ -128,7 +128,7 @@ def trials(events: list[dict]) -> Table:
 
 
 def human(events: list[dict]) -> Table:
-    """Every decision a person made, as the ledger has it: briefs, approvals, verdicts, adapters, locks."""
+    """Every decision a person made, as the ledger has it: briefs, approvals, verdicts, adapters, locks, benchmarks added."""
     rows = []
     for e in sorted(events, key=lambda e: e["time"]):
         kind, detail = "", ""
@@ -138,6 +138,9 @@ def human(events: list[dict]) -> Table:
             kind, detail = f"verdict: {e.get('value', '')}", e.get("reason", "")
         elif e["type"] == "protocol":
             kind, detail = "protocol lock", e.get("note", "")
+        elif e["type"] == "benchmark":
+            kind = "benchmark added" if e.get("value") == "add" else "benchmark removed"
+            detail = (e.get("entry") or {}).get("id") or e.get("target", "")
         elif e["type"] == "decision" and e.get("tier") == "human":
             if e.get("gate") == "signoff":
                 kind, detail = "selection approved", f"{e.get('selected', '')} tasks"

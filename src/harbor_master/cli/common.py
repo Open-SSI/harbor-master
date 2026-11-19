@@ -17,7 +17,8 @@ from ..core import identity as identity_mod
 from ..tui import theme
 
 app = typer.Typer(no_args_is_help=False, add_completion=False,
-                  help="Harbor-Master: curate benchmarks into an index of hard, verified tasks.")
+                  help="Harbor-Master: curate benchmarks into an index of hard, verified tasks.\n\n"
+                       "Type hm alone to open the screen. Every step is a / command there, and a tip says which one is next.")
 keys_app = typer.Typer(no_args_is_help=True, help="API keys, kept in a git-ignored file.")
 ledger_app = typer.Typer(no_args_is_help=True, help="The ledger of decisions, trials and verdicts.")
 dev_app = typer.Typer(no_args_is_help=True, help="Tools for developing Harbor-Master itself.")
@@ -132,12 +133,10 @@ def check_lock(lock: dict | None, cfg, ws: Path) -> None:
         for line in ledger_mod.protocol.differences(lock.get("settings", {}), cfg.protocol_settings())[:12]:
             console.print(f"  {line}")
         fail("Refused. Put the settings back, or have the owner lock the new ones: hm protocol lock")
-    here = templates.digests(ws)
-    changed = [name for name, digest in (lock.get("registry") or {}).items()        # an adapter holds back only its own
-               if here.get(name) != digest and not name.startswith("adapters/")]      # benchmark: the run checks each one
+    changed = templates.changed(lock, ws)
     if changed:
         fail(f"Refused: {', '.join(changed)} differ{'s' if len(changed) == 1 else ''} from what the owner locked. "
-             "Put the file back (git checkout -- FILE), or have the owner lock the new one: hm protocol lock")
+             "Put the file back (git checkout -- FILE), or have the owner lock the new one with /lock.")
 
 
 def not_built(what: str) -> None:

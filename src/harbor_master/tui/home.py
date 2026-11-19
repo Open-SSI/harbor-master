@@ -3,6 +3,7 @@
 It needs nothing set up. A checklist shows the steps from a new machine to a signed verdict,
 and a tip says what to do at the one you are at. Its "/" commands are the `hm` commands
 themselves, run in place, with their output shown here. `/run` leaves for the run screen.
+A shell lists only `run` and the results commands: everything else is done here.
 """
 from __future__ import annotations
 
@@ -32,40 +33,52 @@ COMMANDS: dict[str, tuple[str, str, str]] = {
     "init": ("", "Say who you are, and make your signing key", ""),
     "indexes": ("", "See the indexes that are listed", ""),
     "join": ("NAME-or-URL", "Join an index: it is cloned into a folder here", ""),
-    "new": ("NAME", "Start an index of your own, as its owner", ""),
+    "new": ("[NAME]", "Start an index of your own, as its owner. It asks a few questions", ""),
     "use": ("FOLDER", "Open an index that is in this folder", ""),
-    "leave": ("", "Step out of this index, to pick another", ""),
+    "close": ("", "Step out of this index, to pick another", ""),
     "demo": ("", "Try it on made-up tasks. Spends nothing", ""),
     "index": ("", "What this index is: owner, benchmarks, accepted tasks", "index"),
     "contributors": ("", "Who may contribute to this index", "contributors"),
     "key": ("", "Show your public key, to send to an index's owner", ""),
+    "benchmarks": ("[add URL | remove ID]", "The benchmarks this index may curate. Add one by its address", "benchmarks"),
     "protocol": ("", "The settings a run uses, and what differs from the locked ones", "protocol"),
     "skills": ("[diff | adopt]", "What agents are told in this index, and how it differs from the templates", "skills"),
+    "roster": ("", "The agent configurations benchmarked on this index", "roster"),
     "lock": ("", "Owner: lock the settings, the skills and the lists", ""),
     "connect": ("URL", "Owner: share this index through a git repository", "index connect"),
     "entry": ("", "Owner: print this index's entry for the list of indexes", "index entry"),
     "keys": ("", "Create the keys file, or say where it is", ""),
     "doctor": ("", "Which keys are found, and what this machine can run", "doctor"),
-    "benchmarks": ("", "The benchmarks this index may curate", "benchmarks"),
-    "adapt": ("ID", "Owner: build the adapter for a benchmark that is not in Harbor format", "adapt"),
-    "submit": ("ID", "Fetch a benchmark at its pinned release and register it", "submit"),
     "run": ("[benchmarks] [--simulate]", "Open the run screen. --simulate spends nothing", ""),
+    "adapt": ("ID", "Build a benchmark's adapter again, apart from a run", "adapt"),
+    "claims": ("", "Which tasks someone is working on now", "claims"),
     "status": ("", "Where every task stands", "status"),
-    "tasks": ("[push | pull]", "The accepted tasks, and the store that keeps the accepted version of each", "tasks"),
-    "stats": ("", "Write the statistics of this curation: a report and CSV files, on this machine", "stats"),
     "leaderboard": ("", "How each agent configuration does on the accepted tasks", "leaderboard"),
     "todo": ("", "What is still to benchmark", "todo"),
-    "roster": ("", "The agent configurations benchmarked on this index", "roster"),
+    "tasks": ("[push | pull]", "The accepted tasks, and the store that keeps the accepted version of each", "tasks"),
+    "stats": ("", "Write the statistics of this curation: a report and CSV files, on this machine", "stats"),
     "credits": ("", "Contributions per person", "credits"),
-    "claims": ("", "Which tasks someone is working on now", "claims"),
     "sync": ("", "Pull the shared index and push your records", "sync"),
     "verify": ("", "Check that the ledger is sound", "ledger verify"),
     "help": ("", "This list", ""),
     "quit": ("", "Leave", ""),
 }
-NEEDS_INDEX = {name for name, (_, _, cli) in COMMANDS.items() if cli} | {"lock", "run", "leave"}
+# The order of /help: by the step a command belongs to.
+GROUPS = (("Start", ("init", "indexes", "join", "new", "use", "demo")),
+          ("Set up an index", ("index", "benchmarks", "roster", "skills", "protocol", "lock", "connect", "entry", "contributors", "key")),
+          ("This machine", ("keys", "doctor")),
+          ("Run", ("run", "adapt", "claims")),
+          ("Results", ("status", "leaderboard", "todo", "tasks", "stats", "credits", "sync", "verify")),
+          ("Here", ("close", "help", "quit")))
+NEEDS_INDEX = {name for name, (_, _, cli) in COMMANDS.items() if cli} | {"lock", "run", "close"}
 FORM = (("name", "Your name"), ("affiliation", "Your affiliation, such as a university or a company"),
         ("email", "Your email. It is kept private"), ("github", "Your GitHub handle. It is how the ledger credits you"))
+# What /new asks. Only the name is needed: enter alone skips any of the others.
+NEW = (("name", "A short name for the index: lower case, digits and hyphens, such as my-index"),
+       ("title", "Its full name, such as My Science Index"),
+       ("description", "One or two sentences: what it measures, and for whom"),
+       ("url", "The address of an empty git repository to share it through. Create it first, for example on GitHub"),
+       ("tasks", "Where accepted tasks are kept: a Hugging Face dataset repository, written org/name"))
 WELCOME = ("Harbor-Master curates benchmarks into an index: the tasks that are sound, verifiable, and still too hard "
            "for frontier agents.\n\nThe checklist above shows the steps, and where you are. The tip below it says what to "
            "do now. Type a / command at the prompt: tab completes it, and /help lists them all.")
@@ -129,8 +142,10 @@ class HomeApp(App[tuple[list[str], Path] | None]):
         self.ws = ws or config_mod.find_workspace(self.folder)
         self.note = note                    # what the run just left printed, shown on coming back
         self.state = guide.look(self.ws or self.folder)
-        self.form: list[str] | None = None  # answers so far, while /init asks its questions
+        self.form: list[str] | None = None  # answers so far, while /init or /new asks its questions
+        self.asking = FORM
         self.confirming: list[str] | None = None
+        self.then: list[str] | None = None  # the run to start once the lock that was asked for is made
         self.busy = False
         self.last = ("", "", False)
 
@@ -183,14 +198,21 @@ class HomeApp(App[tuple[list[str], Path] | None]):
 
         box = self.query_one("#tip", Static)
         if self.form is not None:
-            label, question = FORM[len(self.form)]
-            box.border_title = f"question {len(self.form) + 1} of {len(FORM)}"
-            old = getattr(s.ident, label, "") if s.ident else ""
-            box.update(t((question, "bold"), "\n", (f"Type it and press enter. {'Enter alone keeps: ' + old + '. ' if old else ''}esc cancels.", SE)))
+            label, question = self.asking[len(self.form)]
+            box.border_title = f"question {len(self.form) + 1} of {len(self.asking)}"
+            old = self.old(label)
+            skip = "Enter alone skips it. " if self.asking is NEW and self.form else ""
+            box.update(t((question, "bold"), "\n", (f"Type it and press enter. {'Enter alone keeps: ' + old + '. ' if old else skip}esc cancels.", SE)))
         elif self.confirming is not None:
             box.border_title = "confirm"
-            box.update(t(("hm " + " ".join(self.confirming[:2]), "bold"), ("   signs with your key, and every run on this index must then use these settings.\n", SE),
-                         "Run it?  ", ("[y]", f"bold {TE}"), " yes   ", ("[n]", f"bold {RD}"), " no"))
+            box.update(t(("/lock", "bold"), ("   signs the settings, the skills and the lists with your key. Every run on this index must then use them.\n", SE),
+                         "Lock them and start the run?  " if self.then is not None else "Lock them?  ",
+                         ("[y]", f"bold {TE}"), " yes   ", ("[n]", f"bold {RD}"), " no"))
+        elif self.drafting():
+            box.border_title = "a benchmark waits for your answer"
+            box.update(t(("y", f"bold {TE}"), ("   adds it to the index, signed with your key\n", FG),
+                         ("or reply", f"bold {PU}"), ("   with what to change, in plain words or as `paper: https://...`\n", FG),
+                         ("esc", f"bold {RD}"), ("   discards it", FG)))
         else:
             advice = guide.tip(s)
             lines = Table.grid(padding=(0, 2, 0, 0), expand=True)
@@ -200,7 +222,7 @@ class HomeApp(App[tuple[list[str], Path] | None]):
                 lines.add_row(t((command, f"bold {PU}")), t((what, FG if command else SE)))
             box.border_title = advice.title
             box.update(lines)
-        self.query_one("#prompt", Input).placeholder = (FORM[len(self.form)][1] if self.form is not None
+        self.query_one("#prompt", Input).placeholder = (self.asking[len(self.form)][1] if self.form is not None
                                                         else "Type a / command. The tip above says which")
 
     def show(self, title: str, body: Text | str, failed: bool = False) -> None:
@@ -226,15 +248,22 @@ class HomeApp(App[tuple[list[str], Path] | None]):
             names.sort(key=lambda n: wanted.index(n) if n in wanted else len(wanted))        # what the tip names comes first
             return ["/" + n + (" " if COMMANDS[n][0] else "") for n in names]
         s = self.state
-        words = {"use": s.nearby, "submit": s.listed, "adapt": s.to_adapt,
+        words = {"use": s.nearby, "adapt": s.to_adapt, "benchmarks": ["add", "remove"], "skills": ["diff", "adopt"], "tasks": ["push", "pull"],
                  "run": [*dict.fromkeys([*s.registered, *s.listed]), "--simulate"]}.get(head, [])
         done = rest.split()[:-1] if rest and not rest.endswith(" ") else rest.split()
         last = "" if rest.endswith(" ") or not rest else rest.split()[-1]
         return [" ".join(["/" + head, *done, w]) for w in words if w.startswith(last) and w not in done]
 
+    def drafting(self) -> bool:
+        return self.ws is not None and (config_mod.local(self.ws) / "benchmark-draft.json").exists()
+
     def cancel(self) -> None:
+        if self.form is None and self.confirming is None and self.drafting():
+            (config_mod.local(self.ws) / "benchmark-draft.json").unlink()
+            self.show("discarded", "The benchmark was not added.")
+            self.draw()
         if self.form is not None or self.confirming is not None:
-            self.form = self.confirming = None
+            self.form = self.confirming = self.then = None
             self.show("cancelled", "Nothing was changed.")
             self.draw()
         self.query_one("#prompt", Input).value = ""
@@ -248,26 +277,40 @@ class HomeApp(App[tuple[list[str], Path] | None]):
             await self.fill(text)
         elif self.confirming is not None and text.lower() in ("y", "yes", "n", "no"):
             await self.answer(text.lower().startswith("y"))
+        elif text and not text.startswith("/") and self.drafting():       # a reply about the benchmark that is being added
+            here = ["-w", str(self.ws)]
+            if text.lower() in ("y", "yes"):
+                await self.call(["benchmarks", "confirm", *here], "/benchmarks add")
+            else:
+                await self.call(["benchmarks", "revise", *here, "--", text], "/benchmarks add")
         elif text:
             await self.command(text)
 
+    def old(self, label: str) -> str:
+        return (getattr(self.state.ident, label, "") if self.state.ident else "") if self.asking is FORM else ""
+
     async def fill(self, text: str) -> None:
-        """One answer of /init. After the last one, the identity is written."""
-        label = FORM[len(self.form)][0]
-        old = getattr(self.state.ident, label, "") if self.state.ident else ""
-        if not (text or old):
+        """One answer of /init or /new. After the last one, the identity is written or the index is started."""
+        old = self.old(self.asking[len(self.form)][0])
+        if not (text or old) and not (self.asking is NEW and self.form):
             return
         self.form.append(text or old)
-        if len(self.form) < len(FORM):
+        if len(self.form) < len(self.asking):
             self.draw()
             return
         answers, self.form = self.form, None
-        await self.call(["init", *[x for (label, _), value in zip(FORM, answers) for x in (f"--{label}", value)]], "hm init")
+        given = [x for (label, _), value in zip(self.asking, answers) if value for x in (f"--{label}", value)]
+        if self.asking is FORM:
+            await self.call(["init", *given], "/init")
+        else:
+            await self.call(["index", "new", answers[0], str(self.folder / answers[0]), *given[2:]], f"/new {answers[0]}", enter=True)
 
     async def answer(self, yes: bool) -> None:
-        args, self.confirming = self.confirming, None
+        args, self.confirming, then = self.confirming, None, self.then
+        self.then = None
         if yes and args:
-            await self.call(args)
+            if await self.call(args, "/lock") == 0 and then is not None:
+                self.exit((then, self.ws))
         else:
             self.show("declined", "Nothing was changed.")
             self.draw()
@@ -297,7 +340,7 @@ class HomeApp(App[tuple[list[str], Path] | None]):
         elif name == "quit":
             self.exit(None)
         elif name == "init":
-            self.form = []
+            self.form, self.asking = [], FORM
             self.draw()
         elif name == "key":
             self.show("your public key", f"{s.ident.public_key}\n\nSend this line to the owner of an index. They add it to the index's "
@@ -311,13 +354,18 @@ class HomeApp(App[tuple[list[str], Path] | None]):
                 return
             self.ws = target
             await self.call(["index", "-w", str(target)], "hm index")
-        elif name == "leave":
+        elif name == "close":
             self.ws = None
-            self.show("left", f"Back in {self.folder}. Pick an index with /use, /join or /new.")
+            self.show("closed", f"Back in {self.folder}. Pick an index with /use, /join or /new.")
             self.look()
         elif name == "run":
             if not (s.registered or s.listed or s.running):
-                self.show("nothing to run", "This index lists no benchmark yet. Its owner adds one to benchmarks.toml. Or add a made-up one with /demo.", failed=True)
+                self.show("nothing to run", "This index lists no benchmark yet. Add one with /benchmarks add URL. Or add a made-up one with /demo.", failed=True)
+                return
+            if "--simulate" not in args and s.is_owner and s.lock != "locked" and not s.running:
+                await self.call(["protocol", *here], "not locked yet" if s.lock == "none" else "changed since the lock")
+                self.confirming, self.then = ["protocol", "lock", *here], args
+                self.draw()
                 return
             self.exit((args, self.ws))
         elif name == "lock":
@@ -331,10 +379,8 @@ class HomeApp(App[tuple[list[str], Path] | None]):
             else:
                 await self.call(["keys", "init"])
         elif name == "new":
-            if not args:
-                self.show("a name is needed", "/new NAME, for example: /new my-index", failed=True)
-                return
-            await self.call(["index", "new", args[0], str(self.folder / args[0]), *args[1:]], enter=True)
+            self.form, self.asking = args[:1], NEW
+            self.draw()
         elif name in ("join", "demo") and not (name == "demo" and self.ws):
             await self.call([name, *args], enter=True)
         elif name == "indexes":
@@ -342,7 +388,7 @@ class HomeApp(App[tuple[list[str], Path] | None]):
         else:
             await self.call([*(COMMANDS[name][2] or name).split(), *args, *here])
 
-    async def call(self, args: list[str], title: str = "", enter: bool = False) -> None:
+    async def call(self, args: list[str], title: str = "", enter: bool = False) -> int:
         """Run an hm command and show what it printed. With `enter`, step into the index it made."""
         title = title or "hm " + " ".join(a for a in args if a not in ("-w", str(self.ws)))
         before = set(guide.look(self.folder).nearby) if enter else set()
@@ -358,14 +404,18 @@ class HomeApp(App[tuple[list[str], Path] | None]):
                 self.ws = self.folder / new[0]
         self.show(title, out if out.plain.strip() else Text("Done."), failed=code != 0)
         self.look()
+        return code
 
     def help(self) -> Text:
         out = Text()
-        for name, (takes, what, _) in COMMANDS.items():
-            usable = self.ws is not None or name not in NEEDS_INDEX
-            out.append(f"/{name} {takes}".ljust(34), style=f"bold {PU}" if usable else MU)
-            out.append(what + ("" if usable else "   (inside an index)") + "\n", style=FG if usable else MU)
-        out.append("\nEvery one is also an hm command in a shell, such as: " + guide.shell("/run --simulate"), style=SE)
+        for title, names in GROUPS:
+            out.append(title + "\n", style=f"bold {TE}")
+            for name in names:
+                takes, what, _ = COMMANDS[name]
+                usable = self.ws is not None or name not in NEEDS_INDEX
+                out.append(f"  /{name} {takes}".ljust(34), style=f"bold {PU}" if usable else MU)
+                out.append(what + ("" if usable else "   (inside an index)") + "\n", style=FG if usable else MU)
+        out.append("\nIn a shell, hm lists only run and the results: status, stats, leaderboard, credits, todo, sync.", style=SE)
         return out
 
     def action_leave(self) -> None:

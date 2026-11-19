@@ -68,26 +68,32 @@ tasks = "tasks"
 '''
 
 
-def test_the_benchmark_list_and_the_roster_come_from_the_index(tmp_path):
-    from harbor_master import tasks
+def test_the_benchmark_list_comes_from_signed_records_and_the_roster_from_the_index(tmp_path, ident):
+    import tomllib
+    from harbor_master import ledger, tasks
     from harbor_master.core.config import roster
     assert tasks.supported.supported(tmp_path) == [] and roster(tmp_path) == []       # a new index lists nothing
-    (tmp_path / "benchmarks.toml").write_text(BENCHMARKS)
+    entry = {**tomllib.loads(BENCHMARKS)["benchmark"][0], "description": "Science tasks in a terminal.", "paper": "none", "fields": ["chemistry"]}
+    ledger.benchmarks.add(tmp_path, ident, "p", {k: v for k, v in entry.items() if k != "ref"})       # not pinned: it does not count
+    assert tasks.supported.supported(tmp_path) == []
+    ledger.benchmarks.add(tmp_path, ident, "p", entry)
     (tmp_path / "roster.toml").write_text('[[config]]\nname = "astra"\nagent = "codex"\nmodel = "gpt-6-astra"\n'
                                           'reasoning_effort = "max"\nversion = "0.162.1"\nkey = "OPENAI_API_KEY"\n')
     first = tasks.supported.supported(tmp_path)[0]
-    assert (first["id"], first["released"], first["ref"]) == ("tb-science", "2026-08-26", "v0.1.0")
+    assert (first["id"], first["released"], first["ref"], first["added_by"]) == ("tb-science", "2026-08-26", "v0.1.0", ident.github)
     assert tasks.supported.find(tmp_path, "TB-Science")["name"] == "Terminal-Bench-Science"
     assert tasks.supported.find(tmp_path, "smdd-bench") is None
     astra = roster(tmp_path)[0]
     assert (astra.name, astra.agent, astra.model, astra.reasoning_effort, astra.version) == ("astra", "codex", "gpt-6-astra", "max", "0.162.1")
-    (tmp_path / "benchmarks.toml").write_text(BENCHMARKS.replace('ref = "v0.1.0"\n', ""))
-    try:
-        tasks.supported.supported(tmp_path)
-    except ValueError as err:
-        assert "missing ref" in str(err)                      # a benchmark that is not pinned is refused
-    else:
-        raise AssertionError("an unpinned benchmark was accepted")
+
+    ledger.benchmarks.write_views(tmp_path)                                     # a readable copy, which changes nothing when edited
+    view = tmp_path / "benchmarks" / "tb-science.toml"
+    assert tomllib.loads(view.read_text())["commit"] == entry["commit"]
+    view.write_text(view.read_text().replace(entry["commit"], "1" * 40))
+    assert tasks.supported.find(tmp_path, "tb-science")["commit"] == entry["commit"]
+    ledger.benchmarks.remove(tmp_path, ident, "p", "tb-science")
+    ledger.benchmarks.write_views(tmp_path)
+    assert tasks.supported.supported(tmp_path) == [] and not view.exists()
 
 
 def test_the_protocol_comes_from_the_index_and_run_settings_from_this_machine(tmp_path):
