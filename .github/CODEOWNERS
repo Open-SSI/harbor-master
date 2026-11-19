@@ -1,0 +1,6 @@
+# Only the owner changes the list of indexes, the checks that guard an index, and what agents are told by default.
+# This takes effect with branch protection: "Require review from Code Owners".
+/.github/                       @Yibo-Wen
+/indexes.toml                   @Yibo-Wen
+/src/harbor_master/ledger/      @Yibo-Wen
+/src/harbor_master/skills/      @Yibo-Wen

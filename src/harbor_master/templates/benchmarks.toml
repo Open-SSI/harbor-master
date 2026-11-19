@@ -1,0 +1,24 @@
+# The benchmarks this index may curate. `hm run` works only on benchmarks listed here.
+# (Synthetic benchmarks from `hm dev fake-benchmark` run under --simulate only.)
+#
+# To add one: append an entry, with the release pinned to a tag and its commit, so that
+# everyone curates the same tasks. `hm submit ID` fetches it at that commit. Then lock
+# the change: hm protocol lock
+#
+#   id         the short name used with hm, and the benchmark's ID in the ledger
+#   released   the date of the pinned release, used by the recency gate
+#   tasks      where the task folders are inside the repository
+#   manifest   optional: a Harbor dataset.toml that lists which tasks belong to the release
+#
+# [[benchmark]]
+# id = "example-bench"
+# name = "Example Bench"
+# version = "1.0.0"
+# released = "2026-01-31"
+# github = "https://github.com/example/example-bench"
+# ref = "v1.0.0"
+# commit = "0000000000000000000000000000000000000000"
+# tasks = "tasks"
+# format = "harbor"
+# license = "Apache-2.0"
+# fields = ["life sciences"]

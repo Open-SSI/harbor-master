@@ -1,0 +1,35 @@
+# Keys and tokens. Never committed.
+secrets.env
+.env
+.env.*
+
+# The paper is an Overleaf clone with its own history.
+paper/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# What `hm` makes while it is tried from this folder: an index is a repository of its own.
+/workspace/
+/hm-demo/
+/fake/
+.hm/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Agent tooling
+.claude/

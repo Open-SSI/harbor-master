@@ -1,0 +1,20 @@
+# What this index is. Shown wherever indexes are listed, with its owner (from
+# contributors.toml) and its accepted tasks (from index.toml).
+# Not part of the locked protocol: the owner may change it at any time.
+
+# The short name (lower case, digits and hyphens), and the full one.
+name = "$name"
+title = "$title"
+
+# One or two sentences: what the index measures, and for whom.
+description = ""
+homepage = ""
+
+# The licence of the index itself. Each task keeps its benchmark's own.
+license = ""
+
+# Hugging Face repositories for what a run produces. Empty until the index has them.
+# artifacts holds trial archives and reports. restricted holds probes and repair diffs,
+# which reveal solutions and so stay private.
+artifacts = ""
+restricted = ""

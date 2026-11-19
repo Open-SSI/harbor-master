@@ -1,0 +1,22 @@
+# Checks the list of indexes whenever it changes: every entry must name a repository that
+# anyone can clone, that is a sound index, and whose owner is the one on the entry.
+name: indexes
+
+on:
+  pull_request:
+    paths: [indexes.toml]
+  push:
+    branches: [main]
+    paths: [indexes.toml]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run hm indexes --check --list indexes.toml

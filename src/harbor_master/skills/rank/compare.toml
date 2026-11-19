@@ -1,0 +1,7 @@
+# Ranking by importance (DESIGN.md Section 4, Ranking). One yes-or-no question per pair
+# of tasks, asked in both orders. The field lead's brief is part of what the model reads.
+
+question = "Under the field lead's brief, does the first task matter more to the field than the second?"
+yes = "The first task matters more under the brief."
+no = "The second task matters more under the brief."
+system = "You rank benchmark tasks by how much they matter to a scientific field."

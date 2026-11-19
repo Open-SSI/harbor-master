@@ -1,0 +1,16 @@
+# The agent configurations to benchmark on this index. Each one is run on every accepted
+# task, and the leaderboard has one row per entry.
+#
+#   name      what the leaderboard calls it, and what `hm eval --config NAME` takes
+#   key       the variable in secrets.env that this configuration needs
+#   env       settings passed to the agent. Never a key
+#
+# Only the owner changes this file, and locks the change: hm protocol lock
+#
+# [[config]]
+# name = "claude-opus-5.5"
+# agent = "claude-code"
+# model = "claude-opus-5-5"
+# reasoning_effort = "max"
+# version = "2.1.292"
+# key = "ANTHROPIC_API_KEY"

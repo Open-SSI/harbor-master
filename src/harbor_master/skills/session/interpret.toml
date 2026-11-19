@@ -1,0 +1,31 @@
+# Reading a plain-text message typed at the session prompt (DESIGN.md Section 11).
+# The decision model picks one intent per clause. "question", "unsupported" and "none"
+# are not commands. What each command does is in interact/handlers.py.
+
+question = "What does this message ask the curation session to do?"
+# A reading under this probability is shown as "did you mean" and never run. It can be low,
+# because every command read from plain text is confirmed by the user before it runs.
+min_probability = 0.5
+target_question = "Which benchmark, working cell or task does the message refer to?"
+
+[intents]
+question = "It asks for information or an explanation, and does not ask to change anything."
+unsupported = "It asks for something a curation session cannot do, such as editing files, running a shell command, or changing results by hand."
+none = "It is not a request at all, or its meaning cannot be told."
+pause = "Hold, pause or wait: stop taking new tasks, for everything or for one benchmark. Running stages finish."
+resume = "Start taking new tasks again after a pause."
+stop = "Stop one running task now."
+skip = "Set one waiting task aside for this run."
+drop = "Drop, remove or get rid of one task from curation for good."
+priority = "Run one task or benchmark first, before the others that are waiting."
+cells = "Change how many tasks run at once."
+budget = "Set a new spending limit, naming an amount of money."
+quit = "End the session after the running stages finish."
+kill = "Stop everything immediately."
+status = "Show a summary of where the run stands."
+cost = "Show how much money has been spent so far. It changes nothing."
+queue = "Show what is waiting."
+review = "Show the reports waiting for a verdict."
+explain = "Show why one task is where it is."
+approve = "Approve the selection of tasks for a benchmark."
+selection = "Show the ranking and selection for a benchmark."

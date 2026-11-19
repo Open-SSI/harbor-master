@@ -1,0 +1,19 @@
+# $title
+
+An index of hard, verified tasks, curated with [Harbor-Master](https://github.com/Open-SSI/harbor-master).
+This repository is the index: the files that define it, and the ledger of every decision,
+trial and verdict made for it.
+
+| File | Says | Who may change it | How a change is caught |
+|---|---|---|---|
+| `about.toml` | What the index is: its name and description | The owner | Not locked: it changes no result |
+| `protocol.toml` | The curation protocol: every setting that can change a result | The owner | Its checksum is locked in the ledger. A run with a different copy is refused |
+| `benchmarks.toml` | Which benchmarks may be curated, each pinned to a release | The owner | Its checksum is locked in the ledger with the protocol |
+| `roster.toml` | Which agent configurations are benchmarked on the index | The owner | Its checksum is locked in the ledger with the protocol |
+| `contributors.toml` | Who may curate, in which fields, and their signing keys | The owner | Its checksum is locked in the ledger with the protocol, and every record is checked against it |
+| `skills/` | Optional: the instructions this index words its own way | The owner | Part of the protocol's checksum |
+| `ledger/` | Every record, in one file per person and run | Everyone on the list, through `hm` | Signed and chained: `hm ledger verify` |
+| `index.toml` | The accepted tasks | Nobody: `hm` writes it from the signed verdicts | `hm ledger verify` rejects anything the verdicts do not support |
+
+To take part: `hm init`, send your public key to the owner, then `hm join` with this
+repository's address. After changing a locked file, the owner runs `hm protocol lock`.

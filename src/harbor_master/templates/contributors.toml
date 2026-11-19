@@ -1,0 +1,16 @@
+# Who may contribute to this index: submit records, and sign verdicts.
+#
+# A person is identified by their GitHub handle and signing key, never by name. To be
+# able to contribute, an entry needs both:
+#   github   the GitHub handle
+#   key      the public key that `hm init` prints (the private half never leaves the machine)
+# An entry without them is listed but cannot contribute yet.
+#
+# fields says which fields a person may curate and judge, for example
+#   fields = ["life-sciences", "physical-sciences"]
+# The names are the ones benchmarks use for their tasks, written with hyphens. "*" means
+# every field. The owner may curate every field. Anyone else with no fields set is listed
+# but cannot curate.
+#
+# Only the owner changes this file, and locks the change: hm protocol lock
+

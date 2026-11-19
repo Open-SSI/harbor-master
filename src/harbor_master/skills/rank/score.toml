@@ -1,0 +1,15 @@
+# Ranking, step one (DESIGN.md Section 4, Ranking). One request per task: how much the task
+# matters under the field lead's brief, on an ordered scale. The decision model returns a
+# position weighted by its probabilities, so scores are continuous and ties are rare.
+# Step two, rank/compare.toml, then compares in pairs only the tasks near the top.
+
+question = "Under the field lead's brief, how much does this task matter to the field?"
+
+# Ordered from least to most. The first entry is level 0.
+levels = [
+  "A routine exercise. The field would lose nothing without it.",
+  "Useful practice on a standard method, with little bearing on what the brief names as important.",
+  "A solid task in an area the brief cares about, but not one of its priorities.",
+  "Directly on something the brief names as important.",
+  "At the center of what the brief names as most important, and hard to replace with another task.",
+]

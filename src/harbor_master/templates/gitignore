@@ -1,0 +1,4 @@
+# This machine's own files: settings, fetched benchmarks, runs. Never shared.
+.hm/
+secrets.env
+.env

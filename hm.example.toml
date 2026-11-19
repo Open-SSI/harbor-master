@@ -1,0 +1,16 @@
+# Your settings for this workspace: how this machine runs.
+# Change these freely, at any time. They do not change a result, so they are not part
+# of the locked protocol, which is in protocol.toml. Git ignores this folder.
+#
+# No key or token belongs in this file. Keys are read from the environment, or from
+# secrets.env in the Harbor-Master repository folder, which git ignores.
+
+[run]
+cells = 4                       # tasks in flight, one agent session each
+max_containers = 16
+sandbox = "docker"              # "docker" | "daytona" | "modal"
+budget_usd = 200.0              # the session stops taking tasks at this spend
+budget_usd_per_task = 50.0
+max_tokens_per_agent_session = 400000   # curation agents only
+on_incomplete = "resume"        # "resume" | "restart" | "skip", used when nothing can prompt
+claim_hours = 12.0              # how long a claim on tasks holds if the run never releases it
