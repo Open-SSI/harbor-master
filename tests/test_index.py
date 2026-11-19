@@ -34,7 +34,9 @@ def two(tmp_path, monkeypatch):
     subprocess.run(["git", "init", "--quiet", "--bare", "-b", "main", str(remote)], check=True)
     act_as("bob")
     act_as("alice")
-    assert hm("index", "new", "demo", tmp_path / "alice", "--title", "Demo Index").startswith("0 Started the Demo Index index")
+    assert hm("index", "new", "demo", tmp_path / "none").startswith("1 An index needs a store for its accepted tasks")
+    made = hm("index", "new", "demo", tmp_path / "alice", "--title", "Demo Index", "--tasks", tmp_path / "store")
+    assert made.startswith("0 Started the Demo Index index") and "Created the task store" in made and (tmp_path / "store").is_dir()
     assert "started the shared index" in hm("index", "connect", remote, "-w", tmp_path / "alice")
     return act_as, tmp_path / "alice", tmp_path / "bob", remote
 
@@ -43,8 +45,11 @@ def test_a_new_index_is_a_repository_with_its_owner_and_nothing_of_the_machine(t
     act_as, alice_ws, _, _ = two
     tracked = subprocess.run(["git", "ls-files"], cwd=alice_ws, capture_output=True, text=True).stdout.split()
     from harbor_master import skills
-    assert sorted(tracked) == sorted([".gitignore", "README.md", "about.toml", "contributors.toml",
+    assert sorted(tracked) == sorted([".gitignore", "README.md", "about.toml", "contributors.toml", "ledger/_contributors/alice-manual.jsonl",
                                       "protocol.toml", "roster.toml", *(f"skills/{n}" for n in skills.names())])
+    moved = hm("tasks", "store", alice_ws.parent / "store-two", "-w", alice_ws)        # the owner can name another store later
+    assert moved.startswith("0 This index keeps its accepted tasks in") and "Created the task store" in moved
+    assert config_mod.load(alice_ws).about.tasks.endswith("store-two") and "The task store is there" in hm("tasks", "store", "-w", alice_ws)
     assert (alice_ws / ".hm" / "hm.toml").exists() and (alice_ws / ".hm" / "owner").read_text().startswith("alice ssh-ed25519 ")
     cfg = config_mod.load(alice_ws)
     assert (cfg.about.name, cfg.about.title) == ("demo", "Demo Index") and cfg.protocol == config_mod.Config().protocol
@@ -60,10 +65,13 @@ def test_joining_clones_the_index_and_the_lock_guards_every_file_of_it(two):
     assert joined.startswith("0 Demo Index") and "not on this index's contributor list yet" in joined
     assert (bob_ws / "protocol.toml").read_text() == (alice_ws / "protocol.toml").read_text()
 
-    act_as("alice")                                               # the owner adds Bob, and locks
-    with (alice_ws / "contributors.toml").open("a") as f:
-        f.write(f'\n[[contributor]]\nname = "Bob"\ngithub = "bob"\nkey = "{bob.public_key}"\nfields = ["*"]\n')
-    assert "Locked protocol" in hm("protocol", "lock", "-w", alice_ws)
+    assert hm("contributors", "add", "@bob", bob.public_key, "-w", bob_ws).startswith("1 Only the owner adds a contributor")
+    act_as("alice")                                               # the owner adds Bob with his key, and no lock is involved
+    added = hm("contributors", "add", "@bob", bob.public_key, "--name", "Bob", "-w", alice_ws)
+    assert added.startswith("0 @bob can contribute to this index now") and ledger.protocol.locks(ledger.Ledger(alice_ws).events) == []
+    assert hm("contributors", "add", "carol", "not-a-key", "-w", alice_ws).startswith("1 That is not a public key")
+    locked = hm("protocol", "lock", "-w", alice_ws)               # the settings, skills and roster are locked as a version
+    assert "Locked protocol v0.0.0" in locked and "Signed the contributor list" not in locked
     assert "already the locked ones" in hm("protocol", "lock", "-w", alice_ws)
 
     act_as("bob")
@@ -195,29 +203,25 @@ def test_anyone_who_can_curate_adds_a_benchmark_with_no_step_by_the_owner(two, t
     assert "Locked protocol" in hm("protocol", "lock", "-w", alice_ws)
     bob = act_as("bob")
     hm("join", remote, bob_ws)
-    assert hm("benchmarks", "add", repo, "--no-agent", "-w", bob_ws).startswith("1 @bob cannot curate")      # not on the list yet
+    assert hm("benchmarks", "add", repo, "--no-agent", "-w", bob_ws).startswith("1 @bob is not on this index's contributor list")
     act_as("alice")
-    with (alice_ws / "contributors.toml").open("a") as f:
-        f.write(f'\n[[contributor]]\nname = "Bob"\ngithub = "bob"\nkey = "{bob.public_key}"\nfields = ["chemistry"]\n')
-    assert "Locked protocol" in hm("protocol", "lock", "-w", alice_ws)
+    assert hm("contributors", "add", "bob", bob.public_key, "-w", alice_ws).startswith("0 ")
     locks = len(ledger.protocol.locks(ledger.Ledger(alice_ws).events))
+    assert locks == 1                                                                       # adding a person made no new lock
 
     act_as("bob")
     hm("sync", "-w", bob_ws)
     drafted = hm("benchmarks", "add", repo, "--no-agent", "-w", bob_ws)                     # pinned to the branch: it has no tag
-    assert drafted.startswith("0 ") and "Tasks that add small numbers." in drafted and "Still needed: fields, paper" in drafted
-    assert hm("benchmarks", "confirm", "-w", bob_ws).startswith("1 Not added yet: it still needs fields, paper")
-    assert "Still needed: fields" in hm("benchmarks", "revise", "paper: none", "-w", bob_ws)
-    hm("benchmarks", "revise", "fields: physics", "-w", bob_ws)
-    assert hm("benchmarks", "confirm", "-w", bob_ws).startswith("1 Not added: you curate can curate: chemistry")   # only in his fields
-    hm("benchmarks", "revise", "fields: chemistry", "-w", bob_ws)
+    assert drafted.startswith("0 ") and "Tasks that add small numbers." in drafted and "Still needed: paper" in drafted
+    assert hm("benchmarks", "confirm", "-w", bob_ws).startswith("1 Not added yet: it still needs paper")
+    assert "Reply y to add it" in hm("benchmarks", "revise", "paper: none", "-w", bob_ws)
     added = hm("benchmarks", "confirm", "-w", bob_ws)
     assert added.startswith("0 Added toy-bench") and "signed by @bob and shared" in added
 
     act_as("alice")                                                                         # it reaches the owner by a sync, and that is all
     hm("sync", "-w", alice_ws)
     entry = tasks.supported.find(alice_ws, "toy-bench")
-    assert (entry["added_by"], entry["ref"], entry["fields"], entry["paper"]) == ("bob", "main", ["chemistry"], "none")
+    assert (entry["added_by"], entry["ref"], entry["paper"]) == ("bob", "main", "none")
     import tomllib
     listed = lambda ws: [b["id"] for b in tomllib.loads((ws / "benchmarks.toml").read_text()).get("benchmark", [])]  # noqa: E731
     assert listed(alice_ws) == ["toy-bench"] and ledger.verify(alice_ws) == []
@@ -227,8 +231,9 @@ def test_anyone_who_can_curate_adds_a_benchmark_with_no_step_by_the_owner(two, t
     check_lock(ledger.protocol.current(ledger.Ledger(alice_ws).events), config_mod.load(alice_ws), alice_ws)
 
     carol = act_as("carol")                                                                 # only the adder or the owner takes it off
-    with (alice_ws / "contributors.toml").open("a") as f:
-        f.write(f'\n[[contributor]]\nname = "Carol"\ngithub = "carol"\nkey = "{carol.public_key}"\nfields = ["*"]\n')
+    act_as("alice")
+    hm("contributors", "add", "carol", carol.public_key, "-w", alice_ws)
+    act_as("carol")
     assert "Only they, or the owner" in hm("benchmarks", "remove", "toy-bench", "-w", alice_ws)
     act_as("alice")
     assert hm("benchmarks", "remove", "toy-bench", "-w", alice_ws).startswith("0 Took toy-bench off")
@@ -249,3 +254,36 @@ def test_anyone_who_can_curate_adds_a_benchmark_with_no_step_by_the_owner(two, t
     hm("sync", "-w", alice_ws)
     assert listed(bob_ws) == ["one", "two"] == listed(alice_ws)
     assert subprocess.run(["git", "status", "--porcelain"], cwd=bob_ws, capture_output=True, text=True).stdout == ""
+
+
+def test_each_lock_has_a_version_and_the_contributor_list_is_the_owners_to_change(two):
+    act_as, alice_ws, bob_ws, remote = two
+    version = lambda: ledger.protocol.version(ledger.protocol.current(ledger.Ledger(alice_ws).events))  # noqa: E731
+    assert "Locked protocol v0.0.0" in hm("protocol", "lock", "-w", alice_ws)          # everything starts at 0.0.0
+    (alice_ws / "roster.toml").write_text('[[config]]\nname = "mine"\nagent = "a"\nmodel = "m"\n')
+    kept = hm("protocol", "lock", "-w", alice_ws)                 # a lock keeps the version unless a new one is asked for
+    assert "Locked protocol v0.0.0" in kept and "The version stays v0.0.0" in kept and "/lock patch" in kept
+    assert "Locked protocol v0.0.1" in hm("protocol", "lock", "--bump", "patch", "-w", alice_ws) and version() == "0.0.1"
+    protocol = alice_ws / "protocol.toml"
+    protocol.write_text(protocol.read_text().replace("max_agent_hours = 4.0", "max_agent_hours = 2.0"))
+    changed = hm("protocol", "lock", "--bump", "minor", "-w", alice_ws)       # changed settings: a new minor version
+    assert "Locked protocol v0.1.0" in changed and "It replaces" in changed and version() == "0.1.0"
+    assert "Locked: v0.1.0" in hm("protocol", "-w", alice_ws) and "locked as v0.1.0" in hm("index", "-w", alice_ws)
+    assert "already the locked ones" in hm("protocol", "lock", "-w", alice_ws) and version() == "0.1.0"
+    refused = hm("protocol", "lock", "--bump", "major", "-w", alice_ws)       # 1.0.0 is for the release, and cannot be set yet
+    assert refused.startswith("1 ") and "1.0.0 is kept for the index's release" in refused and version() == "0.1.0"
+    assert ledger.protocol.bumped("0.0.1", "patch") == "0.0.2" and ledger.protocol.bumped("0.1.4", "minor") == "0.2.0"
+
+    bob = act_as("bob")                                           # someone adds himself to the list by hand
+    hm("join", remote, bob_ws)
+    with (bob_ws / "contributors.toml").open("a") as f:
+        f.write(f'\n[[contributor]]\nname = "Bob"\ngithub = "bob"\nkey = "{bob.public_key}"\n')
+    with pytest.raises(typer.Exit):
+        check_lock(ledger.protocol.current(ledger.Ledger(bob_ws).events), config_mod.load(bob_ws), bob_ws)
+    assert any("not the list its owner signed" in p for p in ledger.verify(bob_ws))
+    act_as("alice")                                               # the owner's own edit by hand is signed at her next lock
+    with (alice_ws / "contributors.toml").open("a") as f:
+        f.write(f'\n[[contributor]]\nname = "Bob"\ngithub = "bob"\nkey = "{bob.public_key}"\n')
+    signed = hm("protocol", "lock", "-w", alice_ws)
+    assert "Signed the contributor list" in signed and "already the locked ones" in signed and version() == "0.1.0"
+    assert ledger.verify(alice_ws) == []

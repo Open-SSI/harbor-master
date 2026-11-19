@@ -34,6 +34,8 @@ class State:
     to_adapt: list[str] = field(default_factory=list)   # the ones in another format that have no adapter yet
     abandoned: list[str] = field(default_factory=list)  # the ones given up, because no adapter could be made to pass
     lock: str = "none"                                  # none | locked | differs
+    version: str = ""                                   # the locked protocol's version, such as 0.1.2
+    store: str = ""                                     # where the index keeps its accepted tasks
     shared: str = ""                                    # the repository it is shared through
     skills_missing: int = 0                             # curation skills the index has no copy of
     missing_keys: list[tuple[str, str]] = field(default_factory=list)   # (what for, variable)
@@ -81,7 +83,7 @@ def look(start: Path | None = None) -> State:
     if s.ident is not None:
         s.me = next((c for c in people if c.get("github", "").lower() == s.ident.github.lower()), None)
         s.is_owner = bool(s.me and s.me.get("role") == "owner" and s.me.get("key"))
-        s.can_curate = ledger_mod.fields_of(people, s.ident.github) != set()
+        s.can_curate = ledger_mod.can_contribute(s.me)
     events = ledger_mod.Ledger(ws).events
     s.abandoned = sorted(ledger_mod.abandoned(events))
     s.to_adapt = [b for b in s.to_adapt if b not in s.abandoned]
@@ -89,12 +91,14 @@ def look(start: Path | None = None) -> State:
     if lock is not None:
         from .. import templates
         same = lock["protocol"] == cfg.protocol and not templates.changed(lock, ws)
-        s.lock = "locked" if same else "differs"
+        s.lock, s.version = "locked" if same else "differs", ledger_mod.protocol.version(lock)
     if (ws / ".git").exists():
         s.shared = ledger_mod.Sync(ws)._git("remote", "get-url", "origin", check=False).stdout.strip()
     from .. import skills
     s.skills_missing = len(skills.missing(ws / "skills"))
-    s.missing_keys = [(what, var) for what, var, present, _ in keys_mod.doctor(cfg) if not present and what != "task store"]
+    s.store = (cfg.about.tasks or "").strip()
+    on_hub = bool(s.store) and not s.store.startswith(("/", "~", "."))       # a store on Hugging Face needs each person's own token
+    s.missing_keys = [(what, var) for what, var, present, _ in keys_mod.doctor(cfg) if not present and (what != "task store" or on_hub)]
     s.keys_file = keys_mod.secrets_path()
     s.registered = tasks_mod.read_registry(ws)
     from .. import host
@@ -122,13 +126,13 @@ def steps(s: State) -> list[tuple[str, str, str]]:
         rows.append(("An index", False, f"none here ({len(s.nearby)} in this folder)" if s.nearby else "none here yet"))
         rows += [(name, False, "") for name in STEPS[2:]]
     else:
-        place = ("you own it" if s.is_owner else "you can curate" if s.can_curate else
-                 "listed, but you cannot curate yet" if s.me else "you are not on its contributor list")
+        place = ("you own it" if s.is_owner else "you can contribute" if s.can_curate else
+                 "listed, waiting for your key" if s.me else "you are not on its contributor list")
         keys = "all found" if not s.missing_keys else f"{len(s.missing_keys)} missing, needed for real runs"
         rows += [
             ("An index", True, f"{s.title}   {s.ws}"),
             ("Your place in it", s.can_curate, place + (f"   owner: {s.owner}" if s.owner and not s.is_owner else "")),
-            ("The protocol", s.lock == "locked", {"none": "not locked yet, needed for real runs", "locked": "locked",
+            ("The protocol", s.lock == "locked", {"none": "not locked yet, needed for real runs", "locked": f"locked, v{s.version}",
                                                   "differs": "this copy is not the locked one"}[s.lock]),
             ("Keys", not s.missing_keys, keys),
             ("A benchmark", bool(set(s.registered) | set(s.listed) - set(s.abandoned)),
@@ -218,29 +222,27 @@ def tip(s: State) -> Tip:
             lines.insert(0, ("/use FOLDER", "Open one that is already in this folder: " + ", ".join(s.nearby)))
         return Tip("Next: pick an index to work on", lines + [TRY])
     if step == "Your place in it":
-        if s.me is None or not s.me.get("key"):
-            return Tip("Next: ask the owner to add you", [
+        return Tip("Next: ask the owner to add you", [
                 ("", f"You are not on this index's contributor list, so it accepts no records from you yet. Its owner is {s.owner or 'not listed'}."),
-                ("/key", "Shows your public key. Send it to the owner, who adds you and locks the list"),
+                ("/whoami", "Shows who you are, and one line to send the owner. They paste it, and you are added"),
                 ("/sync", "Brings in the owner's change once they have made it"),
                 TRY])
-        return Tip("Next: ask the owner for your fields", [
-            ("", f"You are on the list, but with no fields set, so you cannot curate yet. Ask {s.owner or 'the owner'} to set them."),
-            ("/contributors", "Shows the list and what each person may curate"),
-            ("/sync", "Brings in the owner's change once they have made it"),
-            TRY])
     if step == "The protocol":
         if s.is_owner:
             lines = []
             if not s.described:
                 lines.append(("", "Describe the index in about.toml, so that others know what it is."))
+            if not s.store:
+                lines.append(("/tasks store ORG/NAME", "Names the store for accepted tasks, on Hugging Face, and creates it. Real runs need it"))
             if s.skills_missing:
                 lines.append(("/skills adopt", f"Copies the {s.skills_missing} skills this index lacks into it. What agents are told is then "
                                                "the index's own, and is locked with it"))
             else:
                 lines.append(("/skills", "What agents are told in this index. Edit a file under skills/ to word it your way"))
             lines.append(("/protocol", "Shows the settings a run would use, and what differs from the locked ones"))
-            lines.append(("/lock", "Signs the settings, the skills, the roster and the contributor list. Real runs need it, and /run asks for it too"))
+            lines.append(("/lock", "Signs the settings, the skills and the roster. Real runs need it, and /run asks for it too"))
+            lines.append(("/lock minor", "The same, under a new version: minor for changed settings or skills, patch for a small change"))
+            lines.append(("/contributors add HANDLE KEY", "Lets someone else contribute, from the key they send you. It needs no lock"))
             if not s.shared:
                 lines.append(("/connect URL", "Shares the index through a git repository, so that others can join it"))
             lines.append(_meanwhile(s, "lock"))
@@ -265,10 +267,10 @@ def tip(s: State) -> Tip:
                 ("", f"{', '.join(s.abandoned)} was abandoned: no adapter could be made to pass, so no run takes it."),
                 (f"/adapt {s.abandoned[0]}", "Try again. An adapter that passes reopens the benchmark"),
                 ("/demo", "Adds a made-up benchmark, for simulated runs only. It spends nothing")])
-        lines = [("", "This index lists no benchmark yet. Anyone who can curate may add one.")]
+        lines = [("", "This index lists no benchmark yet. Anyone on its contributor list may add one.")]
         if s.can_curate:
             lines.append(("/benchmarks add URL", "Give the address of its git repository. An agent reads it and drafts the entry: "
-                                                 "name, description, paper, fields. You confirm it, or reply with what to change"))
+                                                 "name, description, paper. You confirm it, or reply with what to change"))
         lines.append(("/demo", "Adds a made-up benchmark, for simulated runs only. It spends nothing"))
         return Tip("Next: get a benchmark to curate", lines)
     if step == "A run":

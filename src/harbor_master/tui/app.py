@@ -20,18 +20,20 @@ from .. import interact
 from ..engine import Session
 from ..interact import Command, Intent, guide
 from . import render
+from . import theme
 from .theme import AM, BG, BORDER, FG, MU, PU, RD, SE, TE, t
 from .widgets import Completer, Prompt, TaskScreen
 
-KEYS = t(("1-9", SE), (" open cell   ", MU), ("ctrl+p", SE), (" pause   ", MU), ("esc", SE), (" close panel   ", MU),
-         ("/", SE), (" commands   ", MU), ("?", SE), (" help   ", MU), ("ctrl+l", SE), (" leave, run goes on   ", MU),
-         ("ctrl+q", SE), (" end the run", MU))
+KEYS = t(("1-9", SE), (" open cell   ", MU), ("ctrl+p", SE), (" pause   ", MU), ("esc", SE), (" close   ", MU),
+         ("/", SE), (" commands   ", MU), ("?", SE), (" help   ", MU), ("ctrl+l", SE), (" leave   ", MU),
+         ("ctrl+t", SE), (" light/dark   ", MU), ("ctrl+q", SE), (" end run", MU))
 DETACH = "\x1b_hm-detach\x1b\\"        # tells the relay behind this screen that the user has left it
 
 
 class SessionApp(App[None]):
     ENABLE_COMMAND_PALETTE = False
-    BINDINGS = [("ctrl+p", "toggle_pause", "Pause"), ("ctrl+q", "quit_run", "Quit"), ("ctrl+l", "leave", "Leave")]
+    BINDINGS = [("ctrl+p", "toggle_pause", "Pause"), ("ctrl+q", "quit_run", "Quit"), ("ctrl+l", "leave", "Leave"),
+                ("ctrl+t", "theme", "Light or dark")]
     CSS = f"""
     Screen {{ background: {BG}; color: {FG}; }}
     #top {{ height: 1fr; scrollbar-size: 0 0; }}
@@ -75,6 +77,8 @@ class SessionApp(App[None]):
             self.query_one(f"#{name}").border_title = name
         self.query_one("#cells").border_title = "working cells"
         self.query_one("#prompt").focus()
+        self._light = theme.light_filter()
+        self._filters.append(self._light)
         self._run = asyncio.create_task(self.session.run())
         self.set_interval(0.1, self.refresh_view)
         self.refresh_view()
@@ -119,7 +123,11 @@ class SessionApp(App[None]):
         except NoMatches:       # a task screen is open, or the app is closing
             pass
 
+    def action_theme(self) -> None:
+        theme.set_mode("")
+
     def _refresh_view(self) -> None:
+        theme.follow(self, self._light)         # ctrl+t or /theme changed it
         s, now, width = self.session, time.time(), self.size.width
         self.query_one("#header", Static).update(render.header(s, width))
         self.query_one("#summary", Static).update(render.summary(s, now, width))

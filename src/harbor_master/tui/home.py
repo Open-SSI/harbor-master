@@ -24,6 +24,7 @@ from .. import __version__
 from ..core import config as config_mod
 from ..core import identity as identity_mod
 from ..interact import guide
+from . import theme
 from .theme import AM, BG, BORDER, FG, MU, PU, RD, SE, TE, t
 
 Execute = Callable[[list[str], int], tuple[int, Text]]      # run `hm ARGS` at a width: exit code and what it printed
@@ -38,13 +39,13 @@ COMMANDS: dict[str, tuple[str, str, str]] = {
     "close": ("", "Step out of this index, to pick another", ""),
     "demo": ("", "Try it on made-up tasks. Spends nothing", ""),
     "index": ("", "What this index is: owner, benchmarks, accepted tasks", "index"),
-    "contributors": ("", "Who may contribute to this index", "contributors"),
-    "key": ("", "Show your public key, to send to an index's owner", ""),
+    "contributors": ("[add HANDLE KEY | remove HANDLE]", "Who may contribute to this index. Owner: add someone by their key", "contributors"),
+    "whoami": ("", "Who you are here, and the line to send an index's owner so they can add you", ""),
     "benchmarks": ("[add URL | remove ID]", "The benchmarks this index may curate. Add one by its address", "benchmarks"),
     "protocol": ("", "The settings a run uses, and what differs from the locked ones", "protocol"),
     "skills": ("[diff | adopt]", "What agents are told in this index, and how it differs from the templates", "skills"),
     "roster": ("", "The agent configurations benchmarked on this index", "roster"),
-    "lock": ("", "Owner: lock the settings, the skills and the lists", ""),
+    "lock": ("[patch | minor]", "Owner: lock the settings, the skills and the roster. With patch or minor, under a new version", ""),
     "connect": ("URL", "Owner: share this index through a git repository", "index connect"),
     "entry": ("", "Owner: print this index's entry for the list of indexes", "index entry"),
     "keys": ("", "Create the keys file, or say where it is", ""),
@@ -55,34 +56,36 @@ COMMANDS: dict[str, tuple[str, str, str]] = {
     "status": ("", "Where every task stands", "status"),
     "leaderboard": ("", "How each agent configuration does on the accepted tasks", "leaderboard"),
     "todo": ("", "What is still to benchmark", "todo"),
-    "tasks": ("[push | pull]", "The accepted tasks, and the store that keeps the accepted version of each", "tasks"),
+    "tasks": ("[push | pull | store]", "The accepted tasks, and the store that keeps the accepted version of each", "tasks"),
     "stats": ("", "Write the statistics of this curation: a report and CSV files, on this machine", "stats"),
     "credits": ("", "Contributions per person", "credits"),
     "sync": ("", "Pull the shared index and push your records", "sync"),
     "verify": ("", "Check that the ledger is sound", "ledger verify"),
+    "theme": ("[light | dark]", "Switch the screen between light and dark. Also ctrl+t", ""),
     "help": ("", "This list", ""),
     "quit": ("", "Leave", ""),
 }
 # The order of /help: by the step a command belongs to.
 GROUPS = (("Start", ("init", "indexes", "join", "new", "use", "demo")),
-          ("Set up an index", ("index", "benchmarks", "roster", "skills", "protocol", "lock", "connect", "entry", "contributors", "key")),
+          ("Set up an index", ("index", "benchmarks", "roster", "skills", "protocol", "lock", "connect", "entry", "contributors", "whoami")),
           ("This machine", ("keys", "doctor")),
           ("Run", ("run", "adapt", "claims")),
           ("Results", ("status", "leaderboard", "todo", "tasks", "stats", "credits", "sync", "verify")),
-          ("Here", ("close", "help", "quit")))
+          ("Here", ("close", "theme", "help", "quit")))
 NEEDS_INDEX = {name for name, (_, _, cli) in COMMANDS.items() if cli} | {"lock", "run", "close"}
 FORM = (("name", "Your name"), ("affiliation", "Your affiliation, such as a university or a company"),
         ("email", "Your email. It is kept private"), ("github", "Your GitHub handle. It is how the ledger credits you"))
-# What /new asks. Only the name is needed: enter alone skips any of the others.
+# What /new asks. The name and the task store are needed: enter alone skips any of the others.
 NEW = (("name", "A short name for the index: lower case, digits and hyphens, such as my-index"),
        ("title", "Its full name, such as My Science Index"),
        ("description", "One or two sentences: what it measures, and for whom"),
-       ("url", "The address of an empty git repository to share it through. Create it first, for example on GitHub"),
-       ("tasks", "Where accepted tasks are kept: a Hugging Face dataset repository, written org/name"))
+       ("tasks", "The store for its accepted tasks: a Hugging Face dataset repository, written org/name. It is created for you"),
+       ("url", "The address of an empty git repository to share it through. Create it first, for example on GitHub"))
+NEEDED = ("name", "tasks")
 WELCOME = ("Harbor-Master curates benchmarks into an index: the tasks that are sound, verifiable, and still too hard "
            "for frontier agents.\n\nThe checklist above shows the steps, and where you are. The tip below it says what to "
            "do now. Type a / command at the prompt: tab completes it, and /help lists them all.")
-KEYS = t(("/", SE), (" commands   ", MU), ("tab", SE), (" completes   ", MU), ("esc", SE), (" clears   ", MU),
+KEYS = t(("/", SE), (" commands   ", MU), ("tab", SE), (" completes   ", MU), ("esc", SE), (" clears   ", MU), ("ctrl+t", SE), (" light or dark   ", MU),
          ("ctrl+q", SE), (" quit", MU))
 
 
@@ -122,7 +125,7 @@ class HomePrompt(Input):
 class HomeApp(App[tuple[list[str], Path] | None]):
     """Returns the arguments of a run to start and the index to start it in, or None to leave."""
     ENABLE_COMMAND_PALETTE = False
-    BINDINGS = [("ctrl+q", "leave", "Quit")]
+    BINDINGS = [("ctrl+q", "leave", "Quit"), ("ctrl+t", "theme", "Light or dark")]
     CSS = f"""
     Screen {{ background: {BG}; color: {FG}; }}
     #top {{ height: 1fr; scrollbar-size: 0 0; }}
@@ -161,6 +164,8 @@ class HomeApp(App[tuple[list[str], Path] | None]):
 
     def on_mount(self) -> None:
         os.environ.setdefault("GIT_TERMINAL_PROMPT", "0")       # a clone must fail, not ask for a password under the screen
+        self._light = theme.light_filter()
+        self._filters.append(self._light)
         self.query_one("#steps").border_title = "getting started"
         self.query_one("#prompt").focus()
         if self.note:
@@ -201,11 +206,12 @@ class HomeApp(App[tuple[list[str], Path] | None]):
             label, question = self.asking[len(self.form)]
             box.border_title = f"question {len(self.form) + 1} of {len(self.asking)}"
             old = self.old(label)
-            skip = "Enter alone skips it. " if self.asking is NEW and self.form else ""
+            skip = "Enter alone skips it. " if self.asking is NEW and label not in NEEDED else ""
             box.update(t((question, "bold"), "\n", (f"Type it and press enter. {'Enter alone keeps: ' + old + '. ' if old else skip}esc cancels.", SE)))
         elif self.confirming is not None:
             box.border_title = "confirm"
-            box.update(t(("/lock", "bold"), ("   signs the settings, the skills and the lists with your key. Every run on this index must then use them.\n", SE),
+            box.update(t(("/lock", "bold"), ("   signs the settings, the skills and the roster with your key. Every run on this index must then use them.\n", SE),
+                         (self.version_line() + "\n", SE),
                          "Lock them and start the run?  " if self.then is not None else "Lock them?  ",
                          ("[y]", f"bold {TE}"), " yes   ", ("[n]", f"bold {RD}"), " no"))
         elif self.drafting():
@@ -248,11 +254,18 @@ class HomeApp(App[tuple[list[str], Path] | None]):
             names.sort(key=lambda n: wanted.index(n) if n in wanted else len(wanted))        # what the tip names comes first
             return ["/" + n + (" " if COMMANDS[n][0] else "") for n in names]
         s = self.state
-        words = {"use": s.nearby, "adapt": s.to_adapt, "benchmarks": ["add", "remove"], "skills": ["diff", "adopt"], "tasks": ["push", "pull"],
+        words = {"use": s.nearby, "adapt": s.to_adapt, "benchmarks": ["add", "remove"], "contributors": ["add", "remove"], "lock": ["patch", "minor"], "theme": ["light", "dark"], "skills": ["diff", "adopt"], "tasks": ["push", "pull", "store"],
                  "run": [*dict.fromkeys([*s.registered, *s.listed]), "--simulate"]}.get(head, [])
         done = rest.split()[:-1] if rest and not rest.endswith(" ") else rest.split()
         last = "" if rest.endswith(" ") or not rest else rest.split()[-1]
         return [" ".join(["/" + head, *done, w]) for w in words if w.startswith(last) and w not in done]
+
+    def version_line(self) -> str:
+        from ..ledger import protocol
+        now = self.state.version or protocol.START
+        how = self.confirming[self.confirming.index("--bump") + 1] if self.confirming and "--bump" in self.confirming else ""
+        return f"The version goes from v{now} to v{protocol.bumped(now, how)}." if how else \
+            f"The version stays v{now}. For a new one: /lock patch or /lock minor."
 
     def drafting(self) -> bool:
         return self.ws is not None and (config_mod.local(self.ws) / "benchmark-draft.json").exists()
@@ -292,7 +305,7 @@ class HomeApp(App[tuple[list[str], Path] | None]):
     async def fill(self, text: str) -> None:
         """One answer of /init or /new. After the last one, the identity is written or the index is started."""
         old = self.old(self.asking[len(self.form)][0])
-        if not (text or old) and not (self.asking is NEW and self.form):
+        if not (text or old) and not (self.asking is NEW and self.asking[len(self.form)][0] not in NEEDED):
             return
         self.form.append(text or old)
         if len(self.form) < len(self.asking):
@@ -327,7 +340,7 @@ class HomeApp(App[tuple[list[str], Path] | None]):
                       + " /help lists them all.", failed=True)
             return
         s = self.state
-        if s.ident is None and name not in ("init", "help", "quit", "indexes", "keys"):
+        if s.ident is None and name not in ("init", "help", "quit", "indexes", "keys", "theme"):
             self.show("first, who you are", "That needs your identity, because what you do is signed. Start with /init.", failed=True)
             return
         if self.ws is None and name in NEEDS_INDEX:
@@ -342,10 +355,15 @@ class HomeApp(App[tuple[list[str], Path] | None]):
         elif name == "init":
             self.form, self.asking = [], FORM
             self.draw()
-        elif name == "key":
-            self.show("your public key", f"{s.ident.public_key}\n\nSend this line to the owner of an index. They add it to the index's "
-                      "contributors.toml with your GitHub handle and the fields you may curate, and lock the change. "
-                      "The private half never leaves this machine.")
+        elif name == "theme":
+            now = theme.set_mode(args[0] if args else "")
+            theme.follow(self, self._light)
+            self.show("theme", f"The screen is in {now} mode now, here and on the run screen. ctrl+t switches it too.")
+        elif name == "whoami":
+            self.show("who you are", f"{s.ident.label()}\n\nTo join an index, send its owner this line:\n\n"
+                      f"/contributors add {s.ident.github} {s.ident.public_key}\n\n"
+                      "They paste it on their hm screen, and /sync brings it to you. It holds your GitHub handle and your public key. "
+                      "The private half of the key never leaves this machine.")
         elif name == "use":
             target = (self.folder / args[0]).resolve() if args else None
             if target is None or not (target / config_mod.PROTOCOL_NAME).exists():
@@ -369,7 +387,12 @@ class HomeApp(App[tuple[list[str], Path] | None]):
                 return
             self.exit((args, self.ws))
         elif name == "lock":
-            self.confirming = ["protocol", "lock", *here]
+            if args and args[0] not in ("patch", "minor"):
+                self.show("patch or minor", "/lock keeps the version. /lock patch goes from 0.0.1 to 0.0.2, for a small change such as the "
+                          "roster. /lock minor goes from 0.1.0 to 0.2.0, for changed settings or skills. 1.0.0 is kept for the "
+                          "index's release, and cannot be set yet.", failed=True)
+                return
+            self.confirming = ["protocol", "lock", *(["--bump", args[0]] if args else []), *here]
             self.draw()
         elif name == "keys":
             path = s.keys_file or identity_mod.config_dir() / "secrets.env"
@@ -420,3 +443,7 @@ class HomeApp(App[tuple[list[str], Path] | None]):
 
     def action_leave(self) -> None:
         self.exit(None)
+
+    def action_theme(self) -> None:
+        theme.set_mode("")
+        theme.follow(self, self._light)

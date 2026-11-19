@@ -33,7 +33,7 @@ def world(tmp_path, monkeypatch):
     for name in ("alice", "bob"):
         act_as(name)
     listed = [{"name": p["ident"].name, "github": p["ident"].github, "key": p["ident"].public_key,
-               **({"role": "owner"} if name == "alice" else {"fields": ["*"]})} for name, p in people.items()]
+               **({"role": "owner"} if name == "alice" else {})} for name, p in people.items()]
     cfg = config_mod.Config()
     cfg.select.require_brief = cfg.select.require_signoff = False
     cfg.select.top_k, cfg.select.max_fraction = 20, 1.0
@@ -45,7 +45,7 @@ def world(tmp_path, monkeypatch):
     bob = act_as("bob")
     ledger.Sync.clone(str(remote), bob["ws"], bob["ident"].name, "bob")
     for p in people.values():
-        tasks.register(p["ws"], BENCH, bench, "chemistry")
+        tasks.register(p["ws"], BENCH, bench)
 
     def session(name: str, run_id: str) -> Session:
         p = act_as(name)
@@ -168,7 +168,7 @@ def test_only_the_owner_may_lock(tmp_path, ident):
     d = tmp_path / "index"
     d.mkdir()
     (d / ledger.CONTRIBUTORS).write_text(
-        f'[[contributor]]\nname="T"\ngithub="{ident.github}"\nkey="{ident.public_key}"\nfields=["*"]\n')
+        f'[[contributor]]\nname="T"\ngithub="{ident.github}"\nkey="{ident.public_key}"\n')
     cfg = config_mod.Config()
     ledger.Shard(d, protocol.BENCH, ident, "lock-1", cfg.protocol).append("protocol", settings=cfg.protocol_settings())
     assert any("not the owner" in p for p in ledger.verify(d))
@@ -183,7 +183,7 @@ async def test_a_run_shares_its_records_and_never_its_edits_to_the_index(world):
     session, act_as = world
     bob_ws = act_as("bob")["ws"]
     assert (bob_ws / config_mod.PROTOCOL_NAME).exists() and (bob_ws / ledger.CONTRIBUTORS).exists()   # joining brought the index
-    (bob_ws / ledger.CONTRIBUTORS).write_text((bob_ws / ledger.CONTRIBUTORS).read_text().replace('fields = [\n    "*",\n]', 'role = "owner"'))
+    (bob_ws / ledger.CONTRIBUTORS).write_text((bob_ws / ledger.CONTRIBUTORS).read_text().replace('github = "bob"', 'github = "bob"\nrole = "owner"'))
     (bob_ws / "roster.toml").write_text('[[config]]\nname = "mine"\nagent = "a"\nmodel = "m"\n')
     bob = session("bob", "b1")
     await shared.run_shared(bob, bob.benches[BENCH])                # Bob claims and pushes

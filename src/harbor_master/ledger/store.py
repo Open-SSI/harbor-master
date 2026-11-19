@@ -18,7 +18,7 @@ from .events import EVENT_TYPES, TIER_RANK, canonical, duplicate_key, event_id, 
 
 SHARDS = "ledger"            # the folder of an index repository that holds the shards
 REPORTS = "reports"          # and the one that holds the reports that reviewers sign
-KEEP = {"value", "outcome", "tasks", "expires", "settings", "registry"}      # written even when empty or zero
+KEEP = {"value", "outcome", "tasks", "expires", "settings", "registry", "version"}      # written even when empty or zero
 MANUAL = "manual"            # the shard for records a person makes by hand: briefs, verdicts, locks
 
 

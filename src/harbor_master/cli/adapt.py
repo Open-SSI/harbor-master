@@ -16,7 +16,7 @@ from ..backends import NotImplementedBackend
 from ..engine import prepare
 from ..tasks import adapter as adapter_mod
 from ..tui import theme
-from .common import Workspace, app, console, fail, need_identity, need_workspace
+from .common import Workspace, app, console, fail, is_contributor, need_identity, need_workspace
 
 def source_of(ws: Path, entry: dict) -> Path:
     """The benchmark at its pinned release, fetched if it is not here yet."""
@@ -40,8 +40,8 @@ def adapt(name: str = typer.Argument(..., help="A benchmark on this index's list
     """Build the adapter for a benchmark in another format, and check it. A run does this by itself:
     this command is for doing it apart from a run, or again."""
     ws, ident = need_workspace(workspace), need_identity()
-    if ledger_mod.fields_of(ledger_mod.load_contributors(ws), ident.github) == set():
-        fail(f"@{ident.github} cannot curate in this index yet, so cannot build an adapter for it. See: /contributors")
+    if not is_contributor(ws, ident):
+        fail(f"@{ident.github} is not on this index's contributor list yet, so cannot build an adapter for it. See: /contributors")
     entry = tasks_mod.supported.find(ws, name)
     if entry is None:
         fail(f"{name} is not on this index's list of benchmarks. See: /benchmarks")

@@ -66,7 +66,7 @@ def fold(events: Iterable[dict]) -> dict[str, TaskState]:
                     latest[v["runner"]] = v
             values = {v["value"] for v in latest.values()}
             if "accept" in values and values & {"drop", "replaced"}:
-                s.status = "contested"                  # two reviewers disagree: the field lead decides
+                s.status = "contested"                  # two reviewers disagree: the lead decides
             elif values == {"accept"}:
                 s.status = "accepted"
             elif "replaced" in values:
@@ -79,7 +79,7 @@ def fold(events: Iterable[dict]) -> dict[str, TaskState]:
 
 
 def submitted(events: Iterable[dict]) -> dict[str, dict]:
-    """Every submitted task: task id -> its digest and field, from the per-benchmark submission records."""
+    """Every submitted task: task id -> its digest, from the per-benchmark submission records."""
     out: dict[str, dict] = {}
     for e in events:
         if e["type"] == "submission":
@@ -156,13 +156,12 @@ def leaderboard(events: Iterable[dict], roster: list[dict] | None = None,
 def index_entries(events: Iterable[dict]) -> list[dict]:
     """The accepted tasks, with who accepted each and when. This is the index."""
     events = list(events)
-    domain = {task: info.get("field", "") for task, info in submitted(events).items()}
     out = []
     for s in sorted(fold(events).values(), key=lambda s: s.task_id):
         if s.status != "accepted":
             continue
         verdicts = [v for v in s.verdicts if v["value"] == "accept" and v.get("digest") == s.digest]
-        out.append({"task": s.task_id, "benchmark": s.benchmark, "field": domain.get(s.task_id, ""),
+        out.append({"task": s.task_id, "benchmark": s.benchmark,
                     "digest": s.digest, "accepted_by": sorted({v["runner"] for v in verdicts}),
                     "accepted_on": time.strftime("%Y-%m-%d", time.gmtime(max(v["time"] for v in verdicts)))})
     return out

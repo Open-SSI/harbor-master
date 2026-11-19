@@ -81,9 +81,11 @@ def guide(workspace: Optional[Path] = Workspace):
 
 
 @app.command()
-def key():
-    """Print your public key, to send to the owner of an index."""
-    console.print(need_identity().public_key, markup=False, highlight=False, soft_wrap=True)
+def whoami():
+    """Print who you are, and the line to send the owner of an index so that they can add you."""
+    ident = need_identity()
+    console.print(ident.label(), markup=False, highlight=False)
+    console.print(f"/contributors add {ident.github} {ident.public_key}", markup=False, highlight=False, soft_wrap=True)
 
 
 @app.command()
@@ -96,7 +98,7 @@ def demo(count: int = typer.Option(40, help="How many made-up tasks."), workspac
     if ws is None:
         ws = Path("hm-demo").resolve()
         if not ws.exists():
-            index_new("hm-demo", ws, "Demo index")
+            index_new("hm-demo", ws, "Demo index", trial=True)
         elif not (ws / config_mod.PROTOCOL_NAME).exists():
             fail(f"{ws} exists and is not an index. Remove it, or run this inside an index.")
     ws = ws.resolve()
@@ -107,6 +109,6 @@ def demo(count: int = typer.Option(40, help="How many made-up tasks."), workspac
     root = config_mod.local(ws) / "fake"
     with console.capture():                     # its own message names a path nobody needs
         fake_benchmark(name, count, directory=root, seed=0)
-    tasks_mod.register(ws, name, root / name, "chemistry", dev=True)
+    tasks_mod.register(ws, name, root / name, dev=True)
     console.print(f"Registered [bold]{name}[/] in {ws}: {count} made-up tasks, for simulated runs only. "
                   "Next: hm run --simulate. It stops twice to ask you something, and says how to answer.")

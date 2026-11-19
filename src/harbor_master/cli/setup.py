@@ -63,7 +63,7 @@ def _describe(ws: Path) -> None:
             ("contributors", f"{len(ledger_mod.active(people))} can contribute, {len(people)} listed"),
             ("benchmarks", ", ".join(e["id"] for e in tasks_mod.supported.supported(ws)) or "none listed yet"),
             ("accepted tasks", str(len(ledger_mod.index_entries(led.events)))),
-            ("protocol", f"{cfg.protocol}, " + ("locked" if lock and lock["protocol"] == cfg.protocol else
+            ("protocol", f"{cfg.protocol}, " + (f"locked as v{ledger_mod.protocol.version(lock)}" if lock and lock["protocol"] == cfg.protocol else
                                                  "not the locked one" if lock else "not locked yet")),
             ("skills", _skills_line(ws)),
             ("shared at", remote or "nowhere yet: hm index connect URL"),
@@ -84,12 +84,20 @@ def index_new(name: str = typer.Argument(..., help="The index's short name: lowe
               directory: Path = typer.Argument(None, help="Where to create it. Default: a folder called NAME."),
               title: str = typer.Option("", help="Its full name, such as \"OpenSSI Index\"."),
               description: str = typer.Option("", help="One or two sentences: what it measures, and for whom."),
-              tasks: str = typer.Option("", help="Where accepted tasks are kept: a Hugging Face dataset repository, as org/name, or a folder."),
-              url: str = typer.Option("", help="An empty git repository to share the index through.")):
+              tasks: str = typer.Option("", help="The store for its accepted tasks: a Hugging Face dataset repository, as org/name. "
+                                                 "It is created if it does not exist. Every index has one."),
+              url: str = typer.Option("", help="An empty git repository to share the index through."),
+              trial: bool = typer.Option(False, hidden=True)):       # an index for made-up tasks only, which keeps none
     """Start a new index with you as its owner: the files that define it, in a git repository of its own."""
     ident = need_identity()
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", name):
         fail("An index's name is lower case letters, digits and hyphens, such as openssi.")
+    from ..tasks import store
+    description, url = (v if isinstance(v, str) else "" for v in (description, url))
+    tasks, trial = (tasks if isinstance(tasks, str) else "").strip(), trial is True
+    if not trial and not store.is_name(tasks):
+        fail("An index needs a store for its accepted tasks, so that everyone can run exactly what was accepted: "
+             "--tasks ORG/NAME, a Hugging Face dataset repository. It is created for you if it does not exist.")
     ws = (directory or Path(name)).resolve()
     if ws.exists() and any(ws.iterdir()):
         fail(f"{ws} is not empty.")
@@ -107,13 +115,18 @@ def index_new(name: str = typer.Argument(..., help="The index's short name: lowe
     (ws / ledger_mod.CONTRIBUTORS).write_text(templates.read("contributors.toml") + tomli_w.dumps({"contributor": [{
         "name": ident.name, "affiliation": ident.affiliation, "github": ident.github, "key": ident.public_key,
         "role": "owner", "added": time.strftime("%Y-%m-%d")}]}))
+    ledger_mod.sign_list(ws, ident, config_mod.load(ws).protocol, "start the index")
     try:
         ledger_mod.Sync(ws, ident.name, ident.github).define(f"start the {name} index")
+        ledger_mod.Sync(ws, ident.name, ident.github)._commit("sign the contributor list")
     except ledger_mod.SyncError as err:
         fail(str(err))
     set_up_local(ws)
     check_owner(ws)
     console.print(f"Started the [bold]{title or name}[/] index at {ws}, with you as its owner.")
+    if not trial:
+        from .store import make_store
+        make_store(config_mod.load(ws))
     if url:
         try:
             state = ledger_mod.Sync(ws, ident.name, ident.github).connect(url)
@@ -197,12 +210,71 @@ def join(target: str = typer.Argument(..., metavar="NAME_OR_URL", help="A name f
         console.print(f"[{theme.AM}]@{ident.github} is not on this index's contributor list yet.[/] Send the owner your "
                       f"public key to be added:\n{ident.public_key}")
     else:
-        console.print(f"[{theme.TE}]You are on the contributor list:[/] {ledger_mod.status(me)}. Next, in that folder: hm benchmarks")
+        console.print(f"[{theme.TE}]You are on the contributor list:[/] {ledger_mod.status(me)}. Next: /benchmarks")
 
 
-@app.command()
-def contributors(workspace: Optional[Path] = Workspace):
+contributors_app = typer.Typer(invoke_without_command=True, help="Who may contribute to this index, and adding someone.")
+app.add_typer(contributors_app, name="contributors")
+
+
+def _change_list(ws: Path, ident, people: list[dict], what: str) -> None:
+    """Write the contributor list, sign it as the owner, and share both. No lock is involved."""
+    (ws / ledger_mod.CONTRIBUTORS).write_text(templates.read("contributors.toml") + tomli_w.dumps({"contributor": people}))
+    ledger_mod.sign_list(ws, ident, config_mod.load(ws).protocol, what)
+    sync = ledger_mod.Sync(ws, ident.name, ident.github)
+    try:
+        sync.define(what, (ledger_mod.CONTRIBUTORS,))
+        if sync.enabled:
+            sync.publish(what)
+    except ledger_mod.SyncError as err:
+        fail(str(err))
+
+
+@contributors_app.command("add")
+def contributors_add(handle: str = typer.Argument(..., help="Their GitHub handle."),
+                     key: list[str] = typer.Argument(..., help="Their public key, from the line that /whoami shows."),
+                     name: str = typer.Option("", help="Their name."), affiliation: str = typer.Option(""),
+                     workspace: Optional[Path] = Workspace):
+    """Owner only: add someone to this index, by their GitHub handle and public key. It takes effect at once."""
+    ws, ident = need_workspace(workspace), need_identity()
+    if not is_owner(ws, ident):
+        fail(f"Only the owner adds a contributor, and @{ident.github} is not the owner of this index.")
+    handle, public = handle.lstrip("@"), " ".join(key).strip()
+    if not public.startswith("ssh-ed25519 ") or len(public.split()) < 2:
+        fail("That is not a public key. It is in the line that /whoami shows, and starts with ssh-ed25519.")
+    people = ledger_mod.load_contributors(ws)
+    taken = next((c for c in people if c.get("key") == public and c.get("github") != handle), None)
+    if taken:
+        fail(f"That key is @{taken.get('github', '?')}'s already.")
+    old = next((c for c in people if c.get("github", "").lower() == handle.lower()), None)
+    entry = {**(old or {}), "name": name or (old or {}).get("name", handle), "github": handle, "key": public,
+             "added": (old or {}).get("added") or time.strftime("%Y-%m-%d")}
+    if affiliation:
+        entry["affiliation"] = affiliation
+    _change_list(ws, ident, [entry if c is old else c for c in people] if old else [*people, entry], f"add contributor {handle}")
+    console.print(f"[{theme.TE}]@{handle} can contribute to this index now[/]: add benchmarks, run them, and sign verdicts. "
+                  "They get it with /sync. Give them write access to the index's repository too.", highlight=False)
+
+
+@contributors_app.command("remove")
+def contributors_remove(handle: str, workspace: Optional[Path] = Workspace):
+    """Owner only: take someone off this index's contributor list. Their earlier records stay."""
+    ws, ident = need_workspace(workspace), need_identity()
+    if not is_owner(ws, ident):
+        fail(f"Only the owner changes the contributor list, and @{ident.github} is not the owner of this index.")
+    handle, people = handle.lstrip("@"), ledger_mod.load_contributors(ws)
+    gone = next((c for c in people if c.get("github", "").lower() == handle.lower()), None)
+    if gone is None or gone.get("role") == "owner":
+        fail(f"@{handle} is the owner." if gone else f"@{handle} is not on the list. See: /contributors")
+    _change_list(ws, ident, [c for c in people if c is not gone], f"remove contributor {handle}")
+    console.print(f"Took @{handle} off the contributor list. Records they signed after this are refused.", highlight=False)
+
+
+@contributors_app.callback()
+def contributors(ctx: typer.Context, workspace: Optional[Path] = Workspace):
     """Who may contribute to this index, and who on the list still needs a handle or a key."""
+    if ctx.invoked_subcommand:
+        return
     ws = need_workspace(workspace)
     people = ledger_mod.load_contributors(ws)
     tb = Table(header_style=theme.MU, border_style=theme.BORDER)
@@ -213,7 +285,8 @@ def contributors(workspace: Optional[Path] = Workspace):
         tb.add_row(c.get("name", "?"), c.get("affiliation", ""), f"@{c['github']}" if c.get("github") else "-",
                    c.get("role", ""), f"[{theme.TE if ok else theme.AM}]{ledger_mod.status(c)}[/]")
     console.print(tb)
-    console.print(f"[{theme.MU}]From {ws / ledger_mod.CONTRIBUTORS}. Only the owner changes it, and locks the change.[/]")
+    console.print(f"[{theme.MU}]Everyone on it may add benchmarks, run them and sign verdicts. The owner adds someone with: "
+                  "/contributors add HANDLE KEY[/]")
 
 
 @keys_app.command("init")

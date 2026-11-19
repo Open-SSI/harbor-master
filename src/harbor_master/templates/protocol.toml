@@ -59,7 +59,7 @@ comparisons_per_task = 12       # pairwise comparisons per task, among the tasks
 pool_factor = 3                 # every task is scored once; only the best 3 x cap are compared in pairs
 stratify = true                 # round-robin over sub-areas
 backfill = false                # if true, replace a dropped task with the next ranked one
-require_brief = true            # the field lead says what is important before ranking
+require_brief = true            # the lead says what is important before ranking
 require_signoff = true          # the lead approves the selection before any trial is spent
 
 [verify]

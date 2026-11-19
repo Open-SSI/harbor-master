@@ -74,11 +74,15 @@ async def test_the_home_screen_walks_a_new_person_from_nothing_to_a_run(tmp_path
 
         await enter(pilot, "/new my-index")                                                    # a short form: only the name is needed
         assert "question 2 of 5" in app.query_one("#tip").border_title and "skips" in text_of(app, "#tip")
-        for answer in ("My Index", "Measures made-up things.", "", ""):
+        for answer in ("My Index", "Measures made-up things.", ""):                            # the task store cannot be skipped
+            await enter(pilot, answer)
+        assert app.form is not None and "question 4 of 5" in app.query_one("#tip").border_title and "skips" not in text_of(app, "#tip")
+        for answer in (str(tmp_path / "task-store"), ""):
             await enter(pilot, answer)
         assert app.ws == folder / "my-index" and app.state.is_owner and not app.last[2]
         about = config_mod.load(app.ws).about
-        assert (about.title, about.description, about.tasks) == ("My Index", "Measures made-up things.", "")
+        assert (about.title, about.description, about.tasks) == ("My Index", "Measures made-up things.", str(tmp_path / "task-store"))
+        assert (tmp_path / "task-store").is_dir() and "Created the task store" in app.last[1]   # made with the index, not later
         assert guide.next_step(app.state) == "A benchmark" and commands(app) == ["/benchmarks add URL", "/demo"]
         await enter(pilot, "/help")                                                            # by step, not one flat list
         assert app.last[1].index("Start") < app.last[1].index("Set up an index") < app.last[1].index("Results")
@@ -86,8 +90,20 @@ async def test_the_home_screen_walks_a_new_person_from_nothing_to_a_run(tmp_path
         assert list(app.state.registered) == ["demo-bench"] and guide.next_step(app.state) == "A run"
         assert commands(app) == ["/run --simulate"]                                            # no lock and no keys stand in the way
 
+        from harbor_master.tui import theme                                                    # light and dark, switched in place
+        assert theme.mode() == "dark" and not app._light.enabled
+        await enter(pilot, "/theme light")
+        assert theme.mode() == "light" and app._light.enabled and (tmp_path / "config" / "theme").read_text() == "light\n"
+        await pilot.press("ctrl+t")
+        await pilot.pause()
+        assert theme.mode() == "dark" and not app._light.enabled
+        assert theme.turned(theme.BG) > "#e0" and theme.turned(theme.FG) < "#40"              # a light ground, and dark text on it
+
+        await enter(pilot, "/lock major")                                                      # 1.0.0 cannot be set yet
+        assert app.last[0] == "patch or minor" and app.confirming is None
         await enter(pilot, "/lock")                                                            # signing asks first
         assert app.confirming is not None and "confirm" in app.query_one("#tip").border_title
+        assert "The version stays v0.0.0" in text_of(app, "#tip")
         await pilot.press("n")
         await pilot.pause()
         assert app.confirming is None and app.state.lock == "none"
@@ -112,22 +128,24 @@ async def test_the_home_screen_walks_a_new_person_from_nothing_to_a_run(tmp_path
 
         async def agent(cfg, entry, source, note=""):                                          # stands in for the small model
             notes.append(note)
-            return ({"name": "Toy Bench", "fields": ["Mathematics"]} if not note else {"description": "Sums of two small integers."}), 0.01
+            return ({"name": "Toy Bench", "homepage": "https://toy.example", "released": "2026-02-03"} if not note else {"description": "Sums of two small integers."}), 0.01
 
         monkeypatch.setattr(describe, "fill", agent)
         await enter(pilot, f"/benchmarks add {repo}")                                          # an address is all a person gives
         assert not app.last[2] and app.drafting() and "waits for your answer" in app.query_one("#tip").border_title
-        assert "Toy Bench" in app.last[1] and "mathematics" in app.last[1] and "arxiv.org/abs/2601.00001" in app.last[1]
+        assert "Toy Bench" in app.last[1] and "toy.example" in app.last[1] and "arxiv.org/abs/2601.00001" in app.last[1]
         assert "Reply y to add it" in app.last[1] and tasks_mod.supported.supported(app.ws) == []     # nothing is added before a yes
         await enter(pilot, "say that the numbers are integers")                                # a reply in plain words goes to the agent
         assert notes[-1] == "say that the numbers are integers" and "Sums of two small integers." in app.last[1]
-        await enter(pilot, "license: Apache-2.0")                                              # and a field with its value is taken as it stands
+        assert "2026-02-03" in app.last[1] and "the date of the pinned commit" not in app.last[1]     # the agent found when it came out
+        await enter(pilot, "license: Apache-2.0")                                              # and a name with its value is taken as it stands
         assert len(notes) == 2 and "Apache-2.0" in app.last[1]
         await enter(pilot, "y")
         assert not app.last[2] and "Added toy-bench" in app.last[1] and not app.drafting()
         entry = tasks_mod.supported.find(app.ws, "toy-bench")
         assert (entry["ref"], entry["version"], entry["tasks"], entry["format"], entry["license"]) == ("v1.2.0", "1.2.0", "tasks", "harbor", "Apache-2.0")
-        assert (entry["name"], entry["fields"], entry["paper"], entry["added_by"]) == ("Toy Bench", ["mathematics"], "https://arxiv.org/abs/2601.00001", "ada")
+        assert entry["released"] == "2026-02-03" and "pinned_on" not in entry
+        assert (entry["name"], entry["paper"], entry["added_by"]) == ("Toy Bench", "https://arxiv.org/abs/2601.00001", "ada")
         assert len(entry["commit"]) == 40 and (config_mod.local(app.ws) / "sources" / "toy-bench" / "tasks" / "one").is_dir()
         assert "Sums of two small integers." in (app.ws / "benchmarks.toml").read_text()
         await enter(pilot, f"/benchmarks add {repo}")
@@ -170,7 +188,7 @@ def test_the_guide_names_the_next_step_in_every_state(workspace, ident, monkeypa
     s.missing_keys = []
     assert guide.next_step(s) == "A run" and [c for c, _ in guide.tip(s).lines if c] == ["/run", "/run --simulate"]
     s.can_curate, s.is_owner, s.me = False, False, None
-    assert guide.next_step(s) == "Your place in it" and "/key" in [c for c, _ in guide.tip(s).lines]
+    assert guide.next_step(s) == "Your place in it" and "/whoami" in [c for c, _ in guide.tip(s).lines]
     s.ready = 3
     assert guide.next_step(s) == "Your verdicts" and "3 reports are waiting" in guide.tip(s).title
     assert "hm index new NAME" in guide.text(guide.State(ident=ident)) and guide.shell("/run --simulate") == "hm run --simulate"

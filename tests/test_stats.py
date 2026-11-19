@@ -113,7 +113,7 @@ def test_hm_stats_covers_everyone_and_says_which_state_of_the_ledger_it_read(wor
     other = tmp_path / "other-clone"                                           # a second machine on the same index
     ledger.Sync.clone(str(remote), other, ident.name, ident.github)
     from pathlib import Path
-    tasks.register(other, BENCH, Path(tasks.read_registry(workspace)[BENCH]["path"]), "chemistry")
+    tasks.register(other, BENCH, Path(tasks.read_registry(workspace)[BENCH]["path"]))
     there = run_of(other, ident, "r1")
     asyncio.run(there.run())                                                   # it curates and pushes. Nothing ran here
     assert ledger.Ledger(workspace).events == [] and len(ledger.Ledger(other).events) > 50

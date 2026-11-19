@@ -149,7 +149,7 @@ async def ready(s: Session, bench: BenchState) -> bool:
             "released": entry.get("released", ""), "commit": entry.get("commit", ""), "github": entry.get("github", "")}
     if not foreign(entry):
         bench.path = source
-        tasks_mod.register(ws, bench.id, source, bench.field, **more)
+        tasks_mod.register(ws, bench.id, source, **more)
         return True
 
     adapter_dir, work = adapter_mod.folder(ws, bench.id), work_dir(ws, bench.id)
@@ -168,7 +168,7 @@ async def ready(s: Session, bench: BenchState) -> bool:
     if problems:
         return _skip(bench, f"its adapter did not write usable tasks: {problems[0][:160]}", "adapter_failed")
     bench.path = out
-    tasks_mod.register(ws, bench.id, out, bench.field, adapter=adapter_mod.digest(adapter_dir), **more)
+    tasks_mod.register(ws, bench.id, out, adapter=adapter_mod.digest(adapter_dir), **more)
     return True
 
 

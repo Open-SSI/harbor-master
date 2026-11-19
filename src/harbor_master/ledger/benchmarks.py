@@ -18,8 +18,8 @@ from .store import MANUAL, Ledger, Shard
 
 BENCH = "_benchmarks"       # the shard folder that holds these records
 FILE = "benchmarks.toml"    # the list as one readable file
-REQUIRED = ("id", "name", "description", "github", "ref", "commit", "tasks", "version", "released", "fields", "paper")
-ORDER = ("id", "name", "description", "paper", "github", "homepage", "license", "fields", "version", "released", "ref", "commit",
+REQUIRED = ("id", "name", "description", "github", "ref", "commit", "tasks", "version", "released", "paper")
+ORDER = ("id", "name", "description", "paper", "github", "homepage", "license", "version", "released", "ref", "commit",
          "tasks", "task_count", "format", "added_by", "added")
 HEADER = "# The benchmarks this index may curate. Written by Harbor-Master from the signed records in ledger/.\n" \
          "# Editing this file changes nothing: a benchmark is added on the hm screen, with /benchmarks add URL\n\n"

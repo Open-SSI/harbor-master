@@ -88,7 +88,7 @@ def test_hm_eval_runs_the_accepted_version_or_refuses(workspace, ident, tmp_path
     from harbor_master import engine
     shared = tmp_path / "shared-store"
     s, task = asyncio.run(accepted(workspace, ident, shared))
-    tasks.register(workspace, BENCH, Path(tasks.read_registry(workspace)[BENCH]["path"]), "chemistry", supported=BENCH)    # as a listed one is
+    tasks.register(workspace, BENCH, Path(tasks.read_registry(workspace)[BENCH]["path"]), supported=BENCH)    # as a listed one is
     ran: list = []
 
     async def stand_in(session, entry, chosen, trials):
@@ -111,3 +111,59 @@ def test_hm_eval_runs_the_accepted_version_or_refuses(workspace, ident, tmp_path
     ran.clear()
     refused = go()
     assert refused.startswith("1 Refused: the accepted version of demo-bench/") and "different task" in refused and not ran
+
+
+def test_every_index_has_a_store_which_its_owner_names_and_a_real_run_needs(workspace, ident, tmp_path, monkeypatch):
+    import sys
+    import types
+    cfg = config_mod.load(workspace)
+    assert "names no store" in store.not_ready(cfg)                                       # an index from before stores were required
+    assert hm(workspace, "tasks", "store", "some-org/some-tasks").startswith("1 Only the owner names the task store")
+
+    class NotFound(Exception):
+        pass
+    NotFound.__name__ = "RepositoryNotFoundError"
+    repos: dict[str, dict] = {}
+    seen: list = []
+
+    class Api:                                                                            # a stand-in for Hugging Face
+        def __init__(self, token=None):
+            self.token = token
+            seen.append(token)
+
+        def repo_info(self, repo, repo_type):
+            if repo not in repos:
+                raise NotFound(repo)
+
+        def create_repo(self, repo, repo_type, private, exist_ok):
+            assert self.token and private
+            repos.setdefault(repo, {})
+
+        def file_exists(self, repo, k, repo_type):
+            return k in repos[repo]
+
+        def upload_file(self, path_or_fileobj, path_in_repo, repo_id, repo_type, commit_message):
+            assert self.token
+            repos[repo_id][path_in_repo] = open(path_or_fileobj, "rb").read()
+
+    def download(repo_id, filename, repo_type, token, local_dir):
+        out = tmp_path / "downloaded"
+        out.write_bytes(repos[repo_id][filename])
+        return str(out)
+
+    monkeypatch.setitem(sys.modules, "huggingface_hub", types.SimpleNamespace(HfApi=Api, hf_hub_download=download))
+    monkeypatch.setattr(store.keys, "get", lambda name: "")
+    (workspace / "about.toml").write_text('name = "demo"\ntasks = "some-org/some-tasks"\n')
+    cfg = config_mod.load(workspace)
+    assert "needs your own Hugging Face token" in store.not_ready(cfg)                    # no token: said plainly, before anything is spent
+    monkeypatch.setattr(store.keys, "get", lambda name: "hf_test" if name == "HF_TOKEN" else "")
+    assert "does not exist" in store.not_ready(cfg)
+    there = store.remote(cfg)
+    there.create()
+    assert store.not_ready(cfg) == "" and there.exists()
+    file = tmp_path / "a.tar.gz"
+    file.write_bytes(b"archive")
+    there.put("tasks/b/t.0123.tar.gz", file)
+    monkeypatch.setattr(store.keys, "get", lambda name: "")                               # reading needs no token
+    reader = store.remote(cfg, write=False)
+    assert seen[-1] is None and reader.get("tasks/b/t.0123.tar.gz", tmp_path / "back.tar.gz") and (tmp_path / "back.tar.gz").read_bytes() == b"archive"

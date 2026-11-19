@@ -1,16 +1,10 @@
-# Who may contribute to this index: submit records, and sign verdicts.
+# Who may contribute to this index: add benchmarks, run them, and sign verdicts.
 #
-# A person is identified by their GitHub handle and signing key, never by name. To be
-# able to contribute, an entry needs both:
+# A person is identified by their GitHub handle and signing key, never by name:
 #   github   the GitHub handle
-#   key      the public key that `hm init` prints (the private half never leaves the machine)
-# An entry without them is listed but cannot contribute yet.
+#   key      the public key in the line that /whoami shows (the private half never leaves the machine)
+# An entry without both is listed but cannot contribute yet.
 #
-# fields says which fields a person may curate and judge, for example
-#   fields = ["life-sciences", "physical-sciences"]
-# The names are the ones benchmarks use for their tasks, written with hyphens. "*" means
-# every field. The owner may curate every field. Anyone else with no fields set is listed
-# but cannot curate.
-#
-# Only the owner changes this file, and locks the change: hm protocol lock
+# The owner adds someone on the hm screen: /contributors add HANDLE KEY
+# That signs the list and shares it. It needs no lock, because who contributes changes no result.
 

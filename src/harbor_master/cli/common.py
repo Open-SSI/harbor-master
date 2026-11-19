@@ -106,6 +106,10 @@ def is_owner(ws: Path, ident: identity_mod.Identity) -> bool:
                for c in ledger_mod.load_contributors(ws))
 
 
+def is_contributor(ws: Path, ident: identity_mod.Identity) -> bool:
+    return any(c.get("github") == ident.github and ledger_mod.can_contribute(c) for c in ledger_mod.load_contributors(ws))
+
+
 def version_tuple(text: str) -> tuple[int, ...]:
     return tuple(int(n) for n in re.findall(r"\d+", text)[:3])
 
@@ -122,6 +126,9 @@ def check_lock(lock: dict | None, cfg, ws: Path) -> None:
         for p in wrong[:12]:
             console.print(f"  {p}")
         fail("Refused: the code cannot use these skills as they are. See: hm skills")
+    from_owner = ledger_mod.list_problem(ws, ledger_mod.Ledger(ws).events)
+    if from_owner:
+        fail(f"Refused: {from_owner}. Put it back with: git checkout origin/main -- {ledger_mod.CONTRIBUTORS}")
     if lock is None:
         return
     absent = skills.missing(ws / "skills")

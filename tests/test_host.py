@@ -88,7 +88,7 @@ def test_a_run_outlives_its_terminal_and_takes_more_benchmarks(workspace, ident,
         closed = terminal(workspace, ["run", "--simulate"], "working cells", close=True)    # opened again, then the window is closed
         assert "demo-bench" in closed and wait(lambda: host.active(workspace) is not None, 1) and host.active(workspace)["pid"] == going["pid"]
 
-        tasks.register(workspace, "second", make_benchmark(tmp_path / "more", "second", 12), "chemistry", dev=True)
+        tasks.register(workspace, "second", make_benchmark(tmp_path / "more", "second", 12), dev=True)
         assert host.tell(workspace, {"add": ["nothing"]})["ok"] is False
         added = terminal(workspace, ["run", "second", "--simulate"], "second", b"\x0c")   # a benchmark is added to the run that is going
         assert "second is added to this run" in added and "The run goes on" in added

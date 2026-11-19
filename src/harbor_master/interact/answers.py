@@ -119,7 +119,7 @@ def terms(session: Session) -> dict[str, str]:
     """Short explanations of the words the screen uses, keyed by the word a question would contain."""
     sel, cfg = session.cfg.select, session.cfg
     return {
-        "brief": "A brief is a few sentences from the field lead on what makes a task important in this benchmark. "
+        "brief": "A brief is a few sentences from the lead on what makes a task important in this benchmark. "
                  "Ranking orders the tasks by it. Give one with /brief BENCHMARK text.",
         "select": f"The selection is the top-ranked tasks that go on to the costly stages: at most {sel.top_k} per "
                   f"benchmark, and at most {sel.max_fraction:.0%} of it. The lead approves it with /approve BENCHMARK.",

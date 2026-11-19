@@ -12,8 +12,8 @@ from importlib import resources
 from pathlib import Path
 
 DEFINITION = ("about.toml", "protocol.toml", "roster.toml", "contributors.toml")
-LOCKED = ("roster.toml", "contributors.toml")    # locked in the ledger beside the protocol. The benchmark list and the
-#                                                  adapters are not: each is vouched for by its own signed record
+LOCKED = ("roster.toml",)    # locked in the ledger beside the protocol: it decides what the leaderboard compares.
+# The benchmark list, the adapters and the contributor list are not: each is vouched for by a signed record of its own
 
 
 def read(name: str) -> str:
@@ -21,7 +21,7 @@ def read(name: str) -> str:
 
 
 def digests(index_dir: Path) -> dict[str, str]:
-    """Checksums of what is locked with the protocol: the roster and the contributor list. A missing file counts as empty."""
+    """Checksums of what is locked with the protocol: the roster. A missing file counts as empty."""
     return {name: hashlib.sha256((index_dir / name).read_bytes() if (index_dir / name).exists() else b"").hexdigest()[:16]
             for name in LOCKED}
 

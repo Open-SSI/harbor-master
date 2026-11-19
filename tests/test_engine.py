@@ -131,7 +131,7 @@ async def test_a_finished_run_takes_one_more_benchmark(workspace, ident, tmp_pat
     s = Session(workspace, config_mod.load(workspace), ident, tasks.read_registry(workspace), simulate=True, speed=0, no_input=True, run_id="r1")
     await s.run()
     assert s.finished and s.benches["demo-bench"].phase == "ready"
-    tasks.register(workspace, "second", make_benchmark(tmp_path / "more", "second", 12), "chemistry", dev=True)
+    tasks.register(workspace, "second", make_benchmark(tmp_path / "more", "second", 12), dev=True)
     assert "not on this index's list" in interact.execute(s, interact.Command("add", ["nothing"]))
     assert "second is added to this run" in interact.execute(s, interact.Command("add", ["second"]))
     assert not s.finished and "already in this run" in interact.execute(s, interact.Command("add", ["second"]))

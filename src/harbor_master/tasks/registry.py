@@ -21,7 +21,7 @@ def resolve(workspace: Path, benchmark: str, simulate: bool) -> tuple[dict | Non
     if benchmark not in registry and entry is None:
         return None, f"{benchmark} is not on this index's list of benchmarks, and is not a folder registered here. See: hm benchmarks"
     info = dict(registry[benchmark]) if benchmark in registry else {
-        "path": "", "field": ", ".join(entry.get("fields", [])) or "general", "supported": benchmark,
+        "path": "", "supported": benchmark,
         "license": entry.get("license", ""), "released": entry.get("released", "")}
     if entry is not None:
         info["entry"] = entry       # on the list: the run fetches it, and adapts it, when that is not done yet
@@ -30,9 +30,9 @@ def resolve(workspace: Path, benchmark: str, simulate: bool) -> tuple[dict | Non
     return info, ""
 
 
-def register(workspace: Path, benchmark: str, path: Path, field_name: str, **more) -> None:
+def register(workspace: Path, benchmark: str, path: Path, **more) -> None:
     """`more` carries where the benchmark came from: supported (its id on the list), version, commit, dev."""
     reg = read_registry(workspace)
-    reg[benchmark] = {"path": str(path.resolve()), "field": field_name, **more}
+    reg[benchmark] = {"path": str(path.resolve()), **more}
     (workspace / REGISTRY).parent.mkdir(parents=True, exist_ok=True)
     (workspace / REGISTRY).write_text(json.dumps(reg, indent=2) + "\n")

@@ -38,13 +38,35 @@ def differences(locked: dict, mine: dict) -> list[str]:
             for k in sorted(set(a) | set(b)) if a.get(k) != b.get(k)]
 
 
-def write(ledger_dir, ident, cfg, note: str = "", registry: dict | None = None) -> dict:
+START = "0.0.0"
+
+
+def version(lock: dict | None) -> str:
+    """A lock's version, such as 0.1.2. Before anything is locked, and for a lock that says none, it is 0.0.0."""
+    return (lock or {}).get("version") or START
+
+
+def bumped(current: str, how: str) -> str:
+    """The next version. A lock keeps the version unless its owner asks for a new one: `patch` for a small
+    change, such as the roster (0.0.1 to 0.0.2), `minor` when settings or skills changed (0.1.0 to 0.2.0).
+    1.0.0 is kept for the index's release, and cannot be set yet."""
+    major, minor, patch = (int(n) for n in (current.split(".") + ["0", "0"])[:3])
+    if how == "":
+        return f"{major}.{minor}.{patch}"
+    if how == "patch":
+        return f"{major}.{minor}.{patch + 1}"
+    if how == "minor":
+        return f"{major}.{minor + 1}.0"
+    raise ValueError("A version goes up by patch or by minor. 1.0.0 is kept for the index's release, and cannot be set yet.")
+
+
+def write(ledger_dir, ident, cfg, note: str = "", registry: dict | None = None, bump: str = "") -> dict:
     """Append the owner's lock: the settings, and the checksums of what is locked beside them.
     `registry` gives those checksums when not everything on disk is meant, as when a run locks one new adapter."""
     from .. import templates
     from .store import MANUAL, Ledger, Shard
     lock = current(Ledger(ledger_dir).events)
     shard = Shard(ledger_dir, BENCH, ident, MANUAL, cfg.protocol)
-    return shard.append("protocol", settings=cfg.protocol_settings(), registry=registry if registry is not None else templates.digests(ledger_dir),
+    return shard.append("protocol", version=bumped(version(lock), bump), settings=cfg.protocol_settings(), registry=registry if registry is not None else templates.digests(ledger_dir),
                         requires=cfg.requires.harbor_master, note=note,
                         replaces=lock["protocol"] if lock and lock["protocol"] != cfg.protocol else "")

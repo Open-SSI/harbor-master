@@ -3,7 +3,8 @@
 A later benchmark run must run exactly the task that was accepted. Its files may be too large
 for a git repository, a repair may have changed them from what the benchmark's source gives, and
 the source may be gone one day. So each accepted task is kept as one archive, named by its content
-digest, in a store the index names in about.toml: a Hugging Face dataset repository, or a folder.
+digest, in the store the index names in about.toml: a Hugging Face dataset repository, or a folder.
+Every index has one, named when the index is created.
 A copy is also kept on the machine, under .hm/store.
 """
 from __future__ import annotations
@@ -35,6 +36,12 @@ class Folder:
     def __init__(self, root: Path):
         self.root, self.where = root, str(root)
 
+    def exists(self) -> bool:
+        return self.root.is_dir()
+
+    def create(self) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+
     def has(self, k: str) -> bool:
         return (self.root / k).is_file()
 
@@ -51,18 +58,20 @@ class Folder:
 
 
 class HuggingFace:
-    """A store that is a Hugging Face dataset repository. It needs the huggingface_hub package and HF_TOKEN."""
+    """A store that is a Hugging Face dataset repository. Writing to it needs HF_TOKEN, each person's own.
+    Reading a public one needs no token."""
 
-    def __init__(self, repo: str):
+    def __init__(self, repo: str, write: bool = True):
         self.repo, self.where = repo, f"huggingface.co/datasets/{repo}"
         try:
             import huggingface_hub
         except ImportError as err:
-            raise StoreError("The task store is a Hugging Face repository, which needs the huggingface_hub package. "
-                             "Install it into Harbor-Master: uv tool install --editable '.[hf]'") from err
-        token = keys.get("HF_TOKEN")
-        if not token:
-            raise StoreError(f"The task store is {self.where}, which needs HF_TOKEN. Set it with: hm keys set HF_TOKEN")
+            raise StoreError("The task store needs the huggingface_hub package. Install Harbor-Master again: "
+                             "uv tool install --editable .") from err
+        token = keys.get("HF_TOKEN") or None
+        if write and not token:
+            raise StoreError(f"The task store is {self.where}, and putting a task there needs your own Hugging Face token, "
+                             "with write access to it. Add HF_TOKEN to your keys file: /keys")
         self.hub, self.api, self.token = huggingface_hub, huggingface_hub.HfApi(token=token), token
 
     def _guard(self, what: str, fn):
@@ -70,6 +79,19 @@ class HuggingFace:
             return fn()
         except Exception as err:        # the library raises many kinds: no access, no network, no such repository
             raise StoreError(f"Could not {what} {self.where}: {type(err).__name__}: {str(err)[:200]}") from err
+
+    def exists(self) -> bool:
+        try:
+            self.api.repo_info(self.repo, repo_type="dataset")
+            return True
+        except Exception as err:
+            if type(err).__name__ == "RepositoryNotFoundError":     # also what a private one says to someone without access
+                return False
+            raise StoreError(f"Could not reach {self.where}: {type(err).__name__}: {str(err)[:200]}") from err
+
+    def create(self) -> None:
+        """Make the repository, private. Its owner opens it to others, or to everyone, on Hugging Face."""
+        self._guard("create", lambda: self.api.create_repo(self.repo, repo_type="dataset", private=True, exist_ok=True))
 
     def has(self, k: str) -> bool:
         return bool(self._guard("look in", lambda: self.api.file_exists(self.repo, k, repo_type="dataset")))
@@ -93,14 +115,35 @@ def local(ws: Path) -> Folder:
     return Folder(config_mod.local(ws) / FOLDER)
 
 
-def remote(cfg) -> Folder | HuggingFace | None:
+def is_name(where: str) -> bool:
+    """Whether this can name a store: `org/name` on Hugging Face, or a folder's path."""
+    import re
+    return where.startswith(("/", "~", ".")) or bool(re.fullmatch(r"[\w.-]+/[\w.-]+", where))
+
+
+def remote(cfg, write: bool = True) -> Folder | HuggingFace | None:
     """The store the index names: `org/name` is a Hugging Face dataset repository, a path is a folder."""
     where = (cfg.about.tasks or "").strip()
     if not where:
         return None
     if where.startswith(("/", "~", ".")):
         return Folder(Path(where).expanduser())
-    return HuggingFace(where)
+    return HuggingFace(where, write)
+
+
+def not_ready(cfg) -> str:
+    """Why this machine cannot put an accepted task in the index's store, or "" when it can. Every index has a
+    store, so a real run asks this before it starts."""
+    if not (cfg.about.tasks or "").strip():
+        return ("this index names no store for its accepted tasks. Its owner sets one, which also creates it: "
+                "/tasks store ORG/NAME")
+    try:
+        there = remote(cfg)
+        if not there.exists():
+            return f"the task store {there.where} does not exist, or your token cannot see it. Its owner creates it with /tasks store"
+    except StoreError as err:
+        return str(err)
+    return ""
 
 
 def pack(task_dir: Path, out: Path) -> None:
@@ -136,7 +179,7 @@ def fetch(ws: Path, cfg, benchmark: str, name: str, digest: str) -> Path | None:
     if out.is_dir() and digest_dir(out) == digest:
         return out
     if not here.has(k):
-        there = remote(cfg)
+        there = remote(cfg, write=False)
         if there is None or not there.get(k, here.root / k):
             return None
     shutil.rmtree(out.parent, ignore_errors=True)

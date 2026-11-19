@@ -49,7 +49,7 @@ TEMPLATE = {
 }
 ENTRY = {"id": "toy", "name": "Toy Arithmetic", "description": "Sums of small numbers, one to a task.", "paper": "none",
          "version": "1.0", "released": "2026-09-01", "github": "https://example.org/toy", "ref": "v1.0",
-         "commit": "0" * 40, "tasks": ".", "task_count": 3, "format": "jsonl", "license": "MIT", "fields": ["mathematical sciences"]}
+         "commit": "0" * 40, "tasks": ".", "task_count": 3, "format": "jsonl", "license": "MIT"}
 
 
 def passes(ws: Path) -> bool:
@@ -83,7 +83,7 @@ def toy(tmp_path, monkeypatch):
                                                   for i in (3, 1, 2)))
     monkeypatch.setattr(tasks.supported, "fetch", lambda entry, sources: source)       # no network: the source is here
     ws = tmp_path / "index"
-    assert hm("index", "new", "demo", ws).startswith("0 ")
+    assert hm("index", "new", "demo", ws, "--tasks", tmp_path / "store").startswith("0 ")
     ledger.benchmarks.add(ws, identity.load(), config_mod.load(ws).protocol, ENTRY)
     return ws, source, tmp_path
 
@@ -180,7 +180,7 @@ def run_of(ws: Path, run_id: str, who=None, **more):
     cfg = config_mod.load(ws)
     cfg.run.sandbox = "none"
     entry = entry_of(ws)
-    info = {"path": "", "field": "mathematical sciences", "supported": "toy", "entry": entry}
+    info = {"path": "", "supported": "toy", "entry": entry}
     return Session(ws, cfg, who or identity.load(), {"toy": info}, speed=0, run_id=run_id, **{"simulate": True, "as_real": True, **more})
 
 
@@ -314,7 +314,7 @@ async def test_an_abandoned_benchmark_is_refused_to_everyone_until_its_owner_reo
     monkeypatch.setenv("HM_CONFIG_DIR", str(tmp / "config-bob"))               # and anyone else's
     bob = identity.create("Bob", "Other University", "bob@example.org", "bob")
     with (ws / "contributors.toml").open("a") as f:
-        f.write(f'\n[[contributor]]\nname = "Bob"\ngithub = "bob"\nkey = "{bob.public_key}"\nfields = ["*"]\n')
+        f.write(f'\n[[contributor]]\nname = "Bob"\ngithub = "bob"\nkey = "{bob.public_key}"\n')
     other = run_of(ws, "r4", who=bob)
     await other.run()
     assert other.benches["toy"].phase == "skipped" and "abandoned by @ada" in other.benches["toy"].detail and len(asked) == 3
@@ -341,7 +341,7 @@ async def test_a_run_fetches_a_listed_benchmark_that_is_in_harbor_format(locked,
     monkeypatch.setattr(tasks.supported, "fetch", lambda entry, sources: made)
     from harbor_master.engine import Session
     entry = {**entry_of(ws), "id": "plain", "format": "harbor", "task_count": 6}
-    s = Session(ws, config_mod.load(ws), identity.load(), {"plain": {"path": "", "field": "chemistry", "supported": "plain", "entry": entry}},
+    s = Session(ws, config_mod.load(ws), identity.load(), {"plain": {"path": "", "supported": "plain", "entry": entry}},
                 simulate=True, as_real=True, speed=0, run_id="r1")
     await s.run()
     assert s.benches["plain"].phase == "ready" and len(s.benches["plain"].tasks) == 6

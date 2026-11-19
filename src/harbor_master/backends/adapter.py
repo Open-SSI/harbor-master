@@ -32,7 +32,7 @@ def layout(source_dir: Path, limit: int = 120) -> str:
 
 
 def about(entry: dict) -> str:
-    keep = ("id", "name", "version", "released", "github", "license", "task_count", "fields", "format", "tasks")
+    keep = ("id", "name", "version", "released", "github", "license", "task_count", "format", "tasks")
     return "\n".join(f"{k}: {entry[k]}" for k in keep if entry.get(k) not in (None, "", []))
 
 

@@ -8,7 +8,7 @@ from pathlib import Path
 from ..core import identity as identity_mod
 from .events import CONTRIBUTORS, EVENT_TYPES, TRIAL_PURPOSES, duplicate_key, event_id
 from . import protocol
-from .fold import INDEX_FILE, fold, index_entries, submitted
+from .fold import INDEX_FILE, fold, index_entries
 from .store import read_shard, shard_paths
 
 def load_contributors(ledger_dir: Path) -> list[dict]:
@@ -23,38 +23,45 @@ def active(contributors: list[dict]) -> list[dict]:
     return [c for c in contributors if c.get("github") and c.get("key")]
 
 
-def slug(field: str) -> str:
-    return field.strip().lower().replace(" ", "-")
-
-
-def may_curate(c: dict | None, field: str) -> bool:
-    """Whether a contributor may curate or judge tasks of a field. The owner may, in every field.
-    Anyone else needs the field, or "*", in their `fields`."""
-    if c is None or not (c.get("github") and c.get("key")):
-        return False
-    if c.get("role") == "owner":
-        return True
-    mine = {slug(f) for f in c.get("fields", [])}
-    return "*" in mine or (bool(field) and slug(field) in mine)
-
-
-def fields_of(contributors: list[dict], github: str) -> set[str] | None:
-    """The fields a person may curate. None means every field. An empty set means none."""
-    c = next((c for c in active(contributors) if c["github"] == github), None)
-    if c is None:
-        return set()
-    if c.get("role") == "owner" or "*" in c.get("fields", []):
-        return None
-    return {slug(f) for f in c.get("fields", [])}
+def can_contribute(c: dict | None) -> bool:
+    """Whether a listed person can contribute now: anyone with a GitHub handle and a signing key, to any benchmark."""
+    return bool(c and c.get("github") and c.get("key"))
 
 
 def status(c: dict) -> str:
-    if c.get("github") and c.get("key"):
-        if c.get("role") == "owner" or "*" in c.get("fields", []):
-            return "can curate every field"
-        return "can curate: " + ", ".join(c["fields"]) if c.get("fields") else "listed, but no fields set: cannot curate"
+    if can_contribute(c):
+        return "owner" if c.get("role") == "owner" else "can contribute"
     missing = [w for w in ("github", "key") if not c.get(w)]
     return "listed, waiting for " + " and ".join("GitHub handle" if w == "github" else "signing key" for w in missing)
+
+
+PEOPLE = "_contributors"      # the shard folder where the owner signs the contributor list
+
+
+def list_digest(index_dir: Path) -> str:
+    import hashlib
+    path = index_dir / CONTRIBUTORS
+    return hashlib.sha256(path.read_bytes() if path.exists() else b"").hexdigest()[:16]
+
+
+def sign_list(index_dir: Path, ident, protocol: str, note: str = "") -> dict:
+    """The owner's signature on the contributor list as it is now. It needs no lock: the list changes no result."""
+    from .store import MANUAL, Shard
+    return Shard(index_dir, PEOPLE, ident, MANUAL, protocol).append("contributors", value=list_digest(index_dir), note=note)
+
+
+def list_problem(index_dir: Path, events) -> str:
+    """Why this copy of the contributor list cannot be trusted, or "". Once an owner has signed the list,
+    a copy that differs from the last one they signed is refused."""
+    owners = {c["github"] for c in load_contributors(index_dir) if c.get("role") == "owner"}
+    signed = sorted((e for e in events if e["type"] == "contributors"), key=lambda e: e["time"])
+    if not signed:
+        return ""
+    if signed[-1]["runner"] not in owners:
+        return f"{CONTRIBUTORS} was last signed by @{signed[-1]['runner']}, who is not the owner on it"
+    if signed[-1].get("value") != list_digest(index_dir):
+        return f"{CONTRIBUTORS} is not the list its owner signed. The owner changes it with /contributors add, and nobody else does"
+    return ""
 
 
 def check_contributors(contributors: list[dict]) -> list[str]:
@@ -85,11 +92,10 @@ def _safe(path: Path) -> list[dict]:
         return []
 
 
-def verify(ledger_dir: Path, fields: dict[str, str] | None = None, max_per_benchmark: int | None = None,
+def verify(ledger_dir: Path, max_per_benchmark: int | None = None,
            simulated: bool = False, index_dir: Path | None = None) -> list[str]:
     """Check every shard. Returns a list of problems, empty when the ledger is sound.
 
-    `fields` maps a benchmark to its field, for the per-field permission on verdicts.
     A record of a simulated run is a problem wherever it is found, and supports nothing,
     unless `simulated` says this is the folder where simulated runs keep theirs. That folder has
     no contributor list of its own: `index_dir` names the index it belongs to.
@@ -99,8 +105,6 @@ def verify(ledger_dir: Path, fields: dict[str, str] | None = None, max_per_bench
     by_handle = {c["github"]: c for c in active(contributors)}
     taken: dict[tuple, str] = {}
     events: list[dict] = []
-    domains = {task: info.get("field", "") for task, info in
-               submitted(e for p in shard_paths(ledger_dir) for e in _safe(p)).items()}
     for path in shard_paths(ledger_dir):
         where = f"{path.parent.name}/{path.name}"
         prev = ""
@@ -135,13 +139,6 @@ def verify(ledger_dir: Path, fields: dict[str, str] | None = None, max_per_bench
                 problems.append(f"{at}: runner @{e['runner']} is not on the contributor list")
             elif not identity_mod.verify(who.get("key", ""), e["id"], e["sig"]):
                 problems.append(f"{at}: signature does not match @{e['runner']}'s key")
-            elif e["type"] == "benchmark" and e.get("value") == "add" and not any(
-                    may_curate(who, f) for f in (e.get("entry") or {}).get("fields", [])):
-                problems.append(f"{at}: @{e['runner']} may not add a benchmark in {', '.join((e.get('entry') or {}).get('fields', [])) or 'no field'}")
-            elif e["type"] == "verdict":
-                domain = domains.get(e.get("task_id", ""), "")
-                if domain and not may_curate(who, domain):
-                    problems.append(f"{at}: @{e['runner']} may not judge {domain} tasks")
             key = duplicate_key(e)
             if key is not None:
                 if key in taken:
@@ -150,6 +147,9 @@ def verify(ledger_dir: Path, fields: dict[str, str] | None = None, max_per_bench
                     taken[key] = at
             if bool(e.get("simulated")) == simulated:       # a record in the wrong place supports nothing
                 events.append(e)
+    wrong = list_problem(index_dir or ledger_dir, events) if not simulated else ""
+    if wrong:
+        problems.append(wrong)
     found = protocol.locks(events)
     owners = {c["github"] for c in contributors if c.get("role") == "owner"}
     for lock in found:

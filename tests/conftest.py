@@ -45,9 +45,9 @@ def workspace(tmp_path, ident):
     cfg.select.require_signoff = False
     cfg.select.top_k, cfg.select.max_fraction = 20, 1.0      # 20 of the 24 test tasks go on
     write_index(ws, cfg, [{"name": ident.name, "affiliation": ident.affiliation, "github": ident.github,
-                           "key": ident.public_key, "fields": ["*"]}])
+                           "key": ident.public_key}])
     path = make_benchmark(tmp_path / "fake", "demo-bench", 24)
-    tasks.register(ws, "demo-bench", path, "chemistry")
+    tasks.register(ws, "demo-bench", path)
     return ws
 
 

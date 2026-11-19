@@ -22,7 +22,7 @@ Return the entry:
 - name: the benchmark's name as its authors write it.
 - description: one or two sentences on what it measures and what a task looks like.
 - paper: a link to its paper (arXiv, DOI or publisher), or "" when the repository names none.
-- fields: one to three lower-case fields of science or engineering it belongs to, such as "chemistry" or "software engineering".
+- released: the date the benchmark was first released to the public, as YYYY-MM-DD. Take it from the paper, a release note, a changelog or the README. When only a month is given, use its first day. "" when the repository does not say: never guess a date.
 - license: its SPDX identifier, or "" when the repository does not say.
 - homepage: its website or leaderboard, or "".
 

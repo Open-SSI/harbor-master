@@ -18,7 +18,6 @@ class Task:
     has_tests: bool = False
     harbor_format: bool = True
     subarea: str = "general"
-    domain: str = ""            # the field the task belongs to, as a slug: "life-sciences"
     origin_digest: str = ""
 
     def __post_init__(self) -> None:

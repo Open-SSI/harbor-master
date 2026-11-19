@@ -221,8 +221,7 @@ def ledger_verify(simulated: bool = Simulated, workspace: Optional[Path] = Works
     """Check every shard: schema, hash chain, signatures, repeats, and what accepted tasks must have."""
     ws = need_workspace(workspace)
     ledger_dir = records(ws, simulated)
-    fields = {b: info.get("field", "") for b, info in tasks_mod.read_registry(ws).items()}
-    problems = ledger_mod.verify(ledger_dir, fields, config_mod.load(ws).index.max_per_benchmark, simulated=simulated, index_dir=ws)
+    problems = ledger_mod.verify(ledger_dir, config_mod.load(ws).index.max_per_benchmark, simulated=simulated, index_dir=ws)
     n = len(ledger_mod.Ledger(ledger_dir, simulated=simulated).events)
     if problems:
         for p in problems[:50]:
@@ -273,7 +272,7 @@ def protocol_show(ctx: typer.Context, workspace: Optional[Path] = Workspace):
         console.print(f"[{theme.AM}]No protocol is locked in this ledger.[/] The owner locks one with: hm protocol lock")
         return
     when = time.strftime("%Y-%m-%d %H:%M", time.localtime(lock["time"]))
-    console.print(f"Locked: [bold]{lock['protocol']}[/], by @{lock['runner']} on {when}." + (f" {lock['note']}" if lock.get("note") else ""))
+    console.print(f"Locked: [bold]v{ledger_mod.protocol.version(lock)}[/] ({lock['protocol']}), by @{lock['runner']} on {when}." + (f" {lock['note']}" if lock.get("note") else ""))
     diff = ledger_mod.protocol.differences(lock.get("settings", {}), cfg.protocol_settings())
     diff += [f"{name}: not the locked copy" for name in templates.changed(lock, ws)]
     if diff:
@@ -286,10 +285,16 @@ def protocol_show(ctx: typer.Context, workspace: Optional[Path] = Workspace):
 
 @protocol_app.command("lock")
 def protocol_lock(note: str = typer.Option("", help="Why the protocol is being set or changed."),
+                  bump: str = typer.Option("", help="Give this lock a new version: patch (0.0.1 to 0.0.2) or minor (0.1.0 to 0.2.0). "
+                                                    "Default: the version stays."),
                   workspace: Optional[Path] = Workspace):
-    """Owner only: lock this index's settings, skills, roster and contributor list as they are here."""
+    """Owner only: lock this index's settings, skills and roster as they are here. The version stays unless --bump is given."""
     ws, ident = need_workspace(workspace), need_identity()
     cfg = config_mod.load(ws)
+    try:
+        ledger_mod.protocol.bumped(ledger_mod.protocol.START, bump)
+    except ValueError as err:
+        fail(str(err))
     if not is_owner(ws, ident):
         fail(f"Only the owner can lock the protocol, and @{ident.github} is not the owner on the contributor list.")
     sync = ledger_mod.Sync(ws, ident.name, ident.github)
@@ -302,18 +307,29 @@ def protocol_lock(note: str = typer.Option("", help="Why the protocol is being s
              "tool that is installed. Copy them in first: hm skills adopt")
     if wrong:
         fail("Not locked: the code cannot use some of this index's skills as they are. See: hm skills")
-    lock = ledger_mod.protocol.current(ledger_mod.Ledger(ws).events)
+    events = ledger_mod.Ledger(ws).events
+    people = [e for e in events if e["type"] == "contributors"]
+    if not people or max(people, key=lambda e: e["time"]).get("value") != ledger_mod.list_digest(ws):
+        ledger_mod.sign_list(ws, ident, cfg.protocol)       # the owner's own edit of the list: signed here, with no new version
+        sync.define("sign the contributor list", (ledger_mod.CONTRIBUTORS,))
+        if sync.enabled:
+            sync.publish("sign the contributor list")
+        console.print("Signed the contributor list as it is here.")
+    lock = ledger_mod.protocol.current(events)
     registry, requires = templates.digests(ws), cfg.requires.harbor_master
-    if lock is not None and (lock["protocol"], lock.get("registry"), lock.get("requires", requires)) == (cfg.protocol, registry, requires):
-        console.print(f"Protocol {cfg.protocol} and the index's files are already the locked ones.")
+    if not bump and lock is not None and (lock["protocol"], lock.get("registry"), lock.get("requires", requires)) == (cfg.protocol, registry, requires):
+        console.print(f"Protocol v{ledger_mod.protocol.version(lock)} ({cfg.protocol}) and the roster are already the locked ones.")
         return
-    ledger_mod.protocol.write(ws, ident, cfg, note)
+    made = ledger_mod.protocol.write(ws, ident, cfg, note, bump=bump)
     sync.define(f"lock protocol {cfg.protocol}")        # the files travel with the lock that covers them
     if sync.enabled:
         sync.publish(f"lock protocol {cfg.protocol}")
     same = lock is not None and lock["protocol"] == cfg.protocol
-    console.print(f"[{theme.TE}]Locked protocol {cfg.protocol}.[/] " + (
-        "The settings are the same as before, so earlier records stand. The roster and the contributor list are the new ones." if same else
+    console.print(f"[{theme.TE}]Locked protocol v{made['version']}[/] ({cfg.protocol}). " + (
+        "The settings are the same as before, so earlier records stand." if same else
         "Every run on this index must now use these settings."
         + (f" It replaces {lock['protocol']}: tasks finished under that one keep their records, and may be "
            "run again under the new one." if lock else "")))
+    if lock is not None and not bump:
+        console.print(f"[{theme.MU}]The version stays v{made['version']}. To give this change a version of its own: "
+                      + ("/lock patch" if same else "/lock minor") + "[/]")

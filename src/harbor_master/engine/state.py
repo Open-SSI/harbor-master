@@ -19,7 +19,6 @@ STAGE: ContextVar[str] = ContextVar("hm_stage", default="session")
 @dataclass
 class BenchState:
     id: str
-    field: str
     path: Path
     released: str = ""           # the release date from the benchmark's entry, for the recency gate
     license: str = ""            # the benchmark's own license, shown to the license gate

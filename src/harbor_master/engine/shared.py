@@ -60,16 +60,6 @@ async def _run_shared(s: Session, bench: BenchState) -> None:
         return
     for task in bench.tasks:
         task.meta["_benchmark_license"] = bench.license
-        task.domain = task.domain or ledger_mod.slug(bench.field)
-    if not s.simulate and s.fields is not None:      # a contributor curates only the fields they are listed for
-        mine = [t for t in bench.tasks if t.domain in s.fields]
-        if not mine:
-            bench.phase, bench.skip = "skipped", "outside_fields"
-            bench.detail = ("none of its tasks are in your fields (" + (", ".join(sorted(s.fields)) or "none set") + ")")
-            return
-        if len(mine) < len(bench.tasks):
-            s.note_recent("fields", bench.id, f"{len(bench.tasks) - len(mine)} tasks are outside your fields and left for others")
-        bench.tasks = mine
     if s.only:
         wanted = [t for t in bench.tasks if t.name in s.only]
         missing = s.only - {t.name for t in wanted}
@@ -77,7 +67,7 @@ async def _run_shared(s: Session, bench: BenchState) -> None:
             raise ValueError(f"no such task in {bench.id}: {', '.join(sorted(missing))}")
         bench.tasks = wanted
     known = ledger_mod.submitted(s.ledger.events)       # one record for the whole benchmark, not one per task
-    new = {t.task_id: {"digest": t.digest, "field": t.domain} for t in bench.tasks
+    new = {t.task_id: {"digest": t.digest} for t in bench.tasks
            if known.get(t.task_id, {}).get("digest") != t.digest}
     if new:
         s.record(bench.id, "submission", source=str(bench.path), tasks=new)
@@ -101,8 +91,8 @@ async def _run_shared(s: Session, bench: BenchState) -> None:
     brief = s.ledger.brief(bench.id)
     if brief is None and s.cfg.select.require_brief and kept:
         bench.phase, bench.detail = "brief", "waiting for the lead's brief"
-        text = await s.ask("brief", f"{bench.id} needs a brief from its field lead: what counts as "
-                              "important in this field and this benchmark?", bench.id)
+        text = await s.ask("brief", f"{bench.id} needs a brief from its lead: what counts as "
+                              "important in this benchmark?", bench.id)
         if not text:
             bench.phase, bench.detail, bench.skip = "skipped", "no brief, skipped (answer with hm brief, then run again)", "no_brief"
             return

@@ -402,3 +402,9 @@ for _name, (_cli, _simulated) in {
         "stats": ("stats --no-pull", True), "benchmarks": ("benchmarks", False), "contributors": ("contributors", False),
         "index": ("index", False), "protocol": ("protocol", False), "tasks": ("tasks", False), "doctor": ("doctor", False)}.items():
     command(_name, "view", "/" + _name)(_shown(_cli, _simulated))
+
+
+@command("theme", "view", "/theme [light|dark]")
+def theme_(session, args):
+    from ..tui import theme
+    return f"The screen is in {theme.set_mode(args[0] if args else '')} mode now. ctrl+t switches it too."

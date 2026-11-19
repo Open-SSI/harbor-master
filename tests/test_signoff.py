@@ -127,7 +127,7 @@ async def test_a_second_person_leaves_claimed_tasks_alone(workspace, ident, monk
     other = identity.create("Second Person", "Other University", "s@example.org", "second-person")
     path = workspace / ledger.CONTRIBUTORS
     path.write_text(path.read_text() + f'\n[[contributor]]\nname = "Second Person"\ngithub = "second-person"\n'
-                    f'key = "{other.public_key}"\nfields = ["*"]\n')
+                    f'key = "{other.public_key}"\n')
     second = Session(workspace, config_mod.load(workspace), other, tasks.read_registry(workspace), simulate=True, as_real=True,
                      speed=0, no_input=True, run_id="r2")
     second.cfg.select.require_signoff = False
@@ -138,17 +138,13 @@ async def test_a_second_person_leaves_claimed_tasks_alone(workspace, ident, monk
     assert ledger.Ledger(workspace).claims(BENCH, __import__("time").time(), me="second-person")
 
 
-def test_fields_decide_who_may_curate_what():
+def test_anyone_listed_with_a_handle_and_a_key_can_contribute():
     owner = {"name": "O", "github": "o", "key": "k1", "role": "owner"}
-    bio = {"name": "B", "github": "b", "key": "k2", "fields": ["Life Sciences"]}
-    unset = {"name": "U", "github": "u", "key": "k3"}
-    waiting = {"name": "W", "github": "", "key": ""}
-    assert ledger.may_curate(owner, "physical-sciences")
-    assert ledger.may_curate(bio, "life-sciences") and not ledger.may_curate(bio, "physical-sciences")
-    assert not ledger.may_curate(unset, "life-sciences") and not ledger.may_curate(waiting, "life-sciences")
-    people = [owner, bio, unset]
-    assert ledger.fields_of(people, "o") is None and ledger.fields_of(people, "b") == {"life-sciences"}
-    assert ledger.fields_of(people, "u") == set() and ledger.fields_of(people, "nobody") == set()
+    listed = {"name": "U", "github": "u", "key": "k3"}
+    waiting = {"name": "W", "github": "w", "key": ""}
+    assert ledger.can_contribute(owner) and ledger.can_contribute(listed)
+    assert not ledger.can_contribute(waiting) and not ledger.can_contribute(None)
+    assert (ledger.status(owner), ledger.status(listed), ledger.status(waiting)) == ("owner", "can contribute", "listed, waiting for signing key")
 
 
 def test_every_skill_loads_and_has_a_version():

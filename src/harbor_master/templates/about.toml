@@ -15,5 +15,6 @@ license = ""
 
 # Where the accepted tasks are kept, each as one archive named by its digest, so that a later
 # benchmark run gets exactly the version that was accepted. A Hugging Face dataset repository,
-# written as "org/name", or a folder. Empty keeps them on each machine only.
+# written as "org/name". Every index has one: it is named, and created, when the index is.
+# The owner names another with: /tasks store ORG/NAME
 tasks = ""

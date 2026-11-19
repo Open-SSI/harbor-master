@@ -16,7 +16,7 @@ from ..backends import make_backend
 from ..core.config import LOCAL, Config
 from ..core.config import simulated as simulated_dir
 from ..core.identity import Identity
-from ..ledger import REPORTS, Ledger, Shard, Sync, active, fields_of, load_contributors, write_index
+from ..ledger import REPORTS, Ledger, Shard, Sync, active, load_contributors, write_index
 from ..tasks import Task
 from . import shared, stages
 from .state import BENCH, STAGE, STAGES, BenchState, CellState, Request
@@ -52,7 +52,7 @@ class Session:
         self.sync = Sync(self.ledger_dir, ident.name, ident.github)
         self._sync_lock = asyncio.Lock()
         self.simulate = simulate
-        self.benches = {b: BenchState(b, info.get("field", "general"), Path(info["path"]) if info.get("path") else Path(),
+        self.benches = {b: BenchState(b, Path(info["path"]) if info.get("path") else Path(),
                                    info.get("released", ""), info.get("license", ""), entry=info.get("entry"))
                         for b, info in benchmarks.items()}
         self.cells = [CellState(i + 1) for i in range(cfg.run.cells)]
@@ -79,7 +79,6 @@ class Session:
         people = load_contributors(workspace)
         self.is_reviewer = any(c["github"] == ident.github for c in active(people))
         self.is_owner = any(c.get("github") == ident.github and c.get("role") == "owner" and c.get("key") for c in people)
-        self.fields = fields_of(people, ident.github)     # None: every field. A set: only these
         self.claimed: dict[str, list[str]] = {}            # benchmark -> the task ids this run holds
 
     def _usage(self, tier: str, cost: float, tokens: int) -> None:
@@ -311,7 +310,7 @@ class Session:
             return f"{benchmark} is already in this run."
         if self.quitting:
             return "This run is ending, so it takes nothing more."
-        self.benches[benchmark] = BenchState(benchmark, info.get("field", "general"), Path(info["path"]) if info.get("path") else Path(),
+        self.benches[benchmark] = BenchState(benchmark, Path(info["path"]) if info.get("path") else Path(),
                                              info.get("released", ""), info.get("license", ""), entry=info.get("entry"))
         self._shared_tasks.append(asyncio.create_task(shared.run_shared(self, self.benches[benchmark])))
         for i, cell in enumerate(self.cells):           # cells that had run out of work take tasks again

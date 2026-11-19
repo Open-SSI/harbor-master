@@ -44,7 +44,6 @@ def load_task(path: Path, benchmark: str) -> Task:
         has_solution=solution.is_dir() and any(solution.iterdir()),
         has_tests=(path / "tests").is_dir() and any((path / "tests").iterdir()),
         subarea=str(md.get("field") or md.get("domain") or (md.get("tags") or ["general"])[0]),
-        domain=str(md.get("domain") or "").strip().lower().replace(" ", "-"),
     )
 
 

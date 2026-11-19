@@ -73,7 +73,7 @@ def test_the_benchmark_list_comes_from_signed_records_and_the_roster_from_the_in
     from harbor_master import ledger, tasks
     from harbor_master.core.config import roster
     assert tasks.supported.supported(tmp_path) == [] and roster(tmp_path) == []       # a new index lists nothing
-    entry = {**tomllib.loads(BENCHMARKS)["benchmark"][0], "description": "Science tasks in a terminal.", "paper": "none", "fields": ["chemistry"]}
+    entry = {**tomllib.loads(BENCHMARKS)["benchmark"][0], "description": "Science tasks in a terminal.", "paper": "none"}
     ledger.benchmarks.add(tmp_path, ident, "p", {k: v for k, v in entry.items() if k != "ref"})       # not pinned: it does not count
     assert tasks.supported.supported(tmp_path) == []
     ledger.benchmarks.add(tmp_path, ident, "p", entry)

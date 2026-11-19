@@ -10,7 +10,7 @@ trial and verdict made for it.
 | `protocol.toml` | The curation protocol: every setting that can change a result | The owner | Its checksum is locked in the ledger. A run with a different copy is refused |
 | `benchmarks.toml` | The one list of benchmarks that may be curated, each with its name, description, paper, repository and pinned release | Nobody by hand: anyone who can curate adds one on the `hm` screen with `/benchmarks add URL` | The list is what the signed records say. Editing the file changes nothing |
 | `roster.toml` | Which agent configurations are benchmarked on the index | The owner | Its checksum is locked in the ledger with the protocol |
-| `contributors.toml` | Who may curate, in which fields, and their signing keys | The owner | Its checksum is locked in the ledger with the protocol, and every record is checked against it |
+| `contributors.toml` | Who may contribute, and their signing keys | The owner, on the `hm` screen with `/contributors add HANDLE KEY` | The owner signs each change, with no lock. A copy that differs is refused, and every record is checked against the list |
 | `skills/` | What the agents that curate this index are told: the adapter, the gates, the ranking, the probe, the audit | The owner | Part of the protocol's checksum |
 | `adapters/` | For a benchmark that is not in Harbor format: the code that turns it into Harbor tasks | The run that first takes the benchmark | A run uses only a version that a signed record says passed its checks |
 | `ledger/` | Every record, in one file per person and run | Everyone on the list, through `hm` | Signed and chained: `hm ledger verify` |
