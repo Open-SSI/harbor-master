@@ -1,11 +1,7 @@
-"""The commands a user can give during a session, kept in one registry.
+"""What a run can be told to do, kept in one registry. No screen has a prompt: the boxes and keys of the
+curate screen run these, and so does the relay.
 
-To add a command, write a function in `handlers.py` and decorate it with `@command`. Its
-group decides how it is treated (DESIGN.md Section 11):
-
-- "view": only shows something, runs at once.
-- "control": changes the run, confirmed when it was read from plain text.
-- "confirm": spends, discards, or decides, always confirmed.
+To add one, write a function in `handlers.py` and decorate it with `@command`.
 """
 from __future__ import annotations
 
@@ -28,20 +24,9 @@ class Command:
 
 
 @dataclass
-class Intent:
-    """What a typed line was read as."""
-    kind: str                      # commands | question | unsupported | unclear
-    commands: list[Command] = field(default_factory=list)
-    prob: float = 1.0
-    reason: str = ""               # for unsupported: why not
-    offer: str = ""                # for unsupported: the nearest thing that can be done
-    typed: bool = False            # the user typed "/" themself
-
-
-@dataclass
 class Spec:
     name: str
-    group: str                     # view | control | confirm
+    group: str                     # view | control | answer | confirm
     usage: str
     effect: str = ""               # the consequence shown in a confirmation; "{0}" is the first argument
     run: Handler | None = None     # None: planned, not built yet
@@ -67,16 +52,15 @@ def parse(text: str) -> Command:
     return Command(parts[0].lower() if parts else "help", parts[1:])
 
 
-def needs_confirmation(intent: Intent) -> bool:
-    groups = {COMMANDS[c.name].group for c in intent.commands}
-    if "confirm" in groups:
-        return True
-    return not intent.typed and "control" in groups
+# What the run screen itself does: only what steers or shows the run that is going. What the run asks of a person
+# (a brief, a selection, a verdict, an adapter) is asked in a box. The other commands stay in the registry, because
+# those boxes and the relay run them.
+RUN_SCREEN = ("help", "status", "explain", "review", "pause", "resume", "leave", "quit")
 
 
-def describe(cmd: Command) -> str:
-    spec = COMMANDS[cmd.name]
-    return spec.effect.format(cmd.args[0] if cmd.args else "it")
+def shown(name: str) -> bool:
+    """Whether a command is one of the run screen's own."""
+    return name in RUN_SCREEN and name in COMMANDS and COMMANDS[name].run is not None
 
 
 def execute(session: "Session", cmd: Command) -> str:
@@ -91,7 +75,9 @@ def execute(session: "Session", cmd: Command) -> str:
 
 
 def help_text() -> str:
-    rows = []
-    for group, label in (("view", "View"), ("control", "Control"), ("confirm", "Confirmed")):
-        rows.append(f"{label}: " + "  ".join(s.usage for s in COMMANDS.values() if s.group == group and s.run))
-    return "\n".join(rows)
+    about = {"help": "this list", "status": "where every benchmark and task stands, and what was spent",
+             "explain": "why a task is where it is (or press its cell's number)", "review": "read the reports that wait, and accept or reject each",
+             "pause": "hold the run, or one benchmark", "resume": "go on",
+             "leave": "leave the screen: the run goes on", "quit": "end the run"}
+    rows = [f"  {COMMANDS[n].usage:<22} {about.get(n, '')}" for n in RUN_SCREEN if shown(n)]
+    return "\n".join(["On this screen:", *rows, "When the run needs something from you, it asks in a box of its own."])

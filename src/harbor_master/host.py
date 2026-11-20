@@ -2,10 +2,10 @@
 
 The run and its screen live in a background process, attached to a pseudo-terminal that a
 small relay owns. What a person has in their terminal is a view of that screen: closing the
-window closes the view, and `hm run` opens another on the same run. There is one run per
-index. `hm run NAME` adds a benchmark to the one that is going.
+window closes the view, and `hm open INDEX` opens another on the same run. There is one run per
+index. `/add NAME` on its screen adds a benchmark to the one that is going.
 
-    terminal  <-->  view (hm run)  <-- socket -->  relay  <-- pseudo-terminal -->  the run and its screen
+    terminal  <-->  view (hm open)  <-- socket -->  relay  <-- pseudo-terminal -->  the run and its screen
 """
 from __future__ import annotations
 
@@ -32,7 +32,13 @@ ACTIVE = "run.active"           # in .hm: which run is going in this index
 DETACH = b"\x1b_hm-detach\x1b\\"        # written by the screen when the user leaves it: the relay closes every view
 # What a view sets up in the terminal it runs in, and puts back: the other screen, no cursor, the mouse, pasted text.
 ENTER = b"\x1b[?1049h\x1b[H\x1b[2J\x1b[?25l\x1b[?1000h\x1b[?1003h\x1b[?1015h\x1b[?1006h\x1b[?2004h"
-LEAVE = b"\x1b[?2004l\x1b[?1006l\x1b[?1015l\x1b[?1003l\x1b[?1000l\x1b[?25h\x1b[?1049l"
+# Everything the screen may have switched on in the terminal is switched off again on the way out. The screen
+# itself is still running behind the relay, so it never does this for a view that leaves. The keyboard
+# protocol matters most: left on, every key typed in the shell afterwards shows up as codes such as 4;;104u.
+LEAVE = (b"\x1b[=0;1u\x1b[<u"                                                        # the extended keyboard protocol
+         b"\x1b[?2004l\x1b[?1004l\x1b[?2048l\x1b[?2026l"                             # paste, focus, resize and sync reports
+         b"\x1b[?1016l\x1b[?1006l\x1b[?1015l\x1b[?1003l\x1b[?1002l\x1b[?1000l"       # the mouse
+         b"\x1b[0m\x1b[?25h\x1b[?1049l")                                             # colors, the cursor, the screen
 
 
 def _alive(pid: int) -> bool:
@@ -87,7 +93,7 @@ def _resize(master: int, rows: int, cols: int) -> None:
     fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", max(rows, 5), max(cols, 20), 0, 0))
 
 
-def relay(ws: Path, argv: list[str], command: str, simulate: bool) -> None:
+def relay(ws: Path, argv: list[str], command: str, simulate: bool, verb: str = "curate") -> None:
     """Start the run on a pseudo-terminal and carry its screen to whoever is viewing. Returns when the run ends."""
     view_path, control_path = _sockets(ws)
     for stale in (view_path, control_path):
@@ -100,7 +106,7 @@ def relay(ws: Path, argv: list[str], command: str, simulate: bool) -> None:
     if child == 0:      # the run itself: the same command, told that it is the one behind the relay
         os.environ.update(HM_HOSTED="1", HM_CONTROL=control_path)
         os.environ.setdefault("TERM", "xterm-256color")
-        os.execv(sys.executable, [sys.executable, "-c", "from harbor_master.cli import app; app()", "run", *argv,
+        os.execv(sys.executable, [sys.executable, "-c", "from harbor_master.cli import app; app()", verb, *argv,
                                   "--foreground", "-w", str(ws)])
     _resize(master, 40, 120)
     record = claim(ws, command, simulate, socket_path=view_path, control=control_path, app=child)
@@ -188,12 +194,12 @@ def relay(ws: Path, argv: list[str], command: str, simulate: bool) -> None:
             pass
 
 
-def start(ws: Path, argv: list[str], command: str, simulate: bool) -> dict:
+def start(ws: Path, argv: list[str], command: str, simulate: bool, verb: str = "curate") -> dict:
     """Start a run in the background, behind a relay, and wait until it can be viewed."""
     log = config_mod.local(ws) / "host.log"
     log.parent.mkdir(exist_ok=True)
     with log.open("ab") as out:
-        subprocess.Popen([sys.executable, "-m", "harbor_master.host", str(ws), json.dumps(argv), command, "1" if simulate else "0"],
+        subprocess.Popen([sys.executable, "-m", "harbor_master.host", str(ws), json.dumps(argv), command, "1" if simulate else "0", verb],
                          stdin=subprocess.DEVNULL, stdout=out, stderr=out, start_new_session=True, cwd=str(ws))
     for _ in range(200):
         info = active(ws)
@@ -203,7 +209,7 @@ def start(ws: Path, argv: list[str], command: str, simulate: bool) -> dict:
     raise RuntimeError(f"The run did not start. See {log}")
 
 
-# ----- the view: what `hm run` is in a terminal -----
+# ----- the view: what `hm open INDEX` shows when a run is going -----
 
 def _frame(kind: str, body: bytes) -> bytes:
     return kind.encode() + len(body).to_bytes(4, "big") + body
@@ -257,11 +263,13 @@ def attach(ws: Path) -> str:
         return "going" if active(ws) else "ended"
     finally:
         signal.signal(signal.SIGWINCH, previous)
-        termios.tcsetattr(stdin, termios.TCSADRAIN, before)
         try:
             os.write(stdout, LEAVE)
-        except OSError:
+            time.sleep(0.05)                                # what the terminal still had to say arrives
+            termios.tcflush(stdin, termios.TCIFLUSH)        # and is dropped, so that it is not typed into the shell
+        except (OSError, termios.error):
             pass
+        termios.tcsetattr(stdin, termios.TCSADRAIN, before)
         link.close()
 
 
@@ -296,4 +304,4 @@ def tell(ws: Path, request: dict, timeout: float = 30.0) -> dict:
 
 
 if __name__ == "__main__":      # the relay, started by `start`
-    relay(Path(sys.argv[1]), json.loads(sys.argv[2]), sys.argv[3], sys.argv[4] == "1")
+    relay(Path(sys.argv[1]), json.loads(sys.argv[2]), sys.argv[3], sys.argv[4] == "1", *sys.argv[5:6])

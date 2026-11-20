@@ -4,11 +4,11 @@ What each agent is told. One file per job, grouped by stage. Code holds the rule
 (which answers pass, what a stage does with a result); these files hold the wording.
 
 The curation skills (`adapt/`, `triage/`, `rank/`, `probe/`, `audit/`) decide what gets into an index.
-Each index has its own copies under `skills/` in its repository: `hm index new` writes them,
+Each index has its own copies under `skills/` in its repository: `hm new` writes them,
 and they are locked with the index's protocol. The files here are the templates those copies
 start from. An index may change any wording. It may not change what the code reads: the keys
-of a TOML skill, and the `$placeholders` and the two sections of a prompt. `hm skills` shows
-where an index stands, `hm skills diff` what differs, and `hm skills adopt` takes a template in.
+of a TOML skill, and the `$placeholders` and the two sections of a prompt. `hm lock` copies in
+the template of any skill an index has no copy of.
 
 The session skills (`session/`) read what is typed on the run screen. They change no result,
 so they are the same for every index and are not part of any protocol.

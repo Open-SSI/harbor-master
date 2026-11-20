@@ -86,16 +86,43 @@ def get(name: str) -> str | None:
 
 
 @lru_cache(maxsize=None)
+def agent_names() -> frozenset[str]:
+    """Every agent the installed Harbor has, by name. Harbor is the one list: an agent it gains is usable here
+    with no change. Empty when Harbor cannot be imported. This reads one small module, so it is quick."""
+    try:
+        from harbor.models.agent.name import AgentName
+    except Exception:           # not installed, or a version without this module
+        return frozenset()
+    return frozenset(n.value for n in AgentName)
+
+
+@lru_cache(maxsize=None)
 def harbor_agents() -> dict[str, list[str]]:
-    """Every agent the installed Harbor has, with the variables it reads its API key from. Harbor is the one
-    list: an agent it gains is usable here with no change. Empty when Harbor cannot be imported."""
+    """Each agent Harbor has, with the variables it reads its API key from.
+
+    Reading that means loading every agent's code, which takes seconds. It changes only with Harbor's
+    version, so it is done once per version and kept in the user's configuration folder."""
+    import json
+    from importlib.metadata import PackageNotFoundError, version
+    if not agent_names():
+        return {}
+    try:
+        note = config_dir() / f"harbor-agents-{version('harbor')}.json"
+    except PackageNotFoundError:
+        return {n: [] for n in sorted(agent_names())}
+    try:
+        kept = json.loads(note.read_text())
+        if isinstance(kept, dict) and set(kept) == set(agent_names()):
+            return kept
+    except (OSError, ValueError):
+        pass
+    out: dict[str, list[str]] = {}
     try:
         from harbor.agents.factory import AgentFactory
         from harbor.models.agent.name import AgentName
-    except Exception:           # not installed, or a version without these modules
-        return {}
-    out: dict[str, list[str]] = {}
-    for name in sorted(n.value for n in AgentName):
+    except Exception:
+        return {n: [] for n in sorted(agent_names())}
+    for name in sorted(agent_names()):
         names: list[str] = []
         try:
             access = getattr(getattr(AgentFactory.get_agent_class(AgentName(name)), "MODEL_CONNECTION", None), "agent_provider_access", None)
@@ -103,12 +130,17 @@ def harbor_agents() -> dict[str, list[str]]:
         except Exception:       # an agent whose own package is not installed: it is still an agent by name
             pass
         out[name] = names
+    try:
+        note.parent.mkdir(parents=True, exist_ok=True)
+        note.write_text(json.dumps(out))
+    except OSError:
+        pass
     return out
 
 
 def known_agent(agent: str) -> bool:
     """Whether Harbor has this agent. When Harbor cannot be asked, nothing is called unknown."""
-    listed = harbor_agents()
+    listed = agent_names()
     return not listed or agent in listed
 
 
@@ -123,7 +155,8 @@ def needs(agent: str, model: str = "", key: str = "") -> list[str]:
     if not key or key in AGENT_KEYS.get(agent, []):     # a key for another provider's endpoint is not replaced by the sign-in
         names += AGENT_KEYS.get(agent, [])
     if not key:
-        names += harbor_agents().get(agent, [])
+        if agent not in AGENT_KEYS:         # the two agents named above need no look into Harbor, which is slow the first time
+            names += harbor_agents().get(agent, [])
         if "/" in model:
             names.append(model.split("/", 1)[0].upper().replace("-", "_") + "_API_KEY")
     return list(dict.fromkeys(n for n in names if n))

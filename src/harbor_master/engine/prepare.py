@@ -53,7 +53,7 @@ def abandoned_text(benchmark: str, record: dict) -> str:
     import time
     when = time.strftime("%Y-%m-%d", time.localtime(record["time"]))
     return (f"abandoned by @{record['runner']} on {when}: no adapter could be made to pass"
-            + (f" ({record['reason'][:120]})" if record.get("reason") else "") + f". Anyone who can curate reopens it with: /adapt {benchmark}")
+            + (f" ({record['reason'][:120]})" if record.get("reason") else "") + f". To try again, take it off the list and add it again: hm benchmarks remove {benchmark}, then hm benchmarks add URL")
 
 
 def approved(events, digest: str) -> bool:
@@ -157,7 +157,7 @@ async def ready(s: Session, bench: BenchState) -> bool:
     trying = s.sandbox      # a simulated run, whose records are kept apart: it builds nothing and needs no lock
     have = adapter_mod.code_dir(adapter_dir) is not None and STUB not in (adapter_mod.code_dir(adapter_dir) / "adapter.py").read_text()
     if trying and not have:
-        return _skip(bench, "it is not in Harbor format and has no adapter yet. A real run builds one, or: /adapt " + bench.id, "no_adapter")
+        return _skip(bench, "it is not in Harbor format and has no adapter yet. A real run builds one", "no_adapter")
     if not trying and not (have and approved(real, adapter_mod.digest(adapter_dir))):
         if not await _build_and_share(s, bench, entry, source, adapter_dir, work, sandbox, oracle, have):
             return False
@@ -197,11 +197,11 @@ async def _build_and_share(s: Session, bench: BenchState, entry: dict, source: P
             answer = await s.ask("adapter", f"The adapter for {bench.id} does not pass after {built.rounds} round{'s' if built.rounds != 1 else ''}"
                                  f"{' by the models' if built.rounds else ''}: {shown}. It is in {adapter_dir}.", bench.id)
             if answer is None:
-                return _skip(bench, "its adapter does not pass yet, and nothing could ask you. Run with the screen, or: /adapt " + bench.id, "adapter_needs_person")
+                return _skip(bench, "its adapter does not pass yet, and nothing could ask you. Run hm curate in a terminal, where a box asks", "adapter_needs_person")
             if answer == "abandon":
                 record(lambda *a, **k: s.record(bench.id, a[0], digest_override=k.pop("digest"), **k), s.cfg, adapter_dir, built, oracle,
                        "drop", built.problems[0][:200])
-                return _skip(bench, f"abandoned: its adapter could not be made to pass. Only /adapt {bench.id} reopens it", "abandoned")
+                return _skip(bench, "abandoned: its adapter could not be made to pass. Taking it off the list and adding it again reopens it", "abandoned")
             bench.phase = "adapt"
             if adapter_mod.digest(adapter_dir) != before:       # fixed by hand: check that
                 say("checking your fix")

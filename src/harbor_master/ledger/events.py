@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 EVENT_TYPES = {"submission", "decision", "trial", "repair", "report", "verdict", "claim", "brief", "roster", "protocol",
-               "usage", "skip", "benchmark", "contributors"}       # usage: what the model tiers were called for. skip: a benchmark a run left out, and why.
+               "usage", "skip", "benchmark", "contributors", "release"}       # usage: what the model tiers were called for. skip: a benchmark a run left out, and why.
 #                                                 benchmark: one put on the index's list, or taken off it
 TRIAL_PURPOSES = {"oracle", "noop", "probe", "cheap_solve", "difficulty", "parity", "benchmark"}
 TIER_RANK = {"code": 0, "decision": 1, "worker": 2, "frontier": 3, "human": 4}
@@ -27,10 +27,11 @@ def slug(benchmark: str) -> str:
 
 
 def trial_slot(e: dict) -> tuple:
-    """(task digest, agent and version, model, reasoning effort, protocol, trial index). Purpose is not part of it:
-    a difficulty trial and a later benchmark trial of the same agent are the same evidence."""
+    """(task digest, agent and version, model, reasoning effort, trial index). Neither the purpose nor the
+    protocol's version is part of it: a difficulty trial and a later benchmark trial of the same agent on the
+    same version of a task are the same evidence."""
     return (e["digest"], e.get("agent", ""), e.get("agent_version", ""), e.get("model", ""),
-            e.get("reasoning_effort", ""), e["protocol"], e.get("trial_index", 0))
+            e.get("reasoning_effort", ""), e.get("trial_index", 0))
 
 
 def decision_key(e: dict) -> tuple:

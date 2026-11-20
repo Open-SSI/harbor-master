@@ -6,7 +6,7 @@
 #   use = "claude-opus-5.5"
 #
 # Any field written beside `use` replaces the preset's. A configuration that is not here is
-# written out in full: every agent the installed Harbor has can be used (hm roster agents).
+# written out in full: every agent the installed Harbor has can be used.
 #
 # These ten are the configurations run on Autonomous Science Bench, with the settings used there.
 #   version   the agent's own version, where it was pinned. Empty means the newest at run time,

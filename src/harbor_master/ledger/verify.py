@@ -11,6 +11,7 @@ from . import protocol
 from .fold import INDEX_FILE, fold, index_entries
 from .store import read_shard, shard_paths
 
+
 def load_contributors(ledger_dir: Path) -> list[dict]:
     path = ledger_dir / CONTRIBUTORS
     if not path.exists():
@@ -23,9 +24,15 @@ def active(contributors: list[dict]) -> list[dict]:
     return [c for c in contributors if c.get("github") and c.get("key")]
 
 
-def can_contribute(c: dict | None) -> bool:
-    """Whether a listed person can contribute now: anyone with a GitHub handle and a signing key, to any benchmark."""
+def can_evaluate(c: dict | None) -> bool:
+    """Whether a listed person can evaluate the released index: anyone with a GitHub handle and a signing key."""
     return bool(c and c.get("github") and c.get("key"))
+
+
+def can_contribute(c: dict | None) -> bool:
+    """Whether a listed person can curate: add benchmarks, run them and sign verdicts. An evaluator cannot:
+    they run the released index's evaluation, and nothing else."""
+    return can_evaluate(c) and c.get("role") != "evaluator"
 
 
 def can_cut(c: dict | None) -> bool:
@@ -36,6 +43,8 @@ def can_cut(c: dict | None) -> bool:
 def status(c: dict) -> str:
     if can_contribute(c):
         return {"owner": "owner", "lead": "lead: makes the final cut"}.get(c.get("role", ""), "can contribute")
+    if can_evaluate(c):
+        return "evaluator: runs the evaluation only"
     missing = [w for w in ("github", "key") if not c.get(w)]
     return "listed, waiting for " + " and ".join("GitHub handle" if w == "github" else "signing key" for w in missing)
 
@@ -65,7 +74,7 @@ def list_problem(index_dir: Path, events) -> str:
     if signed[-1]["runner"] not in owners:
         return f"{CONTRIBUTORS} was last signed by @{signed[-1]['runner']}, who is not the owner on it"
     if signed[-1].get("value") != list_digest(index_dir):
-        return f"{CONTRIBUTORS} is not the list its owner signed. The owner changes it with /contributors add, and nobody else does"
+        return f"{CONTRIBUTORS} is not the list its owner signed. The owner changes it with hm contributors, and nobody else does"
     return ""
 
 
@@ -97,8 +106,7 @@ def _safe(path: Path) -> list[dict]:
         return []
 
 
-def verify(ledger_dir: Path, max_per_benchmark: int | None = None,
-           simulated: bool = False, index_dir: Path | None = None) -> list[str]:
+def verify(ledger_dir: Path, simulated: bool = False, index_dir: Path | None = None) -> list[str]:
     """Check every shard. Returns a list of problems, empty when the ledger is sound.
 
     A record of a simulated run is a problem wherever it is found, and supports nothing,
@@ -142,6 +150,8 @@ def verify(ledger_dir: Path, max_per_benchmark: int | None = None,
             who = by_handle.get(e["runner"])
             if who is None:
                 problems.append(f"{at}: runner @{e['runner']} is not on the contributor list")
+            elif not can_contribute(who):
+                problems.append(f"{at}: signed by @{e['runner']}, an evaluator, who may sign evaluation records only")
             elif not identity_mod.verify(who.get("key", ""), e["id"], e["sig"]):
                 problems.append(f"{at}: signature does not match @{e['runner']}'s key")
             key = duplicate_key(e)
@@ -191,14 +201,6 @@ def verify(ledger_dir: Path, max_per_benchmark: int | None = None,
             if real.get(task) != digest:
                 problems.append(f"{INDEX_FILE} lists {task}, which no accept verdict supports: it was edited by hand")
     states = fold(events)
-    if max_per_benchmark is not None:
-        counts: dict[str, int] = {}
-        for s in states.values():
-            if s.status == "accepted":
-                counts[s.benchmark] = counts.get(s.benchmark, 0) + 1
-        for bench, n in counts.items():
-            if n > max_per_benchmark:
-                problems.append(f"{bench}: {n} accepted tasks, more than the {max_per_benchmark} one benchmark may have")
     for tid, s in states.items():
         if s.status != "accepted":
             continue
@@ -214,4 +216,5 @@ def verify(ledger_dir: Path, max_per_benchmark: int | None = None,
         if not any(e["type"] == "decision" and e.get("stage") == "difficulty" and e.get("outcome") == "pass"
                    for e in mine):
             problems.append(f"{tid}: accepted without a difficulty result under the threshold")
-    return problems
+    from . import evals
+    return problems + evals.verify(ledger_dir, contributors, simulated)

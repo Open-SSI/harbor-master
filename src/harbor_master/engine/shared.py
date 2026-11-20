@@ -1,4 +1,4 @@
-"""The once-per-benchmark phase: load, triage, the lead's brief, ranking, selection, adapter.
+"""The once-per-benchmark phase: load, triage, a contributor's brief, ranking, selection, adapter.
 
 DESIGN.md Section 4 (stages 0 to 2) and Section 6.
 """
@@ -54,6 +54,7 @@ async def _run_shared(s: Session, bench: BenchState) -> None:
         s.note_recent("rejected", bench.id, bench.detail)
         return
     bench.phase, bench.detail = "triage", "loading tasks"
+    s.explain("triage")
     STAGE.set("triage")
     try:
         bench.tasks = load_benchmark(bench.path, bench.id)
@@ -94,40 +95,65 @@ async def _run_shared(s: Session, bench: BenchState) -> None:
 
     brief = s.ledger.brief(bench.id)
     if brief is None and s.cfg.select.require_brief and kept:
-        bench.phase, bench.detail = "brief", "waiting for the lead's brief"
-        text = await s.ask("brief", f"{bench.id} needs a brief from its lead: what counts as "
-                              "important in this benchmark?", bench.id)
+        bench.phase, bench.detail = "brief", "waiting for a brief"
+        text = await s.ask("brief", f"{about(bench, kept)}\n\nWhat counts as important in this benchmark? The ranking follows "
+                              "your answer. Any contributor may give it.", bench.id)
         if not text:
-            bench.phase, bench.detail, bench.skip = "skipped", "no brief, skipped (answer with hm brief, then run again)", "no_brief"
+            bench.phase, bench.detail, bench.skip = "skipped", "no brief, skipped (hm curate in a terminal asks for one in a box)", "no_brief"
             return
         brief = s.record(bench.id, "brief", text=text, examples=[], version=1)
 
-    limit_n = ranking.cap(len(bench.tasks), s.cfg.select.top_k, s.cfg.select.max_fraction)
+    # A simulation is for watching the stages: every task that passes the gates goes through them, up to top_k.
+    # The setting itself is left as it is, so the run's protocol is the one in the file.
+    limit_n = ranking.cap(len(bench.tasks), s.cfg.select.top_k, 1.0 if s.sandbox else s.cfg.select.max_fraction)
     while True:
         bench.phase, bench.detail = "ranking", f"scoring {len(kept)} tasks, then comparing the top ones"
+        s.explain("rank")
         STAGE.set("rank")
         brief_text = brief["text"] if brief else ""
         ranked = await ranking.rank_two_step(
             kept, lambda t: s.backend.importance(brief_text, t), lambda a, b: s.backend.compare(brief_text, a, b),
             limit_n, s.cfg.select.comparisons_per_task, s.cfg.select.pool_factor)
-        chosen = ranking.select([t for t, _ in ranked], lambda t: t.subarea, limit_n, s.cfg.select.stratify)
-        chosen_ids = {t.task_id for t in chosen}
-        bench.ranking = [(t.task_id, round(r, 3), t.task_id in chosen_ids) for t, r in ranked]
-        signoff = hashlib.sha256("|".join(sorted(chosen_ids) + [brief["id"] if brief else ""]).encode()).hexdigest()
-        approved = any(e["type"] == "decision" and e.get("gate") == "signoff" and e["digest"] == signoff
-                       for e in s.ledger.events)
+        # The order tasks are taken in: by rank, round-robin over sub-areas when stratifying. The selection is
+        # always the first k of it, so a person can say "the top k" of the list they are shown and mean one thing.
+        order = ranking.select([t for t, _ in ranked], lambda t: t.subarea, len(ranked), s.cfg.select.stratify)
+        rating = {t.task_id: r for t, r in ranked}
+        bench.most = most = min(limit_n, len(order))        # the cap: the most that may go on
+
+        def pick(k: int) -> tuple[list[Task], str]:
+            ids = sorted(t.task_id for t in order[:k])
+            return order[:k], hashlib.sha256("|".join(ids + [brief["id"] if brief else ""]).encode()).hexdigest()
+
+        chosen, signoff = pick(most)
+        approved = False
+        for e in s.ledger.events:       # an approval already signed for this ranking, for whichever k it named
+            if e["type"] == "decision" and e.get("gate") == "signoff" and e["benchmark"] == bench.id:
+                k = int(e.get("selected") or 0)
+                if 1 <= k <= most and pick(k)[1] == e["digest"]:
+                    (chosen, signoff), approved = pick(k), True
+        while True:
+            chosen_ids = {t.task_id for t in chosen}
+            bench.ranking = [(t.task_id, round(rating[t.task_id], 3), t.task_id in chosen_ids) for t in order]
+            if approved or not s.cfg.select.require_signoff or not chosen:
+                break
+            bench.phase, bench.detail = "signoff", "selection needs approval"
+            s.explain("select")
+            answer = await s.ask("selection", selection_brief(bench, most), bench.id)
+            words = answer.split() if isinstance(answer, str) else []
+            if not words or words[0] != "approve":
+                break
+            k = int(words[1]) if len(words) > 1 and words[1].isdigit() else most
+            if 1 <= k <= most:              # anything else is asked again
+                chosen, signoff = pick(k)
+                s.record(bench.id, "decision", stage="select", gate="signoff", tier="human", value="approved",
+                         outcome="pass", selected=len(chosen), signoff=signoff, digest_override=signoff)
+                approved = True
         if approved or not s.cfg.select.require_signoff or not chosen:
             break
-        bench.phase, bench.detail = "signoff", "selection needs approval"
-        answer = await s.ask("selection", selection_brief(bench, limit_n), bench.id)
         if answer is None:
             bench.phase, bench.detail = "skipped", "selection not approved, skipped (run with the screen to approve)"
             bench.skip = "selection_not_approved"
             return
-        if answer == "approve":
-            s.record(bench.id, "decision", stage="select", gate="signoff", tier="human", value="approved",
-                     outcome="pass", selected=len(chosen), signoff=signoff, digest_override=signoff)
-            break
         brief = s.record(bench.id, "brief", text=answer, examples=[], version=int(time.time()))   # re-rank
 
     # One record for the whole selection: every screened task, its rating, and whether it goes on.
@@ -152,6 +178,41 @@ async def _run_shared(s: Session, bench: BenchState) -> None:
     bench.selected = len(free)
     s.queue.extend(free)
     bench.phase, bench.detail = "ready", ""
+
+
+def described(bench: BenchState) -> dict:
+    """What a benchmark says of itself: its entry on the index's list, else a benchmark.toml in its own folder."""
+    if bench.entry:
+        return bench.entry
+    try:
+        import tomllib
+        return tomllib.loads((bench.path / "benchmark.toml").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def about(bench: BenchState, kept: list[Task]) -> str:
+    """A benchmark for the person asked to say what matters in it, as a few lines to read: what it is, then the
+    categories its tasks fall into, with how many in each and, where the benchmark says, what each is about.
+    Read from its own description and its tasks, with no model."""
+    said = described(bench)
+    lines = [str(said.get("name") or bench.id)]
+    if said.get("description"):
+        lines.append(" ".join(str(said["description"]).split()))
+    areas: dict[str, int] = {}
+    for t in kept:
+        areas[t.subarea] = areas.get(t.subarea, 0) + 1
+    top = sorted(areas.items(), key=lambda a: (-a[1], a[0]))
+    passed = f"{len(kept)} of its {len(bench.tasks)} tasks passed the gates"
+    if len(top) < 2:
+        return "\n".join([*lines, "", passed + "."])
+    lines += ["", f"{passed}, in {len(top)} categories:"]
+    notes, width = said.get("categories") or {}, max(len(a) for a, _ in top[:8])
+    for area, n in top[:8]:
+        lines.append(f"  {area:<{width}}  {n:>3}   {notes.get(area, '')}".rstrip())
+    if len(top) > 8:
+        lines.append(f"  and {len(top) - 8} more categories")
+    return "\n".join(lines)
 
 
 def repository(path: Path) -> Path:
@@ -255,12 +316,8 @@ async def triage(s: Session, task: Task) -> bool:
     return done()
 
 
-def selection_brief(bench: BenchState, limit: int) -> str:
-    """What the lead is asked to approve: the top of the ranking, and where the cut falls."""
+def selection_brief(bench: BenchState, most: int) -> str:
+    """What a contributor is asked to approve: how many of the ranked tasks go on to the costly stages."""
     picked = [tid.split("/")[-1] for tid, _, chosen in bench.ranking if chosen]
-    out = [tid.split("/")[-1] for tid, _, chosen in bench.ranking if not chosen]
-    text = (f"{bench.id}: {len(picked)} of {len(bench.ranking)} tasks are selected for the costly stages "
-            f"(cap {limit}). Ranked highest: {', '.join(picked[:5])}.")
-    if out:
-        text += f" First ones left out: {', '.join(out[:3])}."
-    return text
+    return (f"{bench.id}: {len(bench.ranking)} tasks are ranked. Choose how many of the top ones go on to the costly "
+            f"stages: any number from 1 to {most}. {len(picked)} is proposed. Ranked highest: {', '.join(picked[:5])}.")

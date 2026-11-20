@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING
 
 from ..engine import estimate
 from ..engine.state import STAGES
-from .interpret import find_target
 from .registry import COMMANDS
 
 if TYPE_CHECKING:
@@ -47,15 +46,25 @@ def how_to_answer(r) -> str:
     """The command that answers a request."""
     short = r.target.split("/")[-1]
     return {"brief": f"Answer with: /brief {r.target} <what is important>",
-            "selection": f"Approve with /approve {short}. See the whole list with /selection {short}. "
+            "selection": f"Approve the top K with /approve {short} K. See the whole list with /selection {short}. "
                          f"To rank differently, give a new brief: /brief {r.target} <text>",
             "verdict": "Nothing enters the index until you sign. Start with /review",
-            "replace": f"Answer with /replace OLD {short}, or /reject {short} <reason>. "
-                       f"Compare them with /included {r.target.rsplit('/', 1)[0] if '/' in r.target else ''}",
             "adapter": f"Fix the files and check them again with /recheck {short} (with no fix, the frontier model tries once more). "
                        f"Or give the benchmark up with /abandon {short}",
             "lock": f"Lock it with /lock {short}",
             "budget": "Answer with: /budget N, or /quit"}.get(r.kind, "")
+
+
+def ready_to_type(r) -> str:
+    """What the empty prompt shows, dimmed, while a request waits: the command that answers it, with what to fill in.
+    It is a hint and nothing more. The user types the answer: none is put in the prompt for them."""
+    short = r.target.split("/")[-1]
+    return {"brief": f"/brief {r.target} <what matters most in this benchmark, in a sentence or two>",
+            "selection": f"/approve {short} <how many of the top tasks>   or   /brief {r.target} <a new brief, to rank again>",
+            "verdict": "/review   to read each report and accept or reject it",
+            "adapter": f"/recheck {short}   or   /abandon {short}",
+            "lock": f"/lock {short}",
+            "budget": "/budget <dollars>   or   /quit"}.get(r.kind, "")
 
 
 def waiting(session: Session) -> str:
@@ -69,7 +78,7 @@ def waiting(session: Session) -> str:
     busy = sum(1 for c in session.cells if c.task is not None)
     if session.finished or (not busy and not session.queue
                             and all(b.phase in ("ready", "skipped") for b in session.benches.values())):
-        return "The run is finished and nothing is waiting on you. Leave with /quit, then see: hm status"
+        return "The run is finished and nothing is waiting on you. Leave with /quit, then see: /status"
     return (f"Nothing is needed from you right now. {busy} of {len(session.cells)} cells are working "
             f"and {len(session.queue)} tasks are queued.")
 
@@ -85,7 +94,7 @@ def bench_line(b) -> str:
     if b.phase == "skipped":
         return f"{b.id}: skipped. {b.detail}"
     if b.phase == "brief":
-        return f"{b.id}: {gates}. Waiting for the lead's brief before they are ranked."
+        return f"{b.id}: {gates}. Waiting for a brief before they are ranked."
     if b.phase == "ranking":
         return f"{b.id}: {gates}. Ranking them now."
     if b.phase == "signoff":
@@ -119,17 +128,17 @@ def terms(session: Session) -> dict[str, str]:
     """Short explanations of the words the screen uses, keyed by the word a question would contain."""
     sel, cfg = session.cfg.select, session.cfg
     return {
-        "brief": "A brief is a few sentences from the lead on what makes a task important in this benchmark. "
+        "brief": "A brief is a few sentences, from any contributor, on what makes a task important in this benchmark. "
                  "Ranking orders the tasks by it. Give one with /brief BENCHMARK text.",
         "select": f"The selection is the top-ranked tasks that go on to the costly stages: at most {sel.top_k} per "
                   f"benchmark, and at most {sel.max_fraction:.0%} of it. The lead approves it with /approve BENCHMARK.",
         "cap": f"The cap is the most tasks one benchmark may send to the costly stages: the smaller of {sel.top_k} and "
-               f"{sel.max_fraction:.0%} of its tasks. A benchmark may have at most {cfg.index.max_per_benchmark} tasks in the index.",
+               f"{sel.max_fraction:.0%} of its tasks.",
         "gate": "An admission gate is a cheap check a task must pass before it is ranked: it has a reference solution, "
                 "a program can verify it quickly, it is not multiple choice, its license allows use, and it is recent.",
         "cell": "A working cell carries one task through verify, probe, difficulty (once), audit and report. Cells run in parallel.",
-        "verdict": "A verdict is a reviewer's signed decision on a finished task: /accept ID, /reject ID reason, or "
-                   "/sendback ID reason. Start with /review.",
+        "verdict": "A verdict is a reviewer's signed decision on a finished task. /review shows each report, and under it "
+                   "you type accept or reject <why>.",
         "simulat": "A simulated run invents every result and spends nothing. No model is called, so answers here are "
                    "put together from the run's records by the words in your question.",
     }
@@ -223,7 +232,7 @@ def review_briefing(session: Session, benchmark: str = "") -> str:
     lines += ["  " + report_brief(session, t) for t in ready[:8]]
     if len(ready) > 8:
         lines.append(f"  and {len(ready) - 8} more.")
-    lines.append("Read one with /report ID. Then /accept ID, /reject ID reason, or /sendback ID reason.")
+    lines.append("/review opens them one after the other. Under each report you type accept [why] or reject <why>.")
     return "\n".join(lines)
 
 
@@ -235,15 +244,35 @@ def report_text(session: Session, task) -> str:
     return path.read_text()
 
 
+def task_line(task, limit: int = 110) -> str:
+    """One short sentence on what a task asks: its own description, else the start of its instruction."""
+    said = " ".join(str((task.meta.get("task") or {}).get("description") or task.instruction).lstrip("# ").split())
+    first = said.split(". ")[0].rstrip(".")
+    return (first[:limit].rstrip() + "...") if len(first) > limit else first
+
+
 def selection_list(session: Session, benchmark: str) -> str:
     bench = session.benches.get(benchmark) or next(
         (b for name, b in session.benches.items() if name.endswith("/" + benchmark)), None)
     if bench is None or not bench.ranking:
         return f"No ranking yet for {benchmark!r}."
     rows = [f"{bench.id}: {sum(1 for r in bench.ranking if r[2])} of {len(bench.ranking)} selected. "
-            "A star marks a selected task. Selection goes round-robin over sub-areas, so it is not a straight cut."]
+            "A star marks a selected task. They are listed in the order they are taken, so the selection is the top of the list."]
     for i, (tid, rating, chosen) in enumerate(bench.ranking[:40], 1):
         rows.append(f"  {i:>3} {'*' if chosen else ' '} {tid.split('/')[-1]:<12} {rating:+.2f}")
     if len(bench.ranking) > 40:
         rows.append(f"  and {len(bench.ranking) - 40} more.")
     return "\n".join(rows)
+
+
+def find_target(session, text: str) -> str | None:
+    """The task, cell or benchmark that a line of text is about, if it names one."""
+    m = re.search(r"\bcell\s*(\d+)\b", text)
+    if m:
+        cell = next((c for c in session.cells if c.n == int(m.group(1))), None)
+        return cell.task.task_id if cell and cell.task else f"cell {m.group(1)}"
+    for word in re.findall(r"[\w./@-]+", text):
+        task = session.find_task(word)
+        if task:
+            return task.task_id
+    return next((b for b in session.benches if b.lower() in text or b.split("/")[-1].lower() in text), None)

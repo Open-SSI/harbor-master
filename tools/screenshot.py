@@ -22,12 +22,12 @@ from rich.console import Console
 from rich.segment import Segment
 from rich.terminal_theme import TerminalTheme
 
-from harbor_master import ledger, tasks
+from harbor_master import ledger
 from harbor_master.cli.dev import fake_benchmark
 from harbor_master.core import config as config_mod
 from harbor_master.core import identity
 from harbor_master.engine import Session
-from harbor_master.tui import Prompt, SessionApp
+from harbor_master.tui import SessionApp
 from harbor_master.tui.theme import BG, FG
 
 DEJAVU = "/usr/share/fonts/truetype/dejavu"
@@ -101,56 +101,30 @@ async def main(out: Path, font_dir: Path | None, cols: int, rows: int, scene: st
     with tempfile.TemporaryDirectory() as tmp:
         os.environ["HM_CONFIG_DIR"] = f"{tmp}/config"
         ident = identity.create("Yibo Wen", "Northwestern University", "yibo@u.northwestern.edu", "Yibo-Wen")
-        if scene == "home":             # the screen `hm` opens with: someone who has set up who they are, and no index yet
-            from harbor_master.cli.home import run_cli
-            from harbor_master.tui import HomeApp
-            folder = Path(tmp) / "work"
-            folder.mkdir()
-            os.chdir(folder)
-            home = HomeApp(run_cli, folder)
-            async with home.run_test(size=(cols, rows)) as pilot:
-                await pilot.pause(0.5)
-                await pilot.press(*"/j")
-                await pilot.pause(0.3)
-                draw(grab(home), cols, out, font_dir)
-            return
         ws = Path(tmp) / "ws"
         ws.mkdir()
         (ws / ledger.CONTRIBUTORS).write_text(
             f'[[contributor]]\nname = "{ident.name}"\ngithub = "{ident.github}"\nkey = "{ident.public_key}"\n')
         cfg = config_mod.Config()
-        cfg.select.require_signoff = scene in ("signoff", "complete")
+        cfg.select.require_signoff = scene == "signoff"
         cfg.run.budget_usd = 1000        # the pictures should not stop on the budget
-        sizes = {"main": (120, 60, 40), "signoff": (120, 60, 0), "complete": (120, 60, 0), "review": (40, 24, 0)}[scene]
+        sizes = {"main": (120, 60, 40), "signoff": (120, 60, 0), "review": (40, 24, 0)}[scene]
         registry = {}
         for (name, field), n in zip((("smdd-bench", "chemistry"), ("terrabench", "earth"), ("autopdebench", "physics")), sizes):
             if n:
                 fake_benchmark(name, n, directory=Path(tmp) / "fake", seed=0)
                 registry[name] = {"path": f"{tmp}/fake/{name}", "field": field}
-        for b in ("smdd-bench", "terrabench"):
+        for b in registry:
             ledger.Shard(config_mod.simulated(ws), b, ident, "brief", cfg.protocol).append(
                 "brief", text="Tasks that need real computation.", examples=[], version=1, simulated=True)
         s = Session(ws, cfg, ident, registry, simulate=True, speed=0.02 if scene == "review" else 0.6,
                     command="hm run " + " ".join(b.split("/")[-1] for b in registry) + " --simulate")
         app = SessionApp(s)
         async with app.run_test(size=(cols, rows)) as pilot:
-            prompt = app.query_one(Prompt)
-
-            async def say(text: str, wait: float) -> None:
-                prompt.value = text
-                await pilot.press("enter")
-                await pilot.pause(wait)
-
             if scene == "main":
                 await pilot.pause(22)
-                await say("how long until cell 1 finishes, and what is it about?", 1.0)
-                await say("hold terrabench for now and stop the task in cell 3", 0.4)
-            elif scene == "signoff":
+            elif scene == "signoff":        # the box that asks how many of the ranked tasks go on
                 await pilot.pause(8)
-            elif scene == "complete":       # a command half typed: the dimmed rest, and what tab offers
-                await pilot.pause(8)
-                await pilot.press(*"/approve", "tab")
-                await pilot.pause(0.5)
             else:
                 for _ in range(120):
                     if s.finished:
@@ -167,6 +141,6 @@ if __name__ == "__main__":
     ap.add_argument("--font-dir", type=Path)
     ap.add_argument("--cols", type=int, default=112)
     ap.add_argument("--rows", type=int, default=44)
-    ap.add_argument("--scene", choices=["home", "main", "signoff", "complete", "review"], default="main")
+    ap.add_argument("--scene", choices=["main", "signoff", "review"], default="main")
     a = ap.parse_args()
     asyncio.run(main(a.out, a.font_dir, a.cols, a.rows, a.scene))

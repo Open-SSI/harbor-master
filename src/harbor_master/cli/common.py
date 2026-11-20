@@ -16,19 +16,13 @@ from ..core import config as config_mod
 from ..core import identity as identity_mod
 from ..tui import theme
 
-app = typer.Typer(no_args_is_help=False, add_completion=False,
+app = typer.Typer(no_args_is_help=False, add_completion=False, context_settings={"help_option_names": ["-h", "--help"]},
                   help="Harbor-Master: curate benchmarks into an index of hard, verified tasks.\n\n"
-                       "Type hm alone to open the screen. Every step is a / command there, and a tip says which one is next.")
-keys_app = typer.Typer(no_args_is_help=True, help="API keys, kept in a git-ignored file.")
-ledger_app = typer.Typer(no_args_is_help=True, help="The ledger of decisions, trials and verdicts.")
-dev_app = typer.Typer(no_args_is_help=True, help="Tools for developing Harbor-Master itself.")
-index_app = typer.Typer(invoke_without_command=True, help="The index this workspace curates: what it is, and its accepted tasks.")
-app.add_typer(index_app, name="index")
-app.add_typer(keys_app, name="keys")
-app.add_typer(ledger_app, name="ledger")
-app.add_typer(dev_app, name="dev")
+                       "Start with hm init. hm open INDEX clones an index. Inside its folder, hm curate builds it and hm eval "
+                       "evaluates it once it is released: each opens a screen that asks what it needs in boxes.\n\n"
+                       "Every other command is about one index, and is typed inside that index's folder.")
 console = Console()
-Workspace = typer.Option(None, "--workspace", "-w", help="The clone of the index to work in. Default: found from here upward.")
+Workspace = typer.Option(None, "--workspace", "-w", help="The index's folder. Default: the index this folder is in.")
 
 
 def fail(message: str) -> None:
@@ -39,17 +33,27 @@ def fail(message: str) -> None:
 def need_identity() -> identity_mod.Identity:
     ident = identity_mod.load()
     if ident is None:
-        fail("Set up who you are first: hm init")
+        fail("First say who you are: hm init")
     return ident
 
 
-def need_workspace(workspace: Optional[Path]) -> Path:
-    ws = workspace or (Path(os.environ["HM_WORKSPACE"]) if os.environ.get("HM_WORKSPACE") else None) \
-        or config_mod.find_workspace()
-    if ws is None or not (ws / config_mod.PROTOCOL_NAME).exists():
-        fail("No index here. Join one with: hm join URL. Or start your own with: hm index new NAME")
+def need_workspace(workspace: Optional[Path], say: bool = False) -> Path:
+    """The index a command works on: the folder named with -w or HM_WORKSPACE, else the index this folder is inside.
+
+    With `say`, the command first prints which index that is, so that its figures are never read as
+    another index's."""
+    ws = workspace or (Path(os.environ["HM_WORKSPACE"]) if os.environ.get("HM_WORKSPACE") else None)
+    if ws is not None and not (ws / config_mod.PROTOCOL_NAME).exists():
+        fail(f"{ws} is not an index: it holds no {config_mod.PROTOCOL_NAME}.")
+    if ws is None:
+        ws = config_mod.find_workspace()
+        if ws is None:
+            fail("This folder is not inside an index. cd into an index's folder first. To get one: hm open INDEX.")
     ws = ws.resolve()
     check_owner(ws)
+    if say:
+        about = config_mod.load(ws).about
+        console.print(f"[{theme.MU}]Index: {about.title or about.name or ws.name}   {ws}[/]", highlight=False, soft_wrap=True)
     return ws
 
 
@@ -84,23 +88,6 @@ def check_owner(ws: Path) -> None:
              f"If the owner really changed, check with them, then remove {pin} and run again.")
 
 
-Simulated = typer.Option(False, "--simulated", help="Read the records of simulated runs on this machine, not the index's ledger.")
-
-
-def records(ws: Path, simulated: bool) -> Path:
-    """Where to read records from: the index's ledger, or the folder where simulated runs keep theirs."""
-    if simulated:
-        console.print(f"[{theme.AM}]Simulated.[/] These are the records of simulated runs on this machine. None of it is in the index.")
-    return config_mod.simulated(ws) if simulated else ws
-
-
-def mention_simulated(ws: Path, simulated: bool) -> None:
-    """After a view of the real ledger, say that simulated runs left records too, and how to see them."""
-    n = len(ledger_mod.shard_paths(config_mod.simulated(ws)))
-    if n and not simulated:
-        console.print(f"[{theme.MU}]Simulated runs on this machine left records too. They are kept apart: add --simulated to see them.[/]")
-
-
 def is_owner(ws: Path, ident: identity_mod.Identity) -> bool:
     return any(c.get("github") == ident.github and c.get("role") == "owner" and c.get("key")
                for c in ledger_mod.load_contributors(ws))
@@ -115,8 +102,8 @@ def version_tuple(text: str) -> tuple[int, ...]:
 
 
 def check_lock(lock: dict | None, cfg, ws: Path) -> None:
-    """Refuse to go on when this tool is older than the index asks for, or when this copy's protocol or
-    locked files are not the ones the owner locked."""
+    """Refuse to go on when this tool is older than the index asks for, or when this copy's protocol is not the one
+    the owner locked."""
     from .. import skills
     need = max(cfg.requires.harbor_master, (lock or {}).get("requires", "0"), key=version_tuple)
     if version_tuple(__version__) < version_tuple(need):
@@ -125,7 +112,7 @@ def check_lock(lock: dict | None, cfg, ws: Path) -> None:
     if wrong:
         for p in wrong[:12]:
             console.print(f"  {p}")
-        fail("Refused: the code cannot use these skills as they are. See: hm skills")
+        fail("Refused: the code cannot use these skills as they are.")
     from_owner = ledger_mod.list_problem(ws, ledger_mod.Ledger(ws).events)
     if from_owner:
         fail(f"Refused: {from_owner}. Put it back with: git checkout origin/main -- {ledger_mod.CONTRIBUTORS}")
@@ -134,18 +121,10 @@ def check_lock(lock: dict | None, cfg, ws: Path) -> None:
     absent = skills.missing(ws / "skills")
     if absent:
         fail(f"Refused: this index has no copy of {', '.join('skills/' + n for n in absent)}, so what agents are told would "
-             "depend on the tool that is installed. Put the files back (git checkout -- skills), or have the owner copy them: hm skills adopt")
+             "depend on the tool that is installed. Put the files back (git checkout -- skills), or have the owner run hm lock, which copies them in.")
     if lock["protocol"] != cfg.protocol:
         console.print(f"[{theme.RD}]This workspace's settings ({cfg.protocol}) are not the locked protocol ({lock['protocol']}).[/]")
         for line in ledger_mod.protocol.differences(lock.get("settings", {}), cfg.protocol_settings())[:12]:
             console.print(f"  {line}")
-        fail("Refused. Put the settings back, or have the owner lock the new ones: hm protocol lock")
-    changed = templates.changed(lock, ws)
-    if changed:
-        fail(f"Refused: {', '.join(changed)} differ{'s' if len(changed) == 1 else ''} from what the owner locked. "
-             "Put the file back (git checkout -- FILE), or have the owner lock the new one with /lock.")
+        fail("Refused. Put the settings back, or have the owner lock the new ones: hm lock")
 
-
-def not_built(what: str) -> None:
-    console.print(f"[{theme.AM}]{what} is not built yet.[/] See DESIGN.md for what it will do.")
-    raise typer.Exit(2)

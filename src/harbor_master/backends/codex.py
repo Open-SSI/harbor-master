@@ -32,7 +32,7 @@ def _env() -> dict[str, str]:
     found = sign_in()
     if found is None:
         raise NotImplementedBackend("No Codex sign-in found. Sign in with `codex login`, and if the file it writes is not "
-                                    "~/.codex/auth.json, give its path as CODEX_AUTH_JSON_PATH: hm keys init")
+                                    "~/.codex/auth.json, give its path as CODEX_AUTH_JSON_PATH in your keys file")
     if found.name != "auth.json":
         raise NotImplementedBackend(f"CODEX_AUTH_JSON_PATH names {found.name}. Codex reads its sign-in from a file called auth.json.")
     return {"CODEX_HOME": str(found.parent)}        # the folder Codex reads auth.json from

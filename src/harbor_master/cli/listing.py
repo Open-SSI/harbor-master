@@ -27,7 +27,7 @@ def indexes(name: str = typer.Argument(None, help="Only this index."),
             check: bool = typer.Option(False, help="Also fetch each index, show what it holds, and check that it is "
                                                    "sound and is what its entry says."),
             list_: str = List):
-    """The indexes that are listed. Join one with: hm join NAME"""
+    """The indexes that are listed for anyone to join."""
     entries = read_list(list_)
     wrong = listing.problems(entries)
     shown = [e for e in entries if all(e.get(k) for k in listing.REQUIRED) and name in (None, e["name"])]
@@ -54,4 +54,4 @@ def indexes(name: str = typer.Argument(None, help="Only this index."),
         console.print(f"[{theme.RD}]x[/] {p}")
     if wrong:
         fail(f"{len(wrong)} problem{'s' if len(wrong) != 1 else ''} in the list of indexes.")
-    console.print(f"[{theme.MU}]From {listing.source(list_)}. Join one with: hm join NAME. To list yours: hm index entry[/]")
+    console.print(f"[{theme.MU}]Listed in {listing.source(list_)}. Get one with: hm open NAME. To list yours: hm entry, inside its folder[/]")

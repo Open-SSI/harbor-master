@@ -61,12 +61,36 @@ for _alias, _usage in (("task", "/task ID"), ("cell", "/cell N")):
     command(_alias, "view", _usage)(explain)
 
 
-@command("review", "view", "/review [benchmark]")
+@command("review", "view", "/review [ID]")
 def review(session, args):
+    """On the screen this opens the reports, one after the other. As text it says what is waiting."""
     return answers.review_briefing(session, args[0] if args else "")
 
 
-@command("report", "view", "/report ID")
+def waiting_reports(session, wanted: str = "") -> list:
+    """The reports /review goes through: all that wait for this person, one task's, or one benchmark's."""
+    if not wanted:
+        return list(session.ready)
+    task = session.find_task(wanted)
+    if task is not None and task in session.ready:
+        return [task]
+    return [t for t in session.ready if t.benchmark == wanted or t.benchmark.endswith("/" + wanted)]
+
+
+WORDS = {"accept": "accept", "a": "accept", "reject": "reject", "r": "reject", "drop": "reject"}
+
+
+def decide(session, task, line: str) -> str:
+    """What a reviewer types under a report they have open: accept [why] or reject why. A verdict is given
+    nowhere else, so none is given unread."""
+    words = line.split()
+    what = WORDS.get(words[0].lower().lstrip("/")) if words else None
+    if what is None:
+        return "Type accept [why] or reject <why>."
+    name, value, need = {"accept": ("accept", "accept", False), "reject": ("reject", "drop", True)}[what]
+    return _verdict(session, [task.task_id, *words[1:]], name, value, need)
+
+
 def report(session, args):
     task, err = _task(session, args, "report")
     return answers.report_text(session, task) if task else err
@@ -221,10 +245,10 @@ def budget(session, args):
 @command("model", "view", "/model")
 def model(session, args):
     return ("The tiers and their models are part of the locked protocol, so they cannot change during a curation. "
-            "To change one, the owner edits protocol.toml and locks the new protocol: hm protocol lock")
+            "To change one, the owner edits protocol.toml and locks the new protocol: hm lock")
 
 
-@command("brief", "confirm", "/brief benchmark text", "the lead's brief is written to the ledger")
+@command("brief", "answer", "/brief benchmark text", "your brief is written to the ledger")
 def brief(session, args):
     if len(args) < 2 or args[0] not in session.benches:
         return "Use /brief BENCHMARK followed by the brief text."
@@ -237,20 +261,25 @@ def brief(session, args):
     return f"Brief recorded for {args[0]}. It applies the next time this benchmark is ranked."
 
 
-@command("approve", "confirm", "/approve benchmark", "the selection is signed in the ledger, and its tasks start")
+@command("approve", "answer", "/approve benchmark [K]", "the selection is signed in the ledger, and its tasks start")
 def approve(session, args):
     waiting = next((r for r in session.requests if r.kind == "selection" and args and
                     (r.target == args[0] or r.target.endswith("/" + args[0]))), None)
     if waiting is None:
-        return "No selection is waiting for approval" + (f" for {args[0]}." if args else ". Use /approve BENCHMARK")
-    session.answer_request(waiting, "approve")
-    return f"Selection approved for {waiting.target}."
+        return "No selection is waiting for approval" + (f" for {args[0]}." if args else ". Use /approve BENCHMARK [K]")
+    bench = session.benches[waiting.target]
+    proposed = sum(1 for r in bench.ranking if r[2])
+    if len(args) > 1 and not (args[1].isdigit() and 1 <= int(args[1]) <= bench.most):
+        return f"Choose how many of the top tasks go on: a number from 1 to {bench.most}. {proposed} is proposed."
+    k = int(args[1]) if len(args) > 1 else proposed
+    session.answer_request(waiting, f"approve {k}")
+    return f"Selection approved for {waiting.target}: the top {k} of {len(bench.ranking)} tasks go on."
 
 
 @command("leave", "view", "/leave")
 def leave(session, args):
     session.leaving = True
-    return "Leaving the screen. The run goes on: open it again with hm run."
+    return "Leaving the screen. The run goes on: open it again with hm curate, inside the index's folder."
 
 
 @command("add", "control", "/add benchmark", "the benchmark joins this run: fetched, screened, and its tasks queued")
@@ -281,10 +310,11 @@ def abandon(session, args):
     if waiting is None:
         return "No adapter is waiting for you" + (f" for {args[0]}." if args else ".")
     session.answer_request(waiting, "abandon")
-    return f"{waiting.target} is abandoned: its adapter could not be made to pass. To try again later: hm adapt {waiting.target}"
+    return (f"{waiting.target} is abandoned: its adapter could not be made to pass. To try again later, "
+            f"take it off the list and add it again: hm benchmarks remove {waiting.target}, then hm benchmarks add URL")
 
 
-@command("lock", "confirm", "/lock benchmark", "its adapter is recorded as passing, and its tasks start")
+@command("lock", "answer", "/lock benchmark", "its adapter is recorded as passing, and its tasks start")
 def lock(session, args):
     waiting = _adapter_request(session, args, "lock")
     if waiting is None:
@@ -303,46 +333,15 @@ def _verdict(session, args, name: str, value: str, need_reason: bool) -> str:
         return f"{task.task_id} has no report waiting for your verdict."
     reason = " ".join(args[1:])
     if need_reason and not reason:
-        return f"Give a reason: /{name} {task.name} <why>"
+        return f"Give a reason: {name} <why>"
     if value == "accept" and any(e.get("assumed") and e.get("digest") == task.digest
                                  for e in session.ledger.by_task.get(task.task_id, [])):
         return (f"{task.task_id} cannot be accepted: some of its results were assumed, not run. "
                 "Run those stages for real first.")
-    if value == "accept":
-        limit = session.cfg.index.max_per_benchmark
-        inside = ledger.accepted(session.ledger.events, task.benchmark)
-        if len(inside) >= limit:
-            names = ", ".join(s.task_id.split("/")[-1] for s in inside)
-            short = task.benchmark.split("/")[-1]
-            session.ask_replacement(task, f"{task.benchmark} already has {len(inside)} tasks in the index, the most one "
-                                    f"benchmark may have. To include {task.name}, choose the one it replaces: {names}.")
-            return (f"{short} is full ({len(inside)} of {limit}), so {task.name} was not accepted. "
-                    f"Choose one to replace: /replace OLD {task.name}. Compare them with /included {short}.")
     session.sign_verdict(task, value, reason)
-    word = {"accept": "Accepted", "drop": "Rejected", "send_back": "Sent back"}[value]
+    word = {"accept": "Accepted", "drop": "Rejected"}[value]
     session.note_recent("verdict", task.task_id, f"{word.lower()} by @{session.ident.github}" + (f": {reason}" if reason else ""))
     return f"{word} {task.task_id}, signed by @{session.ident.github}. {len(session.ready)} left to review."
-
-
-@command("replace", "confirm", "/replace OLD NEW [reason]", "your signed verdict: {0} leaves the index, the new task takes its place")
-def replace(session, args):
-    if len(args) < 2:
-        return "Use /replace OLD NEW [reason]: OLD leaves the index and NEW takes its place."
-    old, new = session.find_task(args[0]), session.find_task(args[1])
-    if old is None or new is None:
-        return f"No task matches {args[0 if old is None else 1]!r}."
-    if not session.is_reviewer:
-        return f"@{session.ident.github} is not on the contributor list, so cannot sign verdicts."
-    if new not in session.ready:
-        return f"{new.task_id} has no report waiting for your verdict."
-    state = next((s for s in ledger.accepted(session.ledger.events, new.benchmark) if s.task_id == old.task_id), None)
-    if state is None:
-        return f"{old.task_id} is not in the index for {new.benchmark}, so it cannot be replaced. See /included."
-    reason = " ".join(args[2:])
-    session.sign_verdict(old, "replaced", f"replaced by {new.name}" + (f": {reason}" if reason else ""), digest=state.digest)
-    session.sign_verdict(new, "accept", f"replaces {old.name}" + (f": {reason}" if reason else ""))
-    session.note_recent("verdict", new.task_id, f"accepted by @{session.ident.github}, replacing {old.name}")
-    return f"{new.name} is in the index in place of {old.name}, signed by @{session.ident.github}. {len(session.ready)} left to review."
 
 
 @command("included", "view", "/included benchmark")
@@ -353,26 +352,20 @@ def included(session, args):
     if bench is None:
         return f"No benchmark matches {args[0]!r}."
     inside = ledger.accepted(session.ledger.events, bench)
-    lines = [f"{bench}: {len(inside)} of {session.cfg.index.max_per_benchmark} places in the index are taken."]
+    lines = [f"{bench}: {len(inside)} task{'s' if len(inside) != 1 else ''} in the index."]
     for s in inside:
         task = session.find_task(s.task_id)
         lines.append("  " + (answers.report_brief(session, task, s.digest) if task else s.task_id))
     return "\n".join(lines)
 
 
-@command("accept", "confirm", "/accept ID [reason]", "your signed verdict: {0} enters the index")
 def accept(session, args):
     return _verdict(session, args, "accept", "accept", need_reason=False)
 
 
-@command("reject", "confirm", "/reject ID reason", "your signed verdict: {0} is kept out of the index")
 def reject(session, args):
     return _verdict(session, args, "reject", "drop", need_reason=True)
 
-
-@command("sendback", "confirm", "/sendback ID reason", "your signed verdict: {0} returns for repair in a later run")
-def sendback(session, args):
-    return _verdict(session, args, "sendback", "send_back", need_reason=True)
 
 
 @command("kill", "confirm", "/kill", "stops everything now, including running containers")
@@ -384,24 +377,6 @@ def kill(session, args):
 for _name, _usage in (("restart", "/restart ID"), ("retry", "/retry ID [stage]"), ("escalate", "/escalate ID"),
                       ("limit", "/limit tokens N")):
     planned(_name, "confirm", _usage)
-
-
-# ----- what the home screen and a shell also show, without leaving the run -----
-
-def _shown(cli: str, simulated: bool):
-    def show(session, args):
-        from ..cli.home import run_cli
-        apart = ["--simulated"] if simulated and session.sandbox else []
-        _, out = run_cli([*cli.split(), *apart, "-w", str(session.ws)], 110)
-        return out.plain or "Nothing to show."
-    return show
-
-
-for _name, (_cli, _simulated) in {
-        "leaderboard": ("leaderboard", True), "credits": ("credits", True), "todo": ("todo", True), "claims": ("claims", True),
-        "stats": ("stats --no-pull", True), "benchmarks": ("benchmarks", False), "contributors": ("contributors", False),
-        "index": ("index", False), "protocol": ("protocol", False), "tasks": ("tasks", False), "doctor": ("doctor", False)}.items():
-    command(_name, "view", "/" + _name)(_shown(_cli, _simulated))
 
 
 @command("theme", "view", "/theme [light|dark]")

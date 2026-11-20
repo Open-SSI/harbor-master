@@ -18,7 +18,7 @@ def header(s: Session, width: int = 120) -> Table:
     who = f" ({s.ident.affiliation}, @{s.ident.github})" if width >= 100 else f" (@{s.ident.github})"
     g.add_row(t(("harbor-master", f"bold {PU}"), (f" v{__version__}", MU)), t(s.ident.name, (who, MU)))
     state = (("paused", AM) if s.paused else ("finished", TE) if s.finished else ("running", TE))
-    g.add_row(t(("$ ", MU), s.command or "hm run"), t((f"  ● {state[0]}", state[1])))
+    g.add_row(t(("$ ", MU), s.command or "/run"), t((f"  ● {state[0]}", state[1])))
     return g
 
 

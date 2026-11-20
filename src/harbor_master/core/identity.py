@@ -28,6 +28,13 @@ class Identity:
     def label(self) -> str:
         return f"{self.name} ({self.affiliation}, @{self.github})"
 
+    def line(self) -> str:
+        """The one line a person sends the owner of an index to be added: the command, with their handle, their
+        public key, and who they are. The owner pastes it in a shell, inside the index's folder."""
+        import shlex
+        return shlex.join(["hm", "contributors", "add", self.github, self.public_key, "--name", self.name,
+                           "--affiliation", self.affiliation, "--email", self.email])
+
     def sign(self, message: str) -> str:
         key = serialization.load_pem_private_key((config_dir() / "signing_key").read_bytes(), password=None)
         return base64.b64encode(key.sign(message.encode())).decode()
@@ -74,3 +81,23 @@ def load() -> Identity | None:
         return Identity(data["name"], data["affiliation"], data["email"], data["github"], data["public_key"])
     except KeyError:
         return None
+
+
+def machine() -> str:
+    """A short random name for this machine, made once and kept with the identity. It tells two machines of one
+    person apart in the ledger, where the same handle signs from both. It says nothing about the machine."""
+    import secrets
+    path = config_dir() / "machine"
+    try:
+        found = path.read_text().strip()
+        if found:
+            return found
+    except OSError:
+        pass
+    made = secrets.token_hex(4)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(made + "\n")
+    except OSError:
+        pass
+    return made

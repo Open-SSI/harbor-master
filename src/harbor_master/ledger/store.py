@@ -18,7 +18,7 @@ from .events import EVENT_TYPES, TIER_RANK, canonical, duplicate_key, event_id, 
 
 SHARDS = "ledger"            # the folder of an index repository that holds the shards
 REPORTS = "reports"          # and the one that holds the reports that reviewers sign
-KEEP = {"value", "outcome", "tasks", "expires", "settings", "registry", "version"}      # written even when empty or zero
+KEEP = {"value", "outcome", "tasks", "expires", "settings", "version"}      # written even when empty or zero
 MANUAL = "manual"            # the shard for records a person makes by hand: briefs, verdicts, locks
 
 
@@ -113,10 +113,9 @@ class Ledger:
     def _kinds(self, kind: str) -> tuple[str, ...]:
         return (kind, kind + ":assumed") if self.accept_assumed else (kind,)
 
-    def trial(self, digest: str, agent: str, agent_version: str, model: str, protocol: str, index: int,
-              effort: str = "") -> dict | None:
+    def trial(self, digest: str, agent: str, agent_version: str, model: str, index: int, effort: str = "") -> dict | None:
         for kind in self._kinds("trial"):
-            found = self.taken.get((kind, digest, agent, agent_version, model, effort, protocol, index))
+            found = self.taken.get((kind, digest, agent, agent_version, model, effort, index))
             if found is not None:
                 return found
         return None
@@ -133,25 +132,28 @@ class Ledger:
         briefs = [e for e in self.events if e["type"] == "brief" and e["benchmark"] == benchmark]
         return max(briefs, key=lambda e: e["time"]) if briefs else None
 
-    def claims(self, benchmark: str, now: float, me: str = "") -> dict[str, tuple[str, float]]:
-        """Tasks someone else is working on now: task id -> (runner, when the claim expires).
+    def claims(self, benchmark: str, now: float, me: str = "", machine: str = "") -> dict[str, tuple[str, float]]:
+        """Tasks that are being worked on elsewhere now: task id -> (who, when the claim expires).
 
-        A task is held while any other runner has a claim on it that is neither released nor expired.
+        A claim belongs to a person on a machine. A task is held while a claim on it is neither released nor
+        expired, unless it is this person's on this machine. So two people cannot run the same task at once,
+        and neither can one person from two machines: the second is told the first holds it.
         """
-        held: dict[str, dict[str, float]] = defaultdict(dict)       # task -> runner -> expiry
+        held: dict[str, dict[tuple[str, str], float]] = defaultdict(dict)       # task -> (runner, machine) -> expiry
         for e in sorted((e for e in self.events if e["type"] == "claim" and e["benchmark"] == benchmark),
                         key=lambda e: e["time"]):
+            who = (e["runner"], e.get("machine", ""))
             for tid in e.get("tasks", []):
                 if e.get("released"):
-                    held[tid].pop(e["runner"], None)
+                    held[tid].pop(who, None)
                 else:
-                    held[tid][e["runner"]] = float(e.get("expires", 0))
+                    held[tid][who] = float(e.get("expires", 0))
         out: dict[str, tuple[str, float]] = {}
         for tid, holders in held.items():
-            live = {r: x for r, x in holders.items() if r != me and x > now}
+            live = {w: x for w, x in holders.items() if w != (me, machine) and x > now}
             if live:
-                runner = min(live)
-                out[tid] = (runner, live[runner])
+                runner, _ = who = min(live)
+                out[tid] = (f"{runner} (you, on another machine)" if runner == me else runner, live[who])
         return out
 
     def benchmarks(self) -> list[str]:

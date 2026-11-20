@@ -11,7 +11,7 @@ class TaskState:
     task_id: str
     benchmark: str
     digest: str = ""
-    status: str = "in_progress"  # in_progress | dropped | not_selected | report_ready | accepted | rejected | replaced | contested | cut
+    status: str = "in_progress"  # in_progress | dropped | not_selected | report_ready | accepted | rejected | contested | cut
     stage: str = ""
     reason: str = ""
     passes: int = 0
@@ -76,16 +76,14 @@ def fold(events: Iterable[dict]) -> dict[str, TaskState]:
                 if v.get("digest") == e.get("digest"):
                     latest[v["runner"]] = v
             values = {v["value"] for v in latest.values()}
-            if "accept" in values and values & {"drop", "replaced"}:
+            if "accept" in values and "drop" in values:
                 s.status = "contested"                  # two reviewers disagree: the lead decides
             elif values == {"accept"}:
                 s.status = "accepted"
-            elif "replaced" in values:
-                s.status, s.reason = "replaced", e.get("reason", "")
             elif "drop" in values:
                 s.status, s.reason = "rejected", e.get("reason_code", "")
             else:
-                s.status = "in_progress"                # sent back
+                s.status = "in_progress"                # an older record that sent a task back: no such verdict is given now
     return states
 
 
@@ -100,10 +98,15 @@ def submitted(events: Iterable[dict]) -> dict[str, dict]:
 
 def abandoned(events: Iterable[dict]) -> dict[str, dict]:
     """The benchmarks given up because no adapter could be made to pass: benchmark -> the record that says so.
-    The latest record of the adapt stage decides, so an adapter that passes later reopens the benchmark."""
+    The latest record of the adapt stage decides, so an adapter that passes later reopens the benchmark. So does
+    adding the benchmark to the list again: what was decided before that no longer counts."""
+    events = list(events)
+    added = {e["entry"]["id"]: e["time"] for e in sorted(events, key=lambda e: e["time"])
+             if e["type"] == "benchmark" and e.get("value") == "add" and isinstance(e.get("entry"), dict)}
     last: dict[str, dict] = {}
     for e in sorted((e for e in events if e["type"] == "decision" and e.get("stage") == "adapt"), key=lambda e: e["time"]):
-        last[e["benchmark"]] = e
+        if e["time"] >= added.get(e["benchmark"], 0):
+            last[e["benchmark"]] = e
     return {b: e for b, e in last.items() if e.get("outcome") == "drop"}
 
 
@@ -122,40 +125,39 @@ def credits(events: Iterable[dict]) -> dict[str, dict]:
 
 
 def leaderboard(events: Iterable[dict], roster: list[dict] | None = None,
-                suite: Iterable[tuple[str, str]] = ()) -> tuple[list[dict], int]:
+                suite: Iterable[tuple[str, str]] = (), evals: Iterable[dict] = ()) -> tuple[list[dict], int]:
     """How each agent configuration does on the accepted tasks. Returns the rows and the number of accepted tasks.
 
-    Only accepted tasks count, at the version that was accepted. A trial that failed for an
-    infrastructure reason, or whose results were assumed, is left out. A configuration's score
-    is its pass rate on each task, averaged over the tasks it has run, so a task with more
-    trials does not weigh more. `roster` adds a row for every configuration that should be run,
-    even with nothing yet. `suite` marks the configurations the tasks were selected against.
+    Only accepted tasks count, at the version that was accepted, so a task that was repaired after its
+    difficulty run is evaluated afresh. The trials are those of the evaluation, `evals`, and the difficulty
+    trials of curation, which are not run a second time. A trial that failed for an infrastructure reason,
+    or whose results were assumed, is left out. A configuration's score is its pass rate on each task,
+    averaged over the tasks it has run, so a task with more trials does not weigh more. `roster` adds a row
+    for every configuration that should be run, even with nothing yet. `suite` marks the configurations the
+    tasks were selected against, and each row counts its trials that the selection itself rested on.
     """
     events = list(events)
     index = {s.task_id: s.digest for s in fold(events).values() if s.status == "accepted"}
     rows: dict[tuple, dict] = {}
-    back = {(e["task_id"], e.get("new_digest")): e.get("old_digest") for e in events if e["type"] == "repair"}
-    earlier: dict[str, set[str]] = {}
-    for tid, digest in index.items():
-        while (tid, digest) in back and back[(tid, digest)] not in earlier.setdefault(tid, set()):
-            digest = back[(tid, digest)]
-            earlier[tid].add(digest)
 
     def row(agent: str, version: str, model: str, effort: str, name: str = "") -> dict:
         return rows.setdefault((agent, version, model, effort), {
             "name": name, "agent": agent, "version": version, "model": model, "effort": effort, "trials": 0,
-            "per_task": {}, "runners": set(), "selected_against": (agent, model) in set(suite)})
+            "selection_trials": 0, "per_task": {}, "runners": set(), "selected_against": (agent, model) in set(suite)})
 
     for c in roster or []:
         row(c["agent"], c.get("version", ""), c["model"], c.get("reasoning_effort", ""), c.get("name", ""))
-    for e in events:
+    seen: set[tuple] = set()
+    for e in (*events, *evals):
         if e["type"] != "trial" or e.get("purpose") not in ("difficulty", "benchmark") or e.get("assumed") or e.get("error"):
             continue
-        if index.get(e["task_id"]) != e["digest"] and not (
-                e["purpose"] == "difficulty" and e["digest"] in earlier.get(e["task_id"], ())):
-            continue        # a difficulty trial run before a repair still stands: it is run once per task
-        r = row(e.get("agent", ""), e.get("agent_version", ""), e.get("model", ""), e.get("reasoning_effort", ""))
+        slot = (e["digest"], e.get("agent", ""), e.get("agent_version", ""), e.get("model", ""), e.get("reasoning_effort", ""), e.get("trial_index", 0))
+        if index.get(e["task_id"]) != e["digest"] or slot in seen:
+            continue
+        seen.add(slot)
+        r = row(*slot[1:5])
         r["trials"] += 1
+        r["selection_trials"] += e["purpose"] == "difficulty"
         r["runners"].add(e["runner"])
         p = r["per_task"].setdefault(e["task_id"], [0, 0])
         p[0] += int(bool(e.get("passed")))
@@ -190,8 +192,8 @@ SIMULATED_HEADER = "# SIMULATED. These tasks were accepted in simulated runs on 
 INDEX_HEADER = """# The index: the accepted tasks.
 #
 # Nobody edits this file. It is written from the signed verdicts in the ledger, and
-# `hm ledger verify` rejects a copy that lists anything those verdicts do not support.
-# A task gets in by a contributor's accept verdict, and out by a replace or reject verdict.
+# `hm sync` rejects a copy that lists anything those verdicts do not support.
+# A task gets in by a contributor's accept verdict, and out by a reject verdict or the final cut.
 
 """
 

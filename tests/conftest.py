@@ -9,6 +9,13 @@ from harbor_master.core import config as config_mod
 from harbor_master.core import identity
 
 
+@pytest.fixture(autouse=True)
+def own_config(tmp_path, monkeypatch):
+    """No test reads or writes the real user's configuration folder, where the indexes on a machine are noted."""
+    monkeypatch.setenv("HM_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.delenv("HM_WORKSPACE", raising=False)
+
+
 @pytest.fixture
 def ident(tmp_path, monkeypatch):
     monkeypatch.setenv("HM_CONFIG_DIR", str(tmp_path / "config"))
@@ -56,3 +63,18 @@ def session(workspace, ident):
     from harbor_master.engine import Session
     cfg = config_mod.load(workspace)
     return Session(workspace, cfg, ident, tasks.read_registry(workspace), simulate=True, as_real=True, speed=0, no_input=True)
+
+
+def call(fn, *args, **kwargs) -> str:
+    """Run a function that prints to hm's console, the way a test runs a command: its exit code, then what it
+    printed, on one line."""
+    import typer
+
+    from harbor_master.cli.common import console
+    with console.capture() as out:
+        try:
+            fn(*args, **kwargs)
+            code = 0
+        except typer.Exit as stop:
+            code = stop.exit_code
+    return f"{code} {' '.join(out.get().split())}"

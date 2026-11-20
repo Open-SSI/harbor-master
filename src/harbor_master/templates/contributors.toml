@@ -2,10 +2,11 @@
 #
 # A person is identified by their GitHub handle and signing key, never by name:
 #   github   the GitHub handle
-#   key      the public key in the line that /whoami shows (the private half never leaves the machine)
+#   key      the public key in the line that the You button shows (the private half never leaves the machine)
+#   name, affiliation, email   who they are, as they gave it with hm init
 # An entry without both is listed but cannot contribute yet.
-#   role     "owner", or "lead": with the owner, a lead makes the final cut of accepted tasks (/tasks cut)
+#   role     "owner", or "lead": with the owner, a lead makes the final cut of accepted tasks (hm cut)
 #
-# The owner adds someone on the hm screen: /contributors add HANDLE KEY
+# The owner adds someone in a shell, inside the index's folder: hm contributors add HANDLE KEY
 # That signs the list and shares it. It needs no lock, because who contributes changes no result.
 

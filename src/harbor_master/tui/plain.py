@@ -17,7 +17,7 @@ async def run_plain(session: Session, console) -> None:
                        f"difficulty trials ${session.trial_cost:.2f}). Calls: D {session.calls['decision']}, "
                        f"W {session.calls['worker']}, F {session.calls['frontier']}.", style=SE))
     if session.ready:
-        console.print(Text(f"{len(session.ready)} report(s) are ready for your verdict. Review them with: hm review", style=AM))
+        console.print(Text(f"{len(session.ready)} report(s) are ready for your verdict. Review them with: /review", style=AM))
     blocking = [r for r in session.requests if r.blocking]
     if blocking:
-        console.print(Text(f"{len(blocking)} request(s) are waiting. See: hm requests", style=AM))
+        console.print(Text(f"{len(blocking)} request(s) are waiting. hm curate in a terminal asks each in a box.", style=AM))

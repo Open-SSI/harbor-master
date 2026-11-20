@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-hm = "harbor_master.cli:app"
+hm = "harbor_master.cli:main"
 
 [build-system]
 requires = ["hatchling"]

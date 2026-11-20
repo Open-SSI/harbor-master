@@ -14,7 +14,7 @@ LOCAL = ".hm"                      # this machine's own files inside the clone o
 CONFIG_NAME = "hm.toml"            # in .hm: parallelism and budget. The user's to change
 PROTOCOL_NAME = "protocol.toml"    # the protocol: everything that can change a result. Locked
 ABOUT_NAME = "about.toml"          # what the index is: its name and description. Not locked
-PROTOCOL_SECTIONS = ("tiers", "escalation", "triage", "adapt", "select", "verify", "difficulty", "fix", "index")
+PROTOCOL_SECTIONS = ("tiers", "escalation", "triage", "adapt", "select", "verify", "difficulty", "eval", "fix")
 
 
 class Tier(BaseModel):
@@ -93,7 +93,7 @@ class SuiteEntry(BaseModel):
             return data
         known = presets()
         if data["use"] not in known:
-            raise ValueError(f"no preset is named {data['use']!r}. The presets: {', '.join(known)}. See: hm roster presets")
+            raise ValueError(f"no preset is named {data['use']!r}. The presets: {', '.join(known)}.")
         out = {**known[data["use"]], **{k: v for k, v in data.items() if k != "use"}}
         if "name" in cls.model_fields:
             out.setdefault("name", data["use"])     # on a roster, the preset's name is the configuration's name
@@ -111,12 +111,17 @@ def roster(workspace: Path) -> list[RosterEntry]:
     return [RosterEntry.model_validate(c) for c in listed]
 
 
+def demo_roster(cfg) -> list[RosterEntry]:
+    """For a simulated evaluation in an index whose roster is still empty: the difficulty suite, and one more agent."""
+    return [*(RosterEntry(name=e.model, **e.model_dump()) for e in cfg.difficulty.suite),
+            RosterEntry(name="demo-agent", agent="demo-agent", model="demo-model", version="1.0")]
+
+
 class Difficulty(BaseModel):
     suite: list[SuiteEntry] = [
         SuiteEntry(agent="claude-code", model="claude-fable-5-1", reasoning_effort="max", version="2.1.292"),
         SuiteEntry(agent="codex", model="gpt-6-astra", reasoning_effort="max", version="0.162.1"),
     ]
-    trials_per_config: int = 3
     max_pass_rate: float = 0.40
     max_agent_hours: float = 4.0       # the most one agent trial may run. A task's own limit applies when it is shorter
     early_stop: bool = True
@@ -129,10 +134,6 @@ class Difficulty(BaseModel):
 class Fix(BaseModel):
     max_rounds: int = 3
     frontier_after_round: int = 2
-
-
-class Index(BaseModel):
-    max_per_benchmark: int = 8     # accepted tasks one benchmark may have in the index
 
 
 class Run(BaseModel):
@@ -158,6 +159,15 @@ class About(BaseModel):
     homepage: str = ""
     license: str = ""
     tasks: str = ""                # where accepted tasks are kept: a Hugging Face dataset repository, or a folder
+    canary: str = ""               # marks the repository as an index: CANARY and a GUID of its own
+
+
+class Eval(BaseModel):
+    """Trials of an agent configuration on a task: the difficulty run of stage 1, and the evaluation of stage 2."""
+    trials: int = 3                # trials per task per agent configuration, in both stages
+    claim_hours: float = 4.0       # how long a claim on a task and a configuration holds
+    max_claim: int = 20            # the most that one person may hold at once
+    retries: int = 2               # how often a trial that failed for an infrastructure reason is tried again
 
 
 class Config(BaseModel):
@@ -168,8 +178,8 @@ class Config(BaseModel):
     select: Select = Field(default_factory=Select)
     verify: Verify = Field(default_factory=Verify)
     difficulty: Difficulty = Field(default_factory=Difficulty)
+    eval: Eval = Field(default_factory=Eval)
     fix: Fix = Field(default_factory=Fix)
-    index: Index = Field(default_factory=Index)
     run: Run = Field(default_factory=Run)
     requires: Requires = Field(default_factory=Requires)
     about: About = Field(default_factory=About)
@@ -215,8 +225,25 @@ def load(workspace: Path) -> Config:
     read = lambda p: tomllib.loads(p.read_text()) if p.exists() else {}  # noqa: E731
     mine, shared = read(local(workspace) / CONFIG_NAME), read(workspace / PROTOCOL_NAME)
     skills.use(workspace / "skills")        # an index may word a skill its own way
+    old = shared.get("difficulty", {}).pop("trials_per_config", None)       # where the number of trials used to be set
+    if old is not None:
+        shared.setdefault("eval", {}).setdefault("trials", old)
     return Config.model_validate({"run": mine.get("run", {}), "about": read(workspace / ABOUT_NAME),
                                   **{k: v for k, v in shared.items() if k in (*PROTOCOL_SECTIONS, "requires")}})
+
+
+CANARY = "harbor-master-canary GUID "
+
+
+def is_index(folder: Path) -> str:
+    """Why `folder` is not an index, or "" when it is: it has a protocol.toml, and an about.toml with the canary."""
+    if not (folder / PROTOCOL_NAME).is_file():
+        return f"it has no {PROTOCOL_NAME}"
+    try:
+        about = tomllib.loads((folder / ABOUT_NAME).read_text())
+    except (OSError, ValueError):
+        return f"it has no {ABOUT_NAME} that can be read"
+    return "" if str(about.get("canary", "")).startswith(CANARY) else f"its {ABOUT_NAME} has no canary line"
 
 
 def find_workspace(start: Path | None = None) -> Path | None:

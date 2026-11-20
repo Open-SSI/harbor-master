@@ -9,8 +9,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
-
 from ..core import keys
 from .base import NotImplementedBackend
 
@@ -34,12 +32,13 @@ def _env() -> dict[str, str]:
         return {"CLAUDE_CODE_OAUTH_TOKEN": token, "ANTHROPIC_API_KEY": ""}     # the subscription, not the API
     if key:
         return {"ANTHROPIC_API_KEY": key}
-    raise NotImplementedBackend("No Claude credential found. Set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY: hm keys init")
+    raise NotImplementedBackend("No Claude credential found. Set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in your keys file")
 
 
 async def ask(model: str, system: str, prompt: str, schema: dict, cwd: Path | None = None,
               max_turns: int = 6, effort: str | None = None, attempts: int = 2) -> Reply:
     """One session. With `cwd`, the model may read files there. Raises RuntimeError when no typed result comes back."""
+    from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query     # here, so that hm starts without loading it
     options = ClaudeAgentOptions(
         model=model, system_prompt=system, max_turns=max_turns, setting_sources=[],
         tools=READ_ONLY if cwd else [],      # with no directory, the model has no tools at all
@@ -48,7 +47,7 @@ async def ask(model: str, system: str, prompt: str, schema: dict, cwd: Path | No
         output_format={"type": "json_schema", "schema": schema}, env=_env())
     problem = "no result"
     for _ in range(attempts):
-        result: ResultMessage | None = None
+        result = None
         try:
             async for message in query(prompt=prompt, options=options):
                 if isinstance(message, ResultMessage):

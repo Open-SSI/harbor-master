@@ -1,19 +1,15 @@
-"""Where `hm` starts: the home screen, the guide it shows, and a demo to try it on."""
+"""hm alone, running an hm command in place, and the demos that hm init, hm curate --demo and hm eval --demo start."""
 from __future__ import annotations
 
-import sys
 from pathlib import Path
-from typing import Optional
 
 import click
 import typer
-from rich.text import Text
 
 from .. import tasks as tasks_mod
 from ..core import config as config_mod
-from ..interact import guide as guide_mod
 from ..tui import theme
-from .common import Workspace, app, console, fail, need_identity
+from .common import app, console, need_identity
 
 
 def invoke(args: list[str]) -> int:
@@ -30,85 +26,49 @@ def invoke(args: list[str]) -> int:
     return code if isinstance(code, int) else 0
 
 
-def run_cli(args: list[str], width: int) -> tuple[int, Text]:
-    """Run `hm ARGS` and hand back what it printed, at the width of the panel that will show it."""
-    before = console._width
-    console.width = width
-    try:
-        with console.capture() as captured:
-            code = invoke(args)
-    finally:
-        console._width = before
-    return code, Text.from_ansi(captured.get().rstrip())
-
-
-def open_home(start: Path) -> None:
-    """The home screen, and from it the run screen and back, until the user leaves."""
-    from ..tui.home import HomeApp
-    ws, note = None, None
-    while True:
-        result = HomeApp(run_cli, start, ws, note).run()
-        if result is None:
-            return
-        args, ws = result
-        with console.capture() as captured:      # the run screen draws by itself. What the command prints is kept for home
-            invoke(["run", *args, "-w", str(ws)])
-        note = ("hm run " + " ".join(args), Text.from_ansi(captured.get().rstrip()))
+def _version(asked: bool) -> None:
+    if asked:
+        from .. import __version__
+        console.print(f"hm {__version__}", highlight=False)
+        raise typer.Exit()
 
 
 @app.callback(invoke_without_command=True)
-def start(ctx: typer.Context):
-    """With no command, open the home screen: it shows the steps and what to do next."""
-    if ctx.invoked_subcommand is not None:
-        return
-    if sys.stdout.isatty() and sys.stdin.isatty():
-        open_home(Path.cwd())
-    else:
-        console.print(guide_mod.text(guide_mod.look()), markup=False, highlight=False)
-        console.print(f"[{theme.MU}]Every command: hm --help[/]")
+def start(ctx: typer.Context,
+          version: bool = typer.Option(False, "--version", "-V", callback=_version, is_eager=True, help="Show the version and exit.")):
+    """hm alone does nothing: it says which commands there are."""
+    if ctx.invoked_subcommand is None:
+        from . import USAGE
+        console.print(USAGE, markup=False, highlight=False, soft_wrap=True)
+        raise typer.Exit(2)
 
 
-@app.command()
-def home():
-    """Open the home screen: the steps, what to do next, and the commands, in one place."""
-    open_home(Path.cwd())
-
-
-@app.command()
-def guide(workspace: Optional[Path] = Workspace):
-    """Print the steps and what to do next, as text."""
-    console.print(guide_mod.text(guide_mod.look(workspace)), markup=False, highlight=False)
-
-
-@app.command()
-def whoami():
-    """Print who you are, and the line to send the owner of an index so that they can add you."""
-    ident = need_identity()
-    console.print(ident.label(), markup=False, highlight=False)
-    console.print(f"/contributors add {ident.github} {ident.public_key}", markup=False, highlight=False, soft_wrap=True)
-
-
-@app.command()
-def demo(count: int = typer.Option(40, help="How many made-up tasks."), workspace: Optional[Path] = Workspace):
-    """Try it on made-up tasks: adds a synthetic benchmark for simulated runs. Outside an index, starts one called hm-demo first."""
+def demo_bench(ws: Path, count: int = 10) -> None:
+    """The made-up benchmark of the demos, added to this index for simulated runs only. Nothing of it enters the index."""
     from .dev import fake_benchmark
-    from .setup import index_new
-    need_identity()
-    ws = workspace or config_mod.find_workspace()
-    if ws is None:
-        ws = Path("hm-demo").resolve()
-        if not ws.exists():
-            index_new("hm-demo", ws, "Demo index", trial=True)
-        elif not (ws / config_mod.PROTOCOL_NAME).exists():
-            fail(f"{ws} exists and is not an index. Remove it, or run this inside an index.")
-    ws = ws.resolve()
     name = "demo-bench"
-    if name in tasks_mod.read_registry(ws):
-        console.print(f"{name} is already registered in {ws}. Run it with: hm run --simulate")
+    if name not in tasks_mod.read_registry(ws):
+        root = config_mod.local(ws) / "fake"
+        fake_benchmark(name, count, directory=root, seed=7)
+        tasks_mod.register(ws, name, root / name, dev=True)
+
+
+def demo_eval(ws: Path) -> None:
+    """What the eval demo starts from: the made-up benchmark, curated in a simulated run with its tasks accepted, so
+    that there is something to evaluate. Simulated, on this machine only."""
+    import asyncio
+
+    from .. import interact
+    from .. import ledger as ledger_mod
+    from ..engine import Session
+    root = config_mod.simulated(ws)
+    if ledger_mod.index_entries(ledger_mod.Ledger(root, simulated=True).events):
         return
-    root = config_mod.local(ws) / "fake"
-    with console.capture():                     # its own message names a path nobody needs
-        fake_benchmark(name, count, directory=root, seed=0)
-    tasks_mod.register(ws, name, root / name, dev=True)
-    console.print(f"Registered [bold]{name}[/] in {ws}: {count} made-up tasks, for simulated runs only. "
-                  "Next: hm run --simulate. It stops twice to ask you something, and says how to answer.")
+    demo_bench(ws)
+    cfg = config_mod.load(ws)
+    cfg.select.require_brief = cfg.select.require_signoff = False        # nobody is asked anything: this only makes tasks to evaluate
+    s = Session(ws, cfg, need_identity(), {"demo-bench": tasks_mod.read_registry(ws)["demo-bench"]}, simulate=True, speed=0, no_input=True)
+    s.is_reviewer = True
+    asyncio.run(s.run())
+    for task in list(s.ready):
+        interact.decide(s, task, "accept for the demo")

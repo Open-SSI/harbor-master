@@ -36,7 +36,8 @@ class BenchState:
     not_selected: int = 0
     cost: float = 0.0
     paused: bool = False
-    ranking: list[tuple[str, float, bool]] = field(default_factory=list)   # (task id, rating, selected)
+    ranking: list[tuple[str, float, bool]] = field(default_factory=list)   # (task id, rating, selected), in the order tasks are taken
+    most: int = 0                # the most tasks that may be selected: the cap, and never more than there are
 
     @property
     def queued(self) -> int:
@@ -54,12 +55,13 @@ class CellState:
     attention: bool = False
     runner: asyncio.Task | None = None
     stopping: bool = False
+    on_stage: object = None      # called with a stage's name as the cell enters it
 
 
 @dataclass
 class Request:
     id: int
-    kind: str                    # brief | selection | budget | adapter | lock block work; replace | verdict wait without blocking
+    kind: str                    # brief | selection | budget | adapter | lock | failure block work; verdict waits without blocking
     text: str
     target: str = ""
     choices: list[str] = field(default_factory=list)
@@ -67,7 +69,7 @@ class Request:
 
     @property
     def blocking(self) -> bool:
-        return self.kind in ("brief", "selection", "budget", "adapter", "lock")
+        return self.kind in ("brief", "selection", "budget", "adapter", "lock", "failure")
 
     def public(self) -> dict:
         return {"id": self.id, "kind": self.kind, "text": self.text, "target": self.target, "choices": self.choices}

@@ -1,7 +1,7 @@
 # The curation protocol of this index: every setting that can change a result.
 #
 # This file is the same for everyone who curates into the index. The owner locks it
-# (hm protocol lock), which records its checksum in the ledger. From then on a run whose
+# (the Lock button on the index's screen), which records its checksum in the ledger. From then on a run whose
 # copy differs in any way is refused, and every record carries the checksum it was made
 # under. To change a setting, the owner edits this file and locks the new version.
 #
@@ -17,7 +17,7 @@ harbor_master = "0.1.0"         # the oldest Harbor-Master that may run this ind
 # through Codex and its sign-in to a ChatGPT subscription), for example:
 #   provider = "codex"
 #   model = "gpt-5.6-terra"
-# `hm run --simulate` ignores these and spends nothing.
+# `hm curate --demo` ignores these and spends nothing.
 [tiers]
 chat = "worker"                 # which tier answers questions typed in the session
 
@@ -72,10 +72,18 @@ require_signoff = true          # the lead approves the selection before any tri
 parity = "sampled"              # "off" | "sampled" | "full"
 parity_tasks = 5                # run with the worker tier's model: no separate setting
 
+# ----- trials: an agent configuration's attempts at a task, in both stages -----
+# The difficulty run of curation and the evaluation of the released index fill the same slots, so a
+# difficulty trial is not run again when the index is evaluated.
+[eval]
+trials = 3                      # per task, per agent configuration
+claim_hours = 4.0               # how long a claim on a task and a configuration holds, in hm eval
+max_claim = 20                  # the most that one person may hold at once
+retries = 2                     # how often a trial that failed for an infrastructure reason is tried again
+
 # ----- difficulty: a task is kept only if frontier agents mostly fail it -----
 # Run once per task, after every cheap check has passed. A later repair does not run it again.
 [difficulty]
-trials_per_config = 3
 max_pass_rate = 0.4
 max_agent_hours = 4.0           # the most one agent trial may run. A task's own limit applies when shorter
 early_stop = true
@@ -99,7 +107,3 @@ version = "0.162.1"
 [fix]
 max_rounds = 3
 frontier_after_round = 2
-
-# ----- the index -----
-[index]
-max_per_benchmark = 8           # accepted tasks one benchmark may have. A ninth must replace one

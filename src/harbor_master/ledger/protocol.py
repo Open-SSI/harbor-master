@@ -48,8 +48,8 @@ def version(lock: dict | None) -> str:
 
 def bumped(current: str, how: str) -> str:
     """The next version. A lock keeps the version unless its owner asks for a new one: `patch` for a small
-    change, such as the roster (0.0.1 to 0.0.2), `minor` when settings or skills changed (0.1.0 to 0.2.0).
-    1.0.0 is kept for the index's release, and cannot be set yet."""
+    change, such as a skill's wording (0.0.1 to 0.0.2), `minor` when settings changed (0.1.0 to 0.2.0).
+    1.0.0 is the index's release, which `hm release` sets."""
     major, minor, patch = (int(n) for n in (current.split(".") + ["0", "0"])[:3])
     if how == "":
         return f"{major}.{minor}.{patch}"
@@ -57,16 +57,16 @@ def bumped(current: str, how: str) -> str:
         return f"{major}.{minor}.{patch + 1}"
     if how == "minor":
         return f"{major}.{minor + 1}.0"
-    raise ValueError("A version goes up by patch or by minor. 1.0.0 is kept for the index's release, and cannot be set yet.")
+    if how == "release" and major == 0:
+        return "1.0.0"
+    raise ValueError("A version goes up by patch or by minor. 1.0.0 is the index's release: hm release sets it, once.")
 
 
-def write(ledger_dir, ident, cfg, note: str = "", registry: dict | None = None, bump: str = "") -> dict:
-    """Append the owner's lock: the settings, and the checksums of what is locked beside them.
-    `registry` gives those checksums when not everything on disk is meant, as when a run locks one new adapter."""
-    from .. import templates
+def write(ledger_dir, ident, cfg, note: str = "", bump: str = "") -> dict:
+    """Append the owner's lock: the settings. The roster is not in it: it may change at any time."""
     from .store import MANUAL, Ledger, Shard
     lock = current(Ledger(ledger_dir).events)
     shard = Shard(ledger_dir, BENCH, ident, MANUAL, cfg.protocol)
-    return shard.append("protocol", version=bumped(version(lock), bump), settings=cfg.protocol_settings(), registry=registry if registry is not None else templates.digests(ledger_dir),
+    return shard.append("protocol", version=bumped(version(lock), bump), settings=cfg.protocol_settings(),
                         requires=cfg.requires.harbor_master, note=note,
                         replaces=lock["protocol"] if lock and lock["protocol"] != cfg.protocol else "")

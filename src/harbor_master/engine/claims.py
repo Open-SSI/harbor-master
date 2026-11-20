@@ -16,7 +16,7 @@ from .state import BenchState
 if TYPE_CHECKING:
     from .session import Session
 
-DONE = {"dropped", "report_ready", "accepted", "rejected", "replaced", "contested"}
+DONE = {"dropped", "report_ready", "accepted", "rejected", "contested"}
 
 
 def completed(s: Session, benchmark: str) -> dict[str, str]:
@@ -35,7 +35,7 @@ async def take(s: Session, bench: BenchState, chosen: list[Task]) -> list[Task]:
     """Claim what is free among `chosen`, and return it. The rest is rejected, with the reason noted."""
     await s.pull()
     done = completed(s, bench.id)
-    held = s.ledger.claims(bench.id, time.time(), me=s.ident.github)
+    held = s.ledger.claims(bench.id, time.time(), me=s.ident.github, machine=s.machine)
     finished = [t for t in chosen if t.task_id in done]
     running = [t for t in chosen if t.task_id in held and t.task_id not in done]
     free = [t for t in chosen if t.task_id not in done and t.task_id not in held]
@@ -58,7 +58,7 @@ async def take(s: Session, bench: BenchState, chosen: list[Task]) -> list[Task]:
         if await s.push(f"claim {len(free)} tasks of {bench.id}"):
             break
         # Someone pushed first. Their work is pulled in now: give up whatever they claimed.
-        held = s.ledger.claims(bench.id, time.time(), me=s.ident.github)
+        held = s.ledger.claims(bench.id, time.time(), me=s.ident.github, machine=s.machine)
         lost = [t for t in free if t.task_id in held]
         if lost:
             who = sorted({held[t.task_id][0] for t in lost})
@@ -78,7 +78,7 @@ async def screen(s: Session, bench: BenchState) -> str:
     """
     await s.pull()                                  # others' decisions are reused from here on
     for attempt in range(8):
-        holder = s.ledger.claims(bench.id, time.time(), me=s.ident.github).get(SCREEN)
+        holder = s.ledger.claims(bench.id, time.time(), me=s.ident.github, machine=s.machine).get(SCREEN)
         if holder:
             s.release(bench.id, [SCREEN])
             return holder[0]

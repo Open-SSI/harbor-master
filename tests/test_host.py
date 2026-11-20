@@ -12,7 +12,7 @@ import time
 
 from typer.testing import CliRunner
 
-from harbor_master import host, tasks
+from harbor_master import host, ledger, tasks
 from harbor_master.cli import app
 
 from conftest import make_benchmark
@@ -75,28 +75,30 @@ def wait(condition, seconds: float = 15.0) -> bool:
 
 
 def test_a_run_outlives_its_terminal_and_takes_more_benchmarks(workspace, ident, tmp_path):
-    run = ["run", "demo-bench", "--simulate", "--speed", "0", "--budget", "100000"]
+    run = ["curate", "demo-bench", "--simulate", "--speed", "0", "--budget", "100000"]
+    listed = (workspace / ledger.CONTRIBUTORS).read_text()       # this is about the run and its terminal, not about verdicts:
+    (workspace / ledger.CONTRIBUTORS).write_text(listed.replace(ident.github, "someone-else"))    # no report waits for this person
     try:
         first = terminal(workspace, run, "The run is finished", b"\x0c")           # it runs, and the user leaves with ctrl+l
         assert "working cells" in first and "demo-bench" in first and "The run goes on" in first
         going = host.active(workspace)
         assert going and going["simulate"] and "simulated run" in host.describe(going)
 
-        again = CliRunner().invoke(app, ["run", "--simulate", "--plain", "-w", str(workspace)])            # one run per index
+        again = CliRunner().invoke(app, ["curate", "--simulate", "--plain", "-w", str(workspace)])            # one run per index
         assert again.exit_code == 1 and "A run is going in this index already" in " ".join(again.output.split())
 
-        closed = terminal(workspace, ["run", "--simulate"], "working cells", close=True)    # opened again, then the window is closed
+        closed = terminal(workspace, ["curate", "--simulate"], "working cells", close=True)    # opened again, then the window is closed
         assert "demo-bench" in closed and wait(lambda: host.active(workspace) is not None, 1) and host.active(workspace)["pid"] == going["pid"]
 
         tasks.register(workspace, "second", make_benchmark(tmp_path / "more", "second", 12), dev=True)
         assert host.tell(workspace, {"add": ["nothing"]})["ok"] is False
-        added = terminal(workspace, ["run", "second", "--simulate"], "second", b"\x0c")   # a benchmark is added to the run that is going
+        added = terminal(workspace, ["curate", "second", "--simulate"], "second", b"\x0c")   # a benchmark is added to the run that is going
         assert "second is added to this run" in added and "The run goes on" in added
         assert "already in this run" in host.tell(workspace, {"add": ["second"]})["text"]
-        real = CliRunner().invoke(app, ["run", "second", "--plain", "-w", str(workspace)])
+        real = CliRunner().invoke(app, ["curate", "second", "--plain", "-w", str(workspace)])
         assert real.exit_code == 1                                                # and a real run cannot start beside it
 
-        ended = terminal(workspace, ["run", "--simulate"], "second", (b"\x11", b"y"))    # ctrl+q, and yes: the run ends
+        ended = terminal(workspace, ["curate", "--simulate"], "second", (b"\x11", b"y"))    # ctrl+q, and yes: the run ends
         assert "The run has ended" in ended and wait(lambda: host.active(workspace) is None)
         assert not os.path.exists(going["socket"]) and not os.path.exists(going["control"])
         summaries = sorted((workspace / ".hm" / "runs").glob("*/run.json"))

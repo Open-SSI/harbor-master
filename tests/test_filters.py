@@ -147,14 +147,14 @@ def test_the_owner_or_a_lead_makes_the_final_cut(workspace, ident, tmp_path):
     run = lambda *a: CliRunner().invoke(app, [*a, "--workspace", str(workspace)])       # noqa: E731
     index = lambda: [e["task"] for e in ledger.index_entries(ledger.Ledger(workspace).events)]   # noqa: E731
     from harbor_master.cli import app
-    assert "neither" in run("tasks", "cut", "t0001", "too", "close").output             # an ordinary contributor cannot
+    assert "neither" in run("cut", "t0001", "too", "close").output             # an ordinary contributor cannot
     role("lead")
-    assert run("tasks", "cut", "t0001").exit_code != 0                                  # a reason is needed
-    assert "Cut demo-bench/t0001" in run("tasks", "cut", "t0001", "too", "close").output
+    assert run("cut", "t0001").exit_code != 0                                  # a reason is needed
+    assert "Cut demo-bench/t0001" in run("cut", "t0001", "too", "close").output
     assert index() == [] and "t0001" not in (workspace / ledger.INDEX_FILE).read_text()
     assert not (shared / key).exists() and store.local(workspace).has(key)              # out of the store, kept on this machine
-    assert "Restored" in run("tasks", "restore", "t0001").output and index() == ["demo-bench/t0001"] and (shared / key).is_file()
-    assert run("tasks", "cut", "t0001", "final").exit_code == 0
+    assert "Restored" in run("restore", "t0001").output and index() == ["demo-bench/t0001"] and (shared / key).is_file()
+    assert run("cut", "t0001", "final").exit_code == 0
     role("")                                                                            # no lead any more: their cut does not verify
     assert any("neither the owner nor a lead" in p for p in ledger.verify(workspace))
 
@@ -219,3 +219,55 @@ async def test_tiers_run_on_claude_or_codex_and_a_session_with_no_cost_is_estima
     cfg.tiers.decision.provider = "claude-agent-sdk"
     with pytest.raises(NotImplementedBackend, match="Jev only"):
         real(cfg)
+
+
+async def test_a_simulated_run_is_a_walk_through_of_the_stages(session):
+    from harbor_master.interact import guide, walk
+    await session.run()
+    names = [name for name, _ in session.walk]
+    assert names[:3] == ["triage", "rank", "verify"] and set(names) == set(walk.STAGE) - {"select"}     # each once. No sign-off was asked here
+    told = [e for e in session.recent if e[1] == "stage"]
+    assert len(told) == len(names) and all(text == walk.STAGE[stage] for _, _, stage, text in told)
+    session.finished, session.cells[0].task = False, session.benches["demo-bench"].tasks[0]            # while a task is in a cell
+    assert guide.session_tip(session).startswith(names[-1].capitalize() + ". ")                         # the tip says what the stage does
+    session.simulate, session.walk = False, []
+    session.explain("verify")
+    assert session.walk == []                                                                          # a real run is not narrated
+
+
+async def test_a_simulation_takes_every_task_through_the_stages_and_leaves_the_protocol_alone(workspace, ident):
+    cfg = config_mod.load(workspace)
+    cfg.select.top_k, cfg.select.max_fraction = 24, 0.25                # a real run would take a quarter: 6 of 24
+    (workspace / config_mod.PROTOCOL_NAME).write_text(tomli_w.dumps({k: getattr(cfg, k).model_dump() for k in config_mod.PROTOCOL_SECTIONS}))
+    cfg = config_mod.load(workspace)
+    s = Session(workspace, cfg, ident, tasks.read_registry(workspace), simulate=True, speed=0, no_input=True)
+    await s.run()
+    bench = s.benches["demo-bench"]
+    assert bench.selected == 24 - bench.triaged_out and bench.not_selected == 0
+    assert s.cfg.select.max_fraction == 0.25 and s.protocol == cfg.protocol       # the setting was not touched to do it
+    s._check_config()                                                   # so the file is not found to differ from the run
+    assert not s._config_changed and not any(kind == "config" for _, kind, _, _ in s.recent)
+
+
+async def test_one_person_on_two_machines_cannot_run_the_same_tasks(workspace, ident):
+    from harbor_master.engine import claims
+
+    def on(machine, run):
+        s = Session(workspace, config_mod.load(workspace), ident, tasks.read_registry(workspace), simulate=True, as_real=True,
+                    speed=0, no_input=True, run_id=run)
+        s.machine = machine
+        s.benches["demo-bench"].tasks = tasks.load_benchmark(s.benches["demo-bench"].path, "demo-bench")
+        return s, s.benches["demo-bench"]
+
+    (a, bench_a), (b, bench_b) = on("aaaa1111", "a1"), on("bbbb2222", "b1")       # the same person, signed in on two machines
+    got_a = await claims.take(a, bench_a, bench_a.tasks[:6])
+    b.ledger.reload()
+    got_b = await claims.take(b, bench_b, bench_b.tasks[3:9])
+    assert len(got_a) == 6 and [t.name for t in got_b] == [t.name for t in bench_b.tasks[6:9]]     # only what the first does not hold
+    assert any("you, on another machine" in text for _, _, _, text in b.recent)
+    assert all(e["machine"] in ("aaaa1111", "bbbb2222") for e in a.ledger.events + b.ledger.events if e["type"] == "claim")
+
+    again, bench = on("aaaa1111", "a2")             # the first machine again, after its run died: its own claims do not shut it out
+    assert len(await claims.take(again, bench, bench.tasks[:6])) == 6
+    named = Session(workspace, config_mod.load(workspace), ident, {}, simulate=True)       # a run's files carry its machine's name,
+    assert named.run_id.endswith("-" + named.machine[:4]) and len(named.machine) == 8      # so two machines never write the same file

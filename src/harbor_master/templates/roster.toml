@@ -1,7 +1,8 @@
 # The agent configurations to benchmark on this index. Each one is run on every accepted
 # task, and the leaderboard has one row per entry.
 #
-# The short way: name a preset. /roster presets lists them.
+# The short way: name a preset: claude-opus-5.5, claude-sonnet-5.5, claude-haiku-4.5, gpt-6-astra,
+# gpt-5.6-terra, gpt-5.6-luna, muse-wonder, glm-5.3-flash, qwen3.8-27b or minimax-m3.
 #
 # [[config]]
 # use = "claude-opus-5.5"
@@ -13,7 +14,7 @@
 # use = "claude-opus-5.5"
 # version = "2.1.292"
 #
-# Or write a configuration out in full, with any agent Harbor has (/roster agents):
+# Or write a configuration out in full, with any agent Harbor has:
 #
 #   name      what the leaderboard calls it, and what `hm eval --config NAME` takes
 #   agent     the Harbor agent
@@ -27,4 +28,5 @@
 # model = "openrouter/qwen/qwen3.8-27b"
 # key = "OPENROUTER_API_KEY"
 #
-# Only the owner changes this file, and locks the change: /lock
+# Only the owner changes this file, at any time, before the release and after it: a new
+# configuration adds its cells to the to-do list. It is not locked. Share a change with: hm sync

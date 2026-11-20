@@ -35,14 +35,26 @@ def latent(task: Task) -> dict:
     }
 
 
+PACE = 2.0      # seconds one pretend agent session or container run takes, so that a person can watch each stage
+TRIAL = 10.0    # and the least an agent's attempt at a task takes: the difficulty run is the long stage, as it is for real
+
+
 class SimulatedBackend(Backend):
-    """Stands in for all three tiers and for Harbor. `speed` scales the pretend durations."""
+    """Stands in for all three tiers and for Harbor.
+
+    Nothing here computes for long: an outcome is one draw from the task's digest. The only time a
+    simulated run takes is the pause below, which exists so that the screen shows stages going by.
+    Every agent session and every container run pauses once, for PACE. An agent's attempt at a task
+    pauses for TRIAL or a little more, so the difficulty run is visibly the long stage. A decision does
+    not pause. `speed` scales the pauses, and 0 removes them: a whole run then takes a fraction of a second.
+    At the usual pace a task spends about a minute in its stages, most of it in the difficulty run.
+    """
 
     def __init__(self, cfg: Config, usage: Usage, speed: float = 1.0):
         super().__init__(cfg, usage)
         self.speed = speed
 
-    async def _wait(self, seconds: float) -> None:
+    async def _step(self, seconds: float = PACE) -> None:
         if self.speed > 0:
             await asyncio.sleep(seconds * self.speed)
 
@@ -71,7 +83,6 @@ class SimulatedBackend(Backend):
         tokens = max(200, len(task.instruction) // 4)
         cost = tokens * 0.042e-6
         self._spend("decision", cost, tokens)
-        await self._wait(0.02)
         # Mostly sure, as the real decision model is, and unsure about one answer in twelve.
         prob = 0.70 + 0.14 * r.random() if r.random() < 0.08 else 0.90 + 0.099 * r.random()
         return Decision(value, prob, "decision", self.cfg.tiers.decision.model, cost, tokens)
@@ -81,7 +92,7 @@ class SimulatedBackend(Backend):
         tokens = 1500 + len(task.instruction) // 4
         cost = 0.02
         self._spend("worker", cost, tokens)
-        await self._wait(0.2)
+        await self._step()
         return Decision(first.value, 0.97, "worker", self.cfg.tiers.worker.model, cost, tokens,
                         f"Read the task and confirmed {gate} = {first.value}.")
 
@@ -89,7 +100,6 @@ class SimulatedBackend(Backend):
         r = _rng("importance", task.digest)
         tokens = (len(task.instruction) + len(brief)) // 4 + 200
         self._spend("decision", tokens * 0.042e-6, tokens)
-        await self._wait(0.005)
         return 4 * latent(task)["importance"] + r.uniform(-0.6, 0.6)       # a noisy first look
 
     async def compare(self, brief: str, a: Task, b: Task) -> float:
@@ -98,19 +108,18 @@ class SimulatedBackend(Backend):
         gap = latent(a)["importance"] - latent(b)["importance"]
         tokens = (len(a.instruction) + len(b.instruction) + len(brief)) // 2
         self._spend("decision", 2 * tokens * 0.042e-6, 2 * tokens)
-        await self._wait(0.005)
         return min(0.99, max(0.01, 1 / (1 + math.exp(-7 * gap)) + r.uniform(-0.08, 0.08)))
 
     # ----- tier W and F: agent sessions that end in one typed record -----
 
     async def adapt(self, benchmark: str, n_tasks: int) -> dict:
         self._spend("worker", 0.80, 60_000)
-        await self._wait(3.0)
+        await self._step()
         return {"adapter": "built", "cost": 0.80, "tokens": 60_000}
 
     async def write_mutants(self, task: Task, n: int = 8) -> dict:
         self._spend("worker", 0.30, 22_000)
-        await self._wait(1.2)
+        await self._step()
         return {"mutants": [{"id": f"m{i}", "kind": "wrong" if i < n // 2 else "equivalent"} for i in range(n)],
                 "cost": 0.30, "tokens": 22_000}
 
@@ -118,14 +127,13 @@ class SimulatedBackend(Backend):
         value = "unstated" if latent(task)["unstated"] else "covered"
         if first is not None:
             self._spend("worker", 0.05, 6_000)
-            await self._wait(0.3)
+            await self._step()
             return Decision(value, 0.97, "worker", self.cfg.tiers.worker.model, 0.05, 6_000,
                             "Read the tests against the instruction.")
         r = _rng("covers", task.digest)
         tokens = max(400, len(task.instruction) // 2)
         cost = tokens * 0.042e-6
         self._spend("decision", cost, tokens)
-        await self._wait(0.02)
         return Decision(value, 0.70 + 0.14 * r.random() if r.random() < 0.08 else 0.90 + 0.099 * r.random(),
                         "decision", self.cfg.tiers.decision.model, cost, tokens)
 
@@ -135,7 +143,7 @@ class SimulatedBackend(Backend):
         x = r.random()
         value = ("fix" if x < 0.75 else "drop") if flaw else ("accept" if x < 0.85 else "unsure")
         self._spend("worker", 0.40, 30_000)
-        await self._wait(2.0)
+        await self._step()
         notes = {"accept": "Tests trace to the instruction. Failures come from the science, not from formatting.",
                  "fix": "The verifier asserts a tolerance the instruction never states.",
                  "drop": "The reference output was produced by a flawed method. The task cannot be repaired.",
@@ -147,7 +155,7 @@ class SimulatedBackend(Backend):
         r = _rng("frontier", task.digest, round_no)
         value = "accept" if r.random() < 0.6 else "fix"
         self._spend("frontier", 1.50, 45_000)
-        await self._wait(2.5)
+        await self._step()
         return Decision(value, 0.93, "frontier", self.cfg.tiers.frontier.model, 1.50, 45_000,
                         "Read four trajectories and the verifier. " +
                         ("The failures are legitimate." if value == "accept" else "The schema check is unstated."))
@@ -156,7 +164,7 @@ class SimulatedBackend(Backend):
         ok = latent(task)["fixable"] or tier == "frontier"
         cost, tokens = (1.50, 50_000) if tier == "frontier" else (0.50, 35_000)
         self._spend(tier, cost, tokens)
-        await self._wait(2.2)
+        await self._step()
         return {"fixed": ok, "cost": cost, "tokens": tokens,
                 "what": {"oracle": "pinned a dependency the reference solution needs",
                          "verifier": "the verifier now rejects wrong-unit output",
@@ -164,28 +172,28 @@ class SimulatedBackend(Backend):
 
     async def write_report(self, task: Task, blackboard: dict) -> dict:
         self._spend("worker", 0.20, 12_000)
-        await self._wait(0.8)
+        await self._step()
         return {"cost": 0.20, "tokens": 12_000}
 
     async def answer(self, question: str, context: str) -> str:
         """The chat tier. There is no model here: the caller picked the records that fit the question."""
         self._spend(self.cfg.tiers.chat, 0.01, 1_500)
-        await self._wait(0.4)
+        await self._step()
         return context
 
     # ----- Harbor: runs of the verifier and of agents -----
 
     async def run_oracle(self, task: Task) -> TrialResult:
-        await self._wait(0.8)
+        await self._step()
         return TrialResult(not latent(task)["oracle_fails"], 1.0, 0, 0, 0.0, 40.0)
 
     async def run_noop(self, task: Task) -> TrialResult:
-        await self._wait(0.5)
+        await self._step()
         return TrialResult(False, 0.0, 0, 0, 0.0, 20.0)
 
     async def run_mutant(self, task: Task, mutant: dict, stage: str = "probe") -> bool:
         """True when the verifier accepted the mutant."""
-        await self._wait(0.3)
+        await self._step()
         if mutant["id"].startswith("trivial"):
             return latent(task)["shortcut"] and mutant["id"] == "trivial-empty"
         if mutant["kind"] == "equivalent":
@@ -201,7 +209,7 @@ class SimulatedBackend(Backend):
         passed = r.random() < p
         tokens_in, tokens_out = r.randint(150_000, 900_000), r.randint(8_000, 40_000)
         seconds = r.uniform(240, 1500)
-        await self._wait(r.uniform(2.0, 5.0))
+        await self._step(TRIAL + r.uniform(0.0, 4.0))
         price_in, price_out = (0.4e-6, 2e-6) if cheap else (2.0e-6, 10e-6)
         return TrialResult(passed, float(passed), tokens_in, tokens_out,
                            round(tokens_in * price_in + tokens_out * price_out, 2), seconds,

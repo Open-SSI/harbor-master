@@ -2,6 +2,10 @@
 # contributors.toml) and its accepted tasks (from index.toml).
 # Not part of the locked protocol: the owner may change it at any time.
 
+# Marks this repository as a Harbor-Master index: hm open refuses a repository without it. It also marks
+# the index's contents as benchmark data, which should never appear in training corpora.
+canary = "harbor-master-canary GUID $canary"
+
 # The short name (lower case, digits and hyphens), and the full one.
 name = "$name"
 title = "$title"
@@ -16,5 +20,5 @@ license = ""
 # Where the accepted tasks are kept, each as one archive named by its digest, so that a later
 # benchmark run gets exactly the version that was accepted. A Hugging Face dataset repository,
 # written as "org/name". Every index has one: it is named, and created, when the index is.
-# The owner names another with: /tasks store ORG/NAME
+# To name another, the owner changes it here, then runs hm lock, which creates it.
 tasks = ""

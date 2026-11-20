@@ -15,6 +15,7 @@ from pathlib import Path
 
 
 from . import benchmarks
+from .evals import EVAL
 from .store import REPORTS, SHARDS
 
 DEFINITION = ("about.toml", "protocol.toml", "roster.toml", "contributors.toml", "skills", "adapters",
@@ -84,17 +85,10 @@ class Sync:
         elif path.exists():
             path.unlink()
 
-    def publish_index(self, message: str) -> None:
-        """Commit and push index.toml itself. Done by `hm index build`, so that one person writes it."""
-        self._git("add", "index.toml")
-        if self._git("diff", "--cached", "--quiet", check=False).returncode != 0:
-            self._git("commit", "--quiet", "-m", message)
-        self.publish(message)
-
     def _commit(self, message: str) -> bool:
         """Commit this machine's new records and the reports that go with them, and nothing else."""
         benchmarks.write_list(self.dir)
-        found = [name for name in (SHARDS, REPORTS, benchmarks.FILE) if (self.dir / name).exists()]
+        found = [name for name in (SHARDS, REPORTS, EVAL, benchmarks.FILE) if (self.dir / name).exists()]
         if found:
             self._git("add", "-A", "--", *found)
         if self._git("diff", "--cached", "--quiet", check=False).returncode == 0:

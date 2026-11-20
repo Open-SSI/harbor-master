@@ -9,6 +9,7 @@ A copy is also kept on the machine, under .hm/store.
 """
 from __future__ import annotations
 
+import os
 import shutil
 import tarfile
 import tempfile
@@ -42,6 +43,9 @@ class Folder:
     def create(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
 
+    def writable(self) -> str:
+        return "" if os.access(self.root, os.W_OK) else f"{self.root} cannot be written to."
+
     def has(self, k: str) -> bool:
         return (self.root / k).is_file()
 
@@ -74,7 +78,7 @@ class HuggingFace:
         token = keys.get("HF_TOKEN") or None
         if write and not token:
             raise StoreError(f"The task store is {self.where}, and putting a task there needs your own Hugging Face token, "
-                             "with write access to it. Add HF_TOKEN to your keys file: /keys")
+                             "with write access to it. Add HF_TOKEN to your keys file")
         self.hub, self.api, self.token = huggingface_hub, huggingface_hub.HfApi(token=token), token
 
     def _guard(self, what: str, fn):
@@ -91,6 +95,14 @@ class HuggingFace:
             if type(err).__name__ == "RepositoryNotFoundError":     # also what a private one says to someone without access
                 return False
             raise StoreError(f"Could not reach {self.where}: {type(err).__name__}: {str(err)[:200]}") from err
+
+    def writable(self) -> str:
+        """Why this token cannot read and write the repository, or "" when it can."""
+        try:
+            self.api.auth_check(self.repo, repo_type="dataset", write=True)
+            return ""
+        except Exception as err:        # no access, a read-only token, no network
+            return f"Your token cannot write to {self.where}: {type(err).__name__}. It needs read and write access to it."
 
     def create(self) -> None:
         """Make the repository, private. Its owner opens it to others, or to everyone, on Hugging Face."""
@@ -142,12 +154,12 @@ def not_ready(cfg) -> str:
     """Why this machine cannot put an accepted task in the index's store, or "" when it can. Every index has a
     store, so a real run asks this before it starts."""
     if not (cfg.about.tasks or "").strip():
-        return ("this index names no store for its accepted tasks. Its owner sets one, which also creates it: "
-                "/tasks store ORG/NAME")
+        return ("this index names no store for its accepted tasks. Its owner names one in about.toml, as tasks = \"ORG/NAME\", "
+                "and hm lock creates it")
     try:
         there = remote(cfg)
         if not there.exists():
-            return f"the task store {there.where} does not exist, or your token cannot see it. Its owner creates it with /tasks store"
+            return f"the task store {there.where} does not exist, or your token cannot see it. Its owner creates it with hm lock"
     except StoreError as err:
         return str(err)
     return ""
@@ -177,6 +189,36 @@ def put(ws: Path, cfg, benchmark: str, name: str, digest: str, task_dir: Path) -
     if not there.has(k):
         there.put(k, here.root / k)
     return True, f"kept in {there.where}"
+
+
+UNKEPT = "unkept.txt"       # in .hm: accepted tasks this machine could not put in the store yet, one key a line
+
+
+def remember(ws: Path, benchmark: str, name: str, digest: str) -> None:
+    """Note an accepted task that did not reach the store, so that the next hm sync puts it there."""
+    path = config_mod.local(ws) / UNKEPT
+    path.parent.mkdir(exist_ok=True)
+    with path.open("a") as f:
+        f.write(f"{benchmark}\t{name}\t{digest}\n")
+
+
+def retry(ws: Path, cfg) -> list[str]:
+    """Put in the store the accepted tasks that did not reach it before. One line for each, on how it went."""
+    path = config_mod.local(ws) / UNKEPT
+    if not path.exists():
+        return []
+    said, left = [], []
+    for line in dict.fromkeys(path.read_text().splitlines()):
+        benchmark, name, digest = line.split("\t")
+        try:
+            ok, how = put(ws, cfg, benchmark, name, digest, Path("/nonexistent"))
+        except (StoreError, OSError) as err:
+            ok, how = False, f"not kept: {str(err)[:200]}"
+        said.append(f"{benchmark}/{name}: accepted version {how}")
+        if not ok:
+            left.append(line)
+    path.write_text("".join(f"{line}\n" for line in left)) if left else path.unlink()
+    return said
 
 
 def drop(ws: Path, cfg, benchmark: str, name: str, digest: str) -> str:

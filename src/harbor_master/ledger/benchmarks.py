@@ -22,7 +22,7 @@ REQUIRED = ("id", "name", "description", "github", "ref", "commit", "tasks", "ve
 ORDER = ("id", "name", "description", "paper", "github", "homepage", "license", "version", "released", "ref", "commit",
          "tasks", "task_count", "format", "added_by", "added")
 HEADER = "# The benchmarks this index may curate. Written by Harbor-Master from the signed records in ledger/.\n" \
-         "# Editing this file changes nothing: a benchmark is added on the hm screen, with /benchmarks add URL\n\n"
+         "# Editing this file changes nothing: a benchmark is added on the index's screen, by pasting its link\n\n"
 
 
 def missing(entry: dict) -> list[str]:

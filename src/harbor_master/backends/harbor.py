@@ -124,11 +124,11 @@ def with_solution(task_dir: Path, files: dict[str, str], scratch: Path) -> Path:
 
 MAX_KEPT_FILE = 5 * 1024 * 1024       # for the task's own output files under artifacts/, which can be huge.
                                       # The trajectory and the verifier's output are always kept whole
-SKIP = {"lock.json", "config.json"}   # Harbor's bookkeeping, repeated in result.json
 
 
 def settle(result: TrialResult, keep: bool, trials_dir: Path, label: str, relative_to: Path) -> TrialResult:
-    """Keep a run's files only when they are evidence, as one archive. Remove Harbor's working folder either way.
+    """Keep a run's files only when they are evidence, as one archive that unpacks to a whole Harbor trial folder:
+    agent/, verifier/, artifacts/, config.json, lock.json and the result. Remove Harbor's working folder either way.
 
     An agent trial is evidence, and so is any run that went wrong. A reference solution that passed or a
     no-op that failed is not: the ledger record says all there is to say.
@@ -142,8 +142,6 @@ def settle(result: TrialResult, keep: bool, trials_dir: Path, label: str, relati
         with tarfile.open(archive, "w:gz") as tar:
             for f in sorted(p for p in source.rglob("*") if p.is_file()):
                 rel = f.relative_to(source)
-                if f.name in SKIP:
-                    continue
                 if rel.parts[0] == "artifacts" and f.stat().st_size > MAX_KEPT_FILE:      # never the trajectory
                     omitted.append(f"{rel}  {f.stat().st_size} bytes")
                     continue

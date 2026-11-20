@@ -1,9 +1,8 @@
-"""What the user can type during a session: commands, plain text, and questions."""
+"""What a run can be told, by the boxes of its screen: the commands behind them, and the answers they show."""
 from . import handlers  # noqa: F401  (registers the commands)
-from .answers import context_for, explain, how_to_answer, review_briefing
-from .complete import complete, usage
-from .interpret import interpret, interpret_async
-from .registry import COMMANDS, Command, Intent, describe, execute, help_text, needs_confirmation, parse
+from .handlers import decide, waiting_reports
+from .answers import context_for, explain, how_to_answer, ready_to_type, review_briefing
+from .registry import COMMANDS, Command, execute, parse
 
-__all__ = ["COMMANDS", "Command", "Intent", "complete", "context_for", "describe", "execute", "explain", "help_text", "how_to_answer",
-           "interpret", "interpret_async", "needs_confirmation", "parse", "review_briefing", "usage"]
+__all__ = ["COMMANDS", "Command", "context_for", "execute", "explain", "decide", "how_to_answer", "waiting_reports", "ready_to_type",
+           "parse", "review_briefing"]

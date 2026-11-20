@@ -15,6 +15,7 @@ from pathlib import Path
 from ..backends import make_backend
 from ..core.config import LOCAL, Config
 from ..core.config import simulated as simulated_dir
+from ..core import identity as identity_mod
 from ..core.identity import Identity
 from ..ledger import REPORTS, Ledger, Shard, Sync, active, load_contributors, write_index
 from ..tasks import Task
@@ -30,7 +31,8 @@ class Session:
         self.ws, self.cfg, self.ident, self.no_input, self.command = workspace, cfg, ident, no_input, command
         self.only = set(only or [])      # when set, run only the tasks with these names
         self.until = until           # stop each task after this stage: "verify" or "probe". Empty runs them all
-        self.run_id = run_id or time.strftime("%Y%m%d-%H%M%S")
+        self.machine = identity_mod.machine()        # tells this person's machines apart: claims are held per machine
+        self.run_id = run_id or f"{time.strftime('%Y%m%d-%H%M%S')}-{self.machine[:4]}"     # two machines never share a record file
         self.run_dir = workspace / LOCAL / "runs" / self.run_id
         self.run_dir.mkdir(parents=True, exist_ok=True)
         # A simulated run keeps its records on this machine, marked, and never in the index's ledger.
@@ -39,7 +41,7 @@ class Session:
         self.ledger_dir = simulated_dir(workspace) if self.sandbox else workspace
         self.ledger = Ledger(self.ledger_dir, simulated=self.sandbox)
         self.protocol = cfg.protocol
-        self._file_protocol, self._config_changed, self._config_checked = self.protocol, False, time.time()
+        self._file_protocol, self._config_changed = self.protocol, False
         self.calls: Counter[str] = Counter()
         self._keeping: list = []            # accepted tasks on their way into the task store
         self.usage_by: dict[tuple[str, str, str], list] = {}        # (benchmark, stage, tier) -> [calls, tokens, cost]
@@ -55,7 +57,8 @@ class Session:
         self.benches = {b: BenchState(b, Path(info["path"]) if info.get("path") else Path(),
                                    info.get("released", ""), info.get("license", ""), entry=info.get("entry"))
                         for b, info in benchmarks.items()}
-        self.cells = [CellState(i + 1) for i in range(cfg.run.cells)]
+        self.cells = [CellState(i + 1, on_stage=self.explain) for i in range(cfg.run.cells)]
+        self.walk: list[tuple[str, str]] = []       # a simulated run: each stage reached so far, with what it does
         self.active_cells = cfg.run.cells
         self.queue: list[Task] = []
         self.recent: deque[tuple[float, str, str, str]] = deque(maxlen=200)
@@ -64,6 +67,7 @@ class Session:
         self.durations: dict[tuple[str, int], list[float]] = {}
         self.notes: dict[str, list[str]] = {}
         self.budget = cfg.run.budget_usd
+        self._budget_asked = 0.0            # the budget at which the person was last asked whether to raise it
         self.paused = self.quitting = self.finished = False
         self.leaving = False            # the user asked to leave the screen: the screen does it and clears this
         self.started = time.time()
@@ -117,6 +121,8 @@ class Session:
         if shard is None:
             shard = self._shards[benchmark] = Shard(self.ledger_dir, benchmark, self.ident, self.run_id, self.protocol)
         digest = data.pop("digest_override", None) or (task.digest if task else "")
+        if type == "claim":
+            data.setdefault("machine", self.machine)
         stage = data.get("stage") or {"difficulty": "difficulty", "cheap_solve": "difficulty", "probe": "probe"}.get(data.get("purpose", ""), "")
         if stage in self.assumed or (type in ("report", "repair") and self.assumed):
             data["assumed"] = True      # never evidence: no accept may rest on it
@@ -164,6 +170,13 @@ class Session:
     def log(self, text: str) -> None:
         with (self.run_dir / "session.log").open("a") as f:
             f.write(f"{time.strftime('%H:%M:%S')} {text}\n")
+
+    def explain(self, stage: str) -> None:
+        """A simulated run is a walk-through: the first time it reaches a stage, it says what the stage does."""
+        from ..interact.walk import STAGE as told
+        if self.simulate and stage in told and all(name != stage for name, _ in self.walk):
+            self.walk.append((stage, told[stage]))
+            self.note_recent("stage", stage, told[stage])
 
     def note_recent(self, kind: str, task_id: str, text: str) -> None:
         entry = (time.time(), kind, task_id, text)
@@ -227,6 +240,16 @@ class Session:
                 self.requests.remove(req)
             self.write_requests()
 
+    async def failed(self, task: str, what: str, error: str) -> bool:
+        """A trial failed for an infrastructure reason. Put it to the person: what ran, and why it failed.
+        True when they want it tried again. With nobody to ask, it is not: the failure is recorded as it is."""
+        if self.no_input:
+            return False
+        said = await self.ask("failure", f"A trial failed to run: {task}\n{what}.\n\nWhy: {error[:600]}\n\n"
+                              "This is a failure of the machinery, not of the agent, so it counts for nothing either way.", task, ["retry", "discard"])
+        self.note_recent("error", task, f"{what} failed to run: " + ("tried again" if said == "retry" else "discarded"))
+        return said == "retry"
+
     def report_ready(self, task: Task) -> None:
         """A report is written. If this user may sign verdicts, tell them, without blocking anything."""
         mine = any(e["type"] == "verdict" and e["runner"] == self.ident.github and e["digest"] == task.digest
@@ -238,10 +261,9 @@ class Session:
     def sign_verdict(self, task: Task, value: str, reason: str, digest: str | None = None) -> dict:
         event = self.record(task.benchmark, "verdict", task, value=value, reason=reason, reason_code=value,
                             reviewer=self.ident.github, tier="human", digest_override=digest)
-        if task in self.ready and value != "replaced":
+        if task in self.ready:
             self.ready.remove(task)
         write_index(self.ledger_dir, self.sandbox)      # the accepted list follows every verdict
-        self.requests[:] = [r for r in self.requests if not (r.kind == "replace" and r.target == task.task_id)]
         self._verdict_request()
         if value == "accept" and not self.sandbox:
             self.keep(task, digest or task.digest)
@@ -257,6 +279,8 @@ class Session:
                 ok, how = store.put(self.ws, self.cfg, task.benchmark, task.name, digest, task.path)
             except (store.StoreError, OSError) as err:
                 ok, how = False, f"not kept: {str(err)[:200]}"
+            if not ok:          # hm sync tries again
+                store.remember(self.ws, task.benchmark, task.name, digest)
             self.note_recent("checked" if ok else "stopped", task.task_id, f"accepted version {how}")
 
         try:
@@ -269,13 +293,6 @@ class Session:
         pending, self._keeping = self._keeping, []
         for job in pending:
             await job
-
-    def ask_replacement(self, task: Task, text: str) -> None:
-        """The benchmark is full. Ask which accepted task this one replaces, without blocking anything."""
-        self.requests[:] = [r for r in self.requests if not (r.kind == "replace" and r.target == task.task_id)]
-        self._request_ids += 1
-        self.requests.append(Request(self._request_ids, "replace", text, task.task_id))
-        self.write_requests()
 
     def _verdict_request(self) -> None:
         """One standing request that counts the reports waiting, kept up to date."""
@@ -399,10 +416,10 @@ class Session:
 
     def _check_config(self) -> None:
         """The settings on disk must not change during a run. This run keeps the protocol it started
-        with whatever happens to the file, so an edit cannot reach its results. It is reported once."""
-        if self._config_changed or time.time() - self._config_checked < 5:
+        with whatever happens to the file, so an edit cannot reach its results. It is looked at when a
+        working cell starts a task, not on a timer, and a change is reported once."""
+        if self._config_changed:
             return
-        self._config_checked = time.time()
         try:
             from ..core import config as config_mod
             on_disk = config_mod.load(self.ws).protocol
@@ -414,21 +431,28 @@ class Session:
                              f"{self.protocol}. The next run is refused unless the owner locks the new settings.")
 
     def _next_task(self, cell: CellState) -> Task | None:
-        self._check_config()
+        if self.spent >= 0.9 * self.budget and not self.paused:
+            self._budget_reached()
         if self.paused or cell.n > self.active_cells or self.spent >= self.budget:
-            if self.spent >= self.budget and not self.paused:
-                self._budget_reached()
             return None
         for i, task in enumerate(self.queue):
             if not self.benches[task.benchmark].paused:
+                self._check_config()        # once, as this cell starts its task
                 return self.queue.pop(i)
         return None
 
     def _budget_reached(self) -> None:
-        if any(r.kind == "budget" for r in self.requests):
+        """The budget is nearly spent, or spent. The person is asked once at each: raise it, or not."""
+        full = self.spent >= self.budget
+        if self.spent < 0.9 * self.budget:
             return
-        self.paused = True
-        text = f"The ${self.budget:.0f} budget is spent. Raise it with /budget N, or /quit."
+        if full:
+            self.paused = True
+        if any(r.kind == "budget" for r in self.requests) or (not full and (self.no_input or self._budget_asked == self.budget)):
+            return
+        self._budget_asked = self.budget
+        text = (f"The ${self.budget:.0f} budget is spent.\nThe run takes no more tasks. What is running finishes." if full else
+                f"${self.spent:.2f} of the ${self.budget:.0f} budget is spent.\nWhen it is gone, the run takes no more tasks.")
         self._request_ids += 1
         self.requests.append(Request(self._request_ids, "budget", text))
         self.write_requests()

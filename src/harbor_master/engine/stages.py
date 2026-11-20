@@ -70,6 +70,8 @@ async def process(s: Session, cell: CellState, task: Task) -> None:
 
 def enter(cell: CellState, stage: int, detail: str, attention: bool = False) -> float:
     cell.stage, cell.detail, cell.attention = stage, detail, attention
+    if cell.on_stage is not None:
+        cell.on_stage(STAGES[stage])
     STAGE.set(STAGES[stage])        # model calls from here on are counted under this stage
     return time.time()
 
@@ -85,11 +87,14 @@ async def trial(s: Session, task: Task, purpose: str, agent: str, model: str, in
     The slot is keyed by the pinned version. The event also records the version that
     actually ran, as the backend read it from the agent, so a drifted build shows up.
     """
-    prior = s.ledger.trial(task.digest, agent, version, model, s.protocol, index, effort)
+    prior = s.ledger.trial(task.digest, agent, version, model, index, effort)
     if prior is not None:
         return prior
     result = await s.container(run())
     s.trial_cost += result.cost
+    while result.error and await s.failed(task.name, f"{purpose} trial {index + 1}" + (f" of {agent} with {model}" if model else ""), result.error):
+        result = await s.container(run())       # the person chose to try it again
+        s.trial_cost += result.cost
     return s.record(task.benchmark, "trial", task, purpose=purpose, agent=agent, agent_version=version,
                     agent_version_ran=result.agent_version, model=model, reasoning_effort=effort, trial_index=index,
                     passed=result.passed, reward=result.reward, tokens_in=result.tokens_in,
@@ -254,7 +259,7 @@ async def stage_difficulty(s: Session, cell: CellState, task: Task, rounds: int)
     """Run once per task. A task repaired after it keeps the result it had: the frontier trials are never
     run a second time, and the record that carries the result forward names the digest it was measured on."""
     d = s.cfg.difficulty
-    n_total = len(d.suite) * d.trials_per_config
+    n_total = len(d.suite) * s.cfg.eval.trials
     prior = s.ledger.decision(task.digest, "difficulty", "pass_rate", s.protocol)
     if prior is None and (earlier := before_repair(s, task)) is not None and earlier["outcome"] == "pass":
         prior = s.record(task.benchmark, "decision", task, stage="difficulty", gate="pass_rate", tier="code",
@@ -264,7 +269,7 @@ async def stage_difficulty(s: Session, cell: CellState, task: Task, rounds: int)
         carried = ", measured before the repair" if prior.get("carried_from") else ""
         s.board(task)["difficulty"] = prior["value"] + carried
         return ("ok", "") if prior["outcome"] == "pass" else ("drop", prior.get("reason") or "too_easy")
-    t0 = enter(cell, 5, "the worker model tries first" if d.cheap_solve else f"round 1 of {d.trials_per_config}")
+    t0 = enter(cell, 5, "the worker model tries first" if d.cheap_solve else f"round 1 of {s.cfg.eval.trials}")
     solved = await cheap_solve(s, cell, task)
     if solved is not None:
         n, model = len(solved), solved[0]["model"]
@@ -277,8 +282,8 @@ async def stage_difficulty(s: Session, cell: CellState, task: Task, rounds: int)
         return "drop", "solved_by_worker"
     passes = fails = 0
     result = None
-    for r in range(d.trials_per_config):
-        cell.detail = f"round {r + 1} of {d.trials_per_config}, {passes} pass{'es' if passes != 1 else ''} so far"
+    for r in range(s.cfg.eval.trials):
+        cell.detail = f"round {r + 1} of {s.cfg.eval.trials}, {passes} pass{'es' if passes != 1 else ''} so far"
         got = await asyncio.gather(*(
             trial(s, task, "difficulty", entry.agent, entry.model, r,
                   lambda entry=entry, r=r: s.backend.run_trial(task, entry, r),

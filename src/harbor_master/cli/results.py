@@ -1,319 +1,58 @@
-"""Reading the ledger: status, credits, the leaderboard, verification."""
+"""Sharing an index and locking it: hm sync, and hm lock."""
 from __future__ import annotations
 
-import time
 from pathlib import Path
 from typing import Optional
 
 import typer
 
-from rich.table import Table
-
 from .. import ledger as ledger_mod
-from .. import templates
-from .. import tasks as tasks_mod
 from ..core import config as config_mod
 from ..tui import theme
-from .common import (Simulated, Workspace, app, console, fail, index_app, is_owner, ledger_app, mention_simulated, need_identity,
-                     need_workspace, records)
-
-
-def _people(ledger_dir: Path) -> dict[str, str]:
-    return {c["github"]: f"{c.get('name', '?')} ({c.get('affiliation', '?')}, @{c['github']})"
-            for c in ledger_mod.load_contributors(ledger_dir) if c.get("github")}
-
-
-@app.command()
-def status(simulated: bool = Simulated, workspace: Optional[Path] = Workspace):
-    """Where every benchmark stands, from the ledger."""
-    ws = need_workspace(workspace)
-    where = records(ws, simulated)
-    led = ledger_mod.Ledger(where, simulated=simulated)
-    states = ledger_mod.fold(led.events)
-    names = ["in_progress", "not_selected", "dropped", "report_ready", "accepted", "rejected", "replaced", "contested"]
-    tb = Table(header_style=theme.MU, border_style=theme.BORDER)
-    tb.add_column("benchmark")
-    for n in names:
-        tb.add_column(n.replace("_", " "), justify="right")
-    tb.add_column("cost", justify="right")
-    registry = tasks_mod.read_registry(ws)
-    for b in sorted(set(registry) | {s.benchmark for s in states.values()}):
-        mine = [s for s in states.values() if s.benchmark == b]
-        tb.add_row(b, *[str(sum(1 for s in mine if s.status == n)) for n in names],
-                   f"${sum(float(e.get('cost', 0) or 0) for e in led.events if e['benchmark'] == b):.2f}")
-    console.print(tb)
-    console.print(f"[{theme.MU}]{len(led.events)} events in {where / ledger_mod.SHARDS}[/]")
-    mention_simulated(ws, simulated)
-
-
-@app.command()
-def credits(simulated: bool = Simulated, workspace: Optional[Path] = Workspace):
-    """Contributions per person, computed from the ledger."""
-    ws = need_workspace(workspace)
-    ledger_dir = records(ws, simulated)
-    people = _people(ws)
-    tb = Table(header_style=theme.MU, border_style=theme.BORDER)
-    tb.add_column("contributor")
-    for col in ("trials", "tokens", "container hours", "cost", "submissions", "repairs", "briefs", "verdicts"):
-        tb.add_column(col, justify="right")
-    for handle, c in sorted(ledger_mod.credits(ledger_mod.Ledger(ledger_dir, simulated=simulated).events).items()):
-        tb.add_row(people.get(handle, f"@{handle}"), f"{int(c['trials'])}", f"{int(c['tokens']):,}",
-                   f"{c['container_seconds'] / 3600:.1f}", f"${c['cost']:.2f}", f"{int(c['submissions'])}",
-                   f"{int(c['repairs'])}", f"{int(c['briefs'])}", f"{int(c['verdicts'])}")
-    console.print(tb)
-
-
-@app.command()
-def leaderboard(simulated: bool = Simulated, workspace: Optional[Path] = Workspace):
-    """How each agent configuration does on the accepted tasks, computed from the ledger."""
-    from ..core.config import roster
-    ws = need_workspace(workspace)
-    cfg = config_mod.load(ws)
-    led = ledger_mod.Ledger(records(ws, simulated), simulated=simulated)
-    rows, n = ledger_mod.leaderboard(led.events, [c.model_dump() for c in roster(ws)],
-                                     [(e.agent, e.model) for e in cfg.difficulty.suite])
-    if not n:
-        console.print("No task has been accepted yet, so there is nothing to rank. Accept tasks with: hm review")
-        mention_simulated(ws, simulated)
-        return
-    tb = Table(header_style=theme.MU, border_style=theme.BORDER)
-    for col, j in (("configuration", "left"), ("agent", "left"), ("effort", "left"), ("score", "right"),
-                   ("tasks", "right"), ("trials", "right"), ("", "left")):
-        tb.add_column(col, justify=j)
-    for r in rows:
-        note = "tasks were selected against it" if r["selected_against"] else ""
-        if not r["complete"] and r["tasks"]:
-            note = (note + ", " if note else "") + "incomplete: not ranked"
-        score = f"{100 * r['score']:.1f}%" if r["score"] is not None else "-"
-        tb.add_row(r["name"] or r["model"], f"{r['agent']} {r['version']}".strip(), r["effort"], score,
-                   f"{r['tasks']} of {n}", str(r["trials"]), note)
-    console.print(tb)
-    console.print(f"[{theme.MU}]Over the {n} accepted task{'s' if n != 1 else ''} in {ledger_mod.INDEX_FILE}. The score is the pass "
-                  "rate on each task, averaged over tasks. Trials that failed for an infrastructure reason are left out.[/]")
-
-
-@app.command()
-def stats(simulated: bool = Simulated,
-          out: Optional[Path] = typer.Option(None, "--out", help="Where to write. Default: .hm/stats in this index, which git ignores."),
-          no_pull: bool = typer.Option(False, "--no-pull", help="Use the ledger as it is on this machine, without pulling what others pushed."),
-          workspace: Optional[Path] = Workspace):
-    """Write the statistics of this curation, over everyone's records: stats.md and a CSV per table. They stay on this machine."""
-    from .. import __version__
-    ws = need_workspace(workspace)
-    cfg = config_mod.load(ws)
-    sync = ledger_mod.Sync(ws)
-    pulled = "no: these are one machine's simulated runs" if simulated else "no: this index is not shared" if not sync.enabled \
-        else "no: --no-pull" if no_pull else "yes"
-    if pulled == "yes":         # the tables are over everyone's records, so bring them in first
-        try:
-            sync.pull()
-        except ledger_mod.SyncError as err:
-            pulled = f"failed, so this is the ledger as it was here: {str(err)[:160]}"
-            console.print(f"[{theme.AM}]Could not pull what others pushed.[/] The tables are made from the ledger as it is on this machine.")
-    where = records(ws, simulated)
-    events = ledger_mod.Ledger(where, simulated=simulated).events
-    problems = ledger_mod.verify(where, max_per_benchmark=cfg.index.max_per_benchmark, simulated=simulated, index_dir=ws)
-    at = {"commit": "", "remote": "", "unpushed": "", "committed": "no"} if simulated else sync.where()
-    covered = at["commit"] and at["committed"] == "yes"
-    source = [
-        ["made", time.strftime("%Y-%m-%d %H:%M")],
-        ["index", cfg.about.title or cfg.about.name or ws.name],
-        ["records", len(events)],
-        ["people with records", len({e["runner"] for e in events})],
-        ["protocols", ", ".join(sorted({e["protocol"] for e in events})) or "none"],
-        ["ledger checksum", ledger_mod.digest(where)],
-        ["ledger check", "sound" if not problems else f"{len(problems)} problems: see hm ledger verify"],
-        ["commit", at["commit"] if covered else "none holds these records: " + ("they are simulated" if simulated else
-                                                                              "the index is not shared" if not at["remote"] else
-                                                                              "some records here are not committed")],
-        ["shared at", at["remote"] or "nowhere"],
-        ["pulled first", pulled],
-        ["commits not pushed", at["unpushed"] or "0"],
-        ["made again with", f"git checkout {at['commit'][:12]} && hm stats --no-pull" if covered else "hm stats" + (" --simulated" if simulated else "")],
-        ["Harbor-Master", __version__],
-    ]
-    notes = []
-    if simulated:
-        notes.append("**SIMULATED.** These are the records of simulated runs on one machine. Every model answer, trial and cost "
-                     "here is made up. None of it is in the index.")
-    notes.append("Every figure is computed from the ledger, over the records of everyone who curated. Model calls, tokens and cost by "
-                 "stage come from the `usage` records that each run writes. Runs through Harbor are counted apart, from their own "
-                 "records. A decision by a person is counted when it left a record: a brief, an approval, a verdict, an adapter "
-                 "given up or fixed, a lock.")
-    if at["unpushed"] not in ("", "0"):
-        notes.append(f"**{at['unpushed']} commits here are not pushed yet.** The tables include records that others do not have until: hm sync")
-    found = ledger_mod.stats.tables(events)
-    folder = out or config_mod.local(ws) / "stats" / ("simulated" if simulated else "")
-    path = ledger_mod.stats.write(found, folder, f"Curation statistics: {cfg.about.title or cfg.about.name or ws.name}", notes, source)
-    tb = Table(header_style=theme.MU, border_style=theme.BORDER)
-    tb.add_column("figure")
-    tb.add_column("value", justify="right")
-    for name, value in found["summary"][1]:
-        tb.add_row(name, f"{value:,}" if isinstance(value, int) else f"{value:,.2f}" if isinstance(value, float) else str(value))
-    console.print(tb)
-    console.print(f"From {len(events):,} records of {len({e['runner'] for e in events})} people"
-                  + (f", at commit {at['commit'][:12]}" if covered else "") + f". Pulled first: {pulled}.", highlight=False)
-    console.print(f"Wrote the report, {path}, and {len(found) + 1} tables as CSV in {path.parent / ledger_mod.stats.DATA}.", highlight=False)
-    console.print(f"[{theme.MU}]They are on this machine only: git ignores that folder, and nothing uploads it.[/]")
-    mention_simulated(ws, simulated)
-
-
-@app.command(name="roster")
-def roster_cmd(what: str = typer.Argument("", help="presets: the configurations that have a short name. agents: every agent Harbor has."),
-               workspace: Optional[Path] = Workspace):
-    """The agent configurations to benchmark on the index, from its roster.toml. Also the presets a roster may name."""
-    from ..core import keys
-    from ..core.config import RosterEntry, presets, roster
-    if what == "agents":
-        listed = keys.harbor_agents()
-        if not listed:
-            fail("Harbor could not be read. Install Harbor-Master again: uv tool install --editable .")
-        tb = Table(header_style=theme.MU, border_style=theme.BORDER)
-        for col in ("agent", "reads its key from"):
-            tb.add_column(col)
-        for name, names in listed.items():
-            if name not in ("oracle", "nop"):
-                tb.add_row(name, " or ".join(keys.needs(name)) or f"[{theme.MU}]Harbor names none: say which as `key` in the entry[/]")
-        console.print(tb)
-        console.print(f"[{theme.MU}]{len(listed) - 2} agents, from the installed Harbor. A roster entry may use any of them: "
-                      "give agent, model and name. The ones with a short name: /roster presets[/]")
-        return
-    if what not in ("", "presets"):
-        fail("Use /roster, /roster presets or /roster agents.")
-    entries = [RosterEntry.model_validate({"use": n}) for n in presets()] if what else roster(need_workspace(workspace))
-    tb = Table(header_style=theme.MU, border_style=theme.BORDER)
-    for col in ("name", "agent", "version", "model", "effort", "needs", "key found"):
-        tb.add_column(col)
-    for c in entries:
-        found = f"[{theme.TE}]yes[/]" if keys.found(c.key, c.agent, c.model) else f"[{theme.RD}]no[/]"
-        agent = c.agent if keys.known_agent(c.agent) else f"[{theme.RD}]{c.agent} (not in Harbor)[/]"
-        tb.add_row(c.name, agent, c.version or f"[{theme.MU}]newest[/]", c.model, c.reasoning_effort,
-                   c.key or " or ".join(keys.needs(c.agent, c.model)), found)
-    console.print(tb)
-    if what:
-        console.print(f"[{theme.MU}]A roster takes one in a line: use = \"NAME\" under \\[\\[config]] in roster.toml. A field written beside "
-                      "it, such as version, replaces the preset's. Every agent Harbor has: /roster agents[/]")
-    else:
-        console.print(f"[{theme.MU}]Run one with: hm eval --config NAME. What is still to run: hm todo. "
-                      "Configurations with a short name: /roster presets[/]")
-
-
-@app.command()
-def todo(simulated: bool = Simulated, workspace: Optional[Path] = Workspace):
-    """What is still to run: each roster configuration on each accepted task."""
-    from ..core.config import roster
-    ws = need_workspace(workspace)
-    cfg = config_mod.load(ws)
-    led = ledger_mod.Ledger(records(ws, simulated), simulated=simulated)
-    index = ledger_mod.index_entries(led.events)
-    if not index:
-        console.print("No task has been accepted yet, so nothing is waiting to be benchmarked.")
-        return
-    n = cfg.difficulty.trials_per_config
-    tb = Table(header_style=theme.MU, border_style=theme.BORDER)
-    for col, j in (("configuration", "left"), ("trials done", "right"), ("trials to run", "right"), ("tasks untouched", "right")):
-        tb.add_column(col, justify=j)
-    for c in roster(ws):
-        done = [sum(1 for i in range(n) if led.trial(t["digest"], c.agent, c.version, c.model, cfg.protocol, i,
-                                                     c.reasoning_effort)) for t in index]
-        tb.add_row(c.name, str(sum(done)), str(len(index) * n - sum(done)), str(sum(1 for d in done if d == 0)))
-    console.print(tb)
-    console.print(f"[{theme.MU}]{len(index)} accepted task{'s' if len(index) != 1 else ''}, {n} trials each. Run one with: hm eval --config NAME[/]")
-
-
-@index_app.command("build")
-def index_build(publish: bool = typer.Option(False, help="Owner only: also push index.toml to the shared index."),
-                workspace: Optional[Path] = Workspace):
-    """Write index.toml, the list of accepted tasks, from the signed verdicts."""
-    ws, ident = need_workspace(workspace), need_identity()
-    ledger_dir = ws
-    path = ledger_mod.write_index(ledger_dir)
-    n = len(ledger_mod.index_entries(ledger_mod.Ledger(ledger_dir).events))
-    console.print(f"{path}: {n} accepted task{'s' if n != 1 else ''}.")
-    if publish:
-        if not is_owner(ws, ident):
-            fail("Only the owner publishes index.toml, so that one person writes that file.")
-        sync = ledger_mod.Sync(ledger_dir, ident.name, ident.github)
-        if not sync.enabled:
-            fail("This index is not shared. Connect it with: hm index connect URL")
-        sync.publish_index(f"index: {n} accepted tasks")
-        console.print(f"[{theme.TE}]Published.[/]")
-
-
-@ledger_app.command("verify")
-def ledger_verify(simulated: bool = Simulated, workspace: Optional[Path] = Workspace):
-    """Check every shard: schema, hash chain, signatures, repeats, and what accepted tasks must have."""
-    ws = need_workspace(workspace)
-    ledger_dir = records(ws, simulated)
-    problems = ledger_mod.verify(ledger_dir, config_mod.load(ws).index.max_per_benchmark, simulated=simulated, index_dir=ws)
-    n = len(ledger_mod.Ledger(ledger_dir, simulated=simulated).events)
-    if problems:
-        for p in problems[:50]:
-            console.print(f"[{theme.RD}]x[/] {p}")
-        fail(f"{len(problems)} problem{'s' if len(problems) != 1 else ''} in {n} events.")
-    console.print(f"[{theme.TE}]The ledger is sound:[/] {n} events in {len(ledger_mod.shard_paths(ledger_dir))} shards.")
+from .common import Workspace, app, console, fail, is_owner, need_identity, need_workspace
 
 
 @app.command()
 def sync(workspace: Optional[Path] = Workspace):
-    """Pull the shared index and push this workspace's new records."""
-    ws = need_workspace(workspace)
+    """Bring in what others added to this index, and share your new records, and any accepted task that did not reach the
+    task store. Its owner's edits to about.toml and roster.toml are shared too."""
+    ws = need_workspace(workspace, say=True)
     ident = need_identity()
-    cfg = config_mod.load(ws)
     ledger_dir = ws
     s = ledger_mod.Sync(ledger_dir, ident.name, ident.github)
     if not s.enabled:
-        fail("This index is not shared yet. Connect it with: hm index connect URL")
+        fail("This index is not shared yet, so there is nothing to pull or push: its records are only in this folder. "
+             "Its owner shares it from inside its folder: git remote add origin URL, then hm sync.")
     try:
         s.pull()
-        problems = ledger_mod.verify(ledger_dir, max_per_benchmark=cfg.index.max_per_benchmark)
+        problems = ledger_mod.verify(ledger_dir)
         if problems:
             for p in problems[:20]:
                 console.print(f"[{theme.RD}]x[/] {p}")
             fail(f"Not pushed: the ledger has {len(problems)} problem{'s' if len(problems) != 1 else ''}.")
-        if is_owner(ws, ident):         # the description is the owner's to change at any time
-            s.define("describe the index", only=("about.toml", "README.md", ".gitignore"))
+        if is_owner(ws, ident):         # the description and the roster are the owner's to change at any time
+            s.define("describe the index", only=("about.toml", "README.md", ".gitignore", "roster.toml"))
         s.publish(f"sync by @{ident.github}")
     except ledger_mod.SyncError as err:
         fail(str(err))
+    from ..tasks import store
+    for line in store.retry(ws, config_mod.load(ws)):       # accepted tasks that did not reach the store when they were accepted
+        console.print(line, highlight=False)
     console.print(f"[{theme.TE}]Synced.[/] {len(ledger_mod.Ledger(ledger_dir).events)} events in the shared ledger.")
 
 
-protocol_app = typer.Typer(invoke_without_command=True, help="The locked settings a curation runs under.")
-app.add_typer(protocol_app, name="protocol")
+@app.command("lock")
+def lock(bump: str = typer.Argument("", metavar="[patch | minor]", help="Give this lock a new version: patch (0.0.1 to 0.0.2) or "
+                                    "minor (0.1.0 to 0.2.0). Default: the version stays."),
+         note: str = typer.Option("", help="Why the protocol is being set or changed."), workspace: Optional[Path] = Workspace):
+    """Owner only: lock this index's settings and skills as its folder has them now. Every run must then use them.
+    The roster is not locked: its owner edits roster.toml at any time and shares it with hm sync."""
+    lock_protocol(need_workspace(workspace), note, bump)
 
 
-@protocol_app.callback()
-def protocol_show(ctx: typer.Context, workspace: Optional[Path] = Workspace):
-    """Show this workspace's protocol, the locked one, and any setting that differs."""
-    if ctx.invoked_subcommand:
-        return
-    ws = need_workspace(workspace)
-    cfg = config_mod.load(ws)
-    lock = ledger_mod.protocol.current(ledger_mod.Ledger(ws).events)
-    console.print(f"This workspace's settings hash to protocol [bold]{cfg.protocol}[/].")
-    if lock is None:
-        console.print(f"[{theme.AM}]No protocol is locked in this ledger.[/] The owner locks one with: hm protocol lock")
-        return
-    when = time.strftime("%Y-%m-%d %H:%M", time.localtime(lock["time"]))
-    console.print(f"Locked: [bold]v{ledger_mod.protocol.version(lock)}[/] ({lock['protocol']}), by @{lock['runner']} on {when}." + (f" {lock['note']}" if lock.get("note") else ""))
-    diff = ledger_mod.protocol.differences(lock.get("settings", {}), cfg.protocol_settings())
-    diff += [f"{name}: not the locked copy" for name in templates.changed(lock, ws)]
-    if diff:
-        console.print(f"[{theme.RD}]They differ, so runs are refused here:[/]")
-        for line in diff:
-            console.print(f"  {line}")
-    else:
-        console.print(f"[{theme.TE}]They match. Runs are allowed.[/]")
-
-
-@protocol_app.command("lock")
-def protocol_lock(note: str = typer.Option("", help="Why the protocol is being set or changed."),
-                  bump: str = typer.Option("", help="Give this lock a new version: patch (0.0.1 to 0.0.2) or minor (0.1.0 to 0.2.0). "
-                                                    "Default: the version stays."),
-                  workspace: Optional[Path] = Workspace):
-    """Owner only: lock this index's settings, skills and roster as they are here. The version stays unless --bump is given."""
-    ws, ident = need_workspace(workspace), need_identity()
+def lock_protocol(ws: Path, note: str = "", bump: str = "") -> None:
+    """The owner's lock: the settings and the skills, signed. Skills the index has no copy of are copied in from the templates."""
+    ident = need_identity()
     cfg = config_mod.load(ws)
     try:
         ledger_mod.protocol.bumped(ledger_mod.protocol.START, bump)
@@ -325,12 +64,20 @@ def protocol_lock(note: str = typer.Option("", help="Why the protocol is being s
     if sync.enabled:
         sync.pull()
     from .. import skills
-    absent, wrong = skills.missing(ws / "skills"), skills.problems(ws / "skills")
-    if absent:
-        fail(f"Not locked: this index has no copy of {len(absent)} of its skills, so what agents are told would depend on the "
-             "tool that is installed. Copy them in first: hm skills adopt")
+    absent = skills.missing(ws / "skills")
+    if absent:          # what agents are told must be the index's own, not whatever the installed tool has
+        skills.adopt(ws / "skills", absent)
+        console.print(f"Copied {len(absent)} skill{'s' if len(absent) != 1 else ''} the index had no copy of from the templates: "
+                      + ", ".join(absent), highlight=False)
+    wrong = skills.problems(ws / "skills")
     if wrong:
-        fail("Not locked: the code cannot use some of this index's skills as they are. See: hm skills")
+        for p in wrong[:12]:
+            console.print(f"  {p}")
+        fail("Not locked: the code cannot use these skills as they are.")
+    from ..tasks import store
+    if (cfg.about.tasks or "").strip() and store.not_ready(cfg):      # a real run needs the store, so it is made with the lock
+        from .store import make_store
+        make_store(cfg)
     events = ledger_mod.Ledger(ws).events
     people = [e for e in events if e["type"] == "contributors"]
     if not people or max(people, key=lambda e: e["time"]).get("value") != ledger_mod.list_digest(ws):
@@ -340,9 +87,9 @@ def protocol_lock(note: str = typer.Option("", help="Why the protocol is being s
             sync.publish("sign the contributor list")
         console.print("Signed the contributor list as it is here.")
     lock = ledger_mod.protocol.current(events)
-    registry, requires = templates.digests(ws), cfg.requires.harbor_master
-    if not bump and lock is not None and (lock["protocol"], lock.get("registry"), lock.get("requires", requires)) == (cfg.protocol, registry, requires):
-        console.print(f"Protocol v{ledger_mod.protocol.version(lock)} ({cfg.protocol}) and the roster are already the locked ones.")
+    requires = cfg.requires.harbor_master
+    if not bump and lock is not None and (lock["protocol"], lock.get("requires", requires)) == (cfg.protocol, requires) and not absent:
+        console.print(f"Protocol v{ledger_mod.protocol.version(lock)} ({cfg.protocol}) is already the locked one.")
         return
     made = ledger_mod.protocol.write(ws, ident, cfg, note, bump=bump)
     sync.define(f"lock protocol {cfg.protocol}")        # the files travel with the lock that covers them
@@ -356,4 +103,4 @@ def protocol_lock(note: str = typer.Option("", help="Why the protocol is being s
            "run again under the new one." if lock else "")))
     if lock is not None and not bump:
         console.print(f"[{theme.MU}]The version stays v{made['version']}. To give this change a version of its own: "
-                      + ("/lock patch" if same else "/lock minor") + "[/]")
+                      + ("hm lock patch" if same else "hm lock minor") + "[/]")

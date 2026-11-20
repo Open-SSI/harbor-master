@@ -1,4 +1,17 @@
+import random
+
 from harbor_master.curation import difficulty, ranking
+
+
+def known_order(n):
+    """`n` items whose true order is known, a comparison that knows it, and a count of what was asked."""
+    truth, counts = {f"t{i}": i for i in range(n)}, {"score": 0, "compare": 0}
+
+    async def compare(a, b):
+        counts["compare"] += 1
+        return 0.95 if truth[a] > truth[b] else 0.05
+
+    return truth, compare, counts
 
 
 def test_stop_rule_matches_the_design():
@@ -23,34 +36,21 @@ def test_select_goes_round_robin_over_sub_areas():
 
 
 async def test_pairwise_ranking_recovers_a_known_order():
-    truth = {f"t{i}": i for i in range(30)}
-
-    async def compare(a, b):
-        return 0.95 if truth[a] > truth[b] else 0.05
-
+    truth, compare, _ = known_order(30)
     ranked = [x for x, _ in await ranking.rank(list(truth), compare, per_item=12)]
-    top, bottom = set(ranked[:10]), set(ranked[-10:])
-    assert len(top & {f"t{i}" for i in range(20, 30)}) >= 8
-    assert len(bottom & {f"t{i}" for i in range(10)}) >= 8
+    assert len(set(ranked[:10]) & {f"t{i}" for i in range(20, 30)}) >= 8
+    assert len(set(ranked[-10:]) & {f"t{i}" for i in range(10)}) >= 8
 
 
 async def test_two_step_ranking_finds_the_top_with_far_fewer_comparisons():
-    import random
-    truth = {f"t{i}": i for i in range(400)}
-    rng = random.Random(1)
-    counts = {"score": 0, "compare": 0}
+    (truth, compare, counts), rng = known_order(400), random.Random(1)
 
     async def score(x):
         counts["score"] += 1
         return truth[x] / 100 + rng.uniform(-0.4, 0.4)           # a noisy first look
 
-    async def compare(a, b):
-        counts["compare"] += 1
-        return 0.95 if truth[a] > truth[b] else 0.05
-
     ranked = [x for x, _ in await ranking.rank_two_step(list(truth), score, compare, limit=24)]
-    best = {f"t{i}" for i in range(376, 400)}
-    assert len(set(ranked[:24]) & best) >= 21 and len(ranked) == 400       # the real top 24, give or take the noise
+    assert len(set(ranked[:24]) & {f"t{i}" for i in range(376, 400)}) >= 21 and len(ranked) == 400     # the real top 24, give or take the noise
     assert counts["score"] == 400 and counts["compare"] <= 72 * 12 / 2     # pairs only among the best 72
     counts["compare"] = 0
     await ranking.rank(list(truth), compare)
@@ -58,13 +58,10 @@ async def test_two_step_ranking_finds_the_top_with_far_fewer_comparisons():
 
 
 async def test_ranking_falls_back_to_pairs_when_the_backend_cannot_score():
-    truth = {f"t{i}": i for i in range(20)}
+    truth, compare, _ = known_order(20)
 
     async def no_score(x):
         return None
-
-    async def compare(a, b):
-        return 0.95 if truth[a] > truth[b] else 0.05
 
     ranked = [x for x, _ in await ranking.rank_two_step(list(truth), no_score, compare, limit=5)]
     assert len(set(ranked[:5]) & {"t19", "t18", "t17", "t16", "t15"}) >= 4
