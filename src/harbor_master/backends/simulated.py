@@ -118,11 +118,11 @@ class SimulatedBackend(Backend):
         await self._step()
         return {"adapter": "built", "cost": 0.80, "tokens": 60_000}
 
-    async def write_mutants(self, task: Task, n: int = 8) -> dict:
-        self._spend("worker", 0.30, 22_000)
+    async def write_mutants(self, task: Task, n: int = 3) -> dict:
+        self._spend("worker", 0.15, 12_000)
         await self._step()
-        return {"mutants": [{"id": f"m{i}", "kind": "wrong" if i < n // 2 else "equivalent"} for i in range(n)],
-                "cost": 0.30, "tokens": 22_000}
+        return {"mutants": [{"id": f"m{i}", "kind": "wrong" if i < n - 1 else "equivalent"} for i in range(n)],
+                "cost": 0.15, "tokens": 12_000}
 
     async def covers(self, task: Task, first: Decision | None = None) -> Decision:
         value = "unstated" if latent(task)["unstated"] else "covered"

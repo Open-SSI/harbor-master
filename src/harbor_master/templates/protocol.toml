@@ -47,6 +47,7 @@ exclude_formats = ["multiple_choice", "question_answering", "short_answer"]
 allow_llm_judge_verifier = false
 max_verifier_seconds = 300      # CPU only, no paid API. A verifier that takes longer fails, and its task is dropped
 max_build_seconds = 300         # building a task's environment. One that takes longer fails, and its task is dropped
+max_verify_minutes = 30.0       # the reference solution's run in verify. One that takes longer drops its task
 max_reported_pass_rate = 0.4    # an agent reads the benchmark's own published results. A task that a model already
                                 # solves more often than this is dropped. A task with no reported result passes. 1.0 turns this off
 

@@ -173,9 +173,10 @@ async def stage_verify(s: Session, cell: CellState, task: Task, rounds: int):
         error = next(e["error"] for e in (oracle, noop) if e.get("error"))
         from .prepare import SLOW, limits_of, slow_build, unpullable
         if SLOW.search(error):          # over the protocol's limit on building or verifying: dropped, not repaired
-            reason = "verifier_too_slow" if "Verifier" in error else "environment_too_slow"
+            reason = ("verifier_too_slow" if "Verifier" in error else "solution_too_slow" if "Agent" in error else "environment_too_slow")
             board["why"] = slow_build(error, limits_of(s.cfg))
-            s.record(task.benchmark, "decision", task, stage="verify", gate="build_time" if reason == "environment_too_slow" else "verifier_time",
+            s.record(task.benchmark, "decision", task, stage="verify",
+                     gate={"environment_too_slow": "build_time", "solution_too_slow": "solution_time"}.get(reason, "verifier_time"),
                      tier="code", value=error[:120], outcome="drop", reason=reason)
             return "drop", reason
         board["why"] = (unpullable(error, task.path) or "a run failed for an infrastructure reason: " + error[:160])
@@ -207,10 +208,14 @@ async def stage_verify(s: Session, cell: CellState, task: Task, rounds: int):
 
 
 async def stage_probe(s: Session, cell: CellState, task: Task, rounds: int):
-    """The verifier is tested from both sides before any agent trial: by mutants of the solution, and by
-    asking whether the instruction states everything the tests check."""
-    kind, info = await mutants(s, cell, task)
-    return (kind, info) if kind != "ok" else await coverage(s, cell, task)
+    """The verifier is tested from both sides before any agent trial: by a few probe answers made from the
+    solution, and by asking whether the instruction states everything the tests check. The two do not wait for
+    each other: the question is asked while the answers run."""
+    (kind, info), (c_kind, c_info) = await asyncio.gather(mutants(s, cell, task), coverage(s, cell, task))
+    if kind != "ok":                # a verifier that cannot be trusted is repaired first; its reason is the one shown
+        s.board(task)["why"] = s.board(task).get("mutant_why", "")
+        return kind, info
+    return c_kind, c_info
 
 
 async def coverage(s: Session, cell: CellState, task: Task):
@@ -251,20 +256,18 @@ async def mutants(s: Session, cell: CellState, task: Task):
     t0 = enter(cell, STAGE_NO["probe"], "writing mutants")
     written = await s.backend.write_mutants(task)
     mutants, wrong_accepted, right_rejected, detail, broken = written["mutants"], [], [], [], []
-    for i in range(0, len(mutants), 4):
-        batch = mutants[i:i + 4]
-        accepted = await asyncio.gather(*(s.container(s.backend.run_mutant(task, m)) for m in batch))
-        for m, a in zip(batch, accepted):
-            detail.append({"id": m["id"], "kind": m["kind"], "what": m.get("what", ""), "verifier_accepted": bool(a),
-                           "error": m.get("error", ""), **({"broken": m["broken"]} if m.get("broken") else {})})
-            if a is None:               # the variant itself did not run: it counts for nothing
-                broken.append(m["id"])
-                continue
-            if m["kind"] == "wrong" and a:
-                wrong_accepted.append(m["id"])
-            if m["kind"] == "equivalent" and not a:
-                right_rejected.append(m["id"])
-        cell.detail = f"{min(i + 4, len(mutants))} of {len(mutants)} mutants run"
+    cell.detail = f"{len(mutants)} probe answers running"
+    accepted = await asyncio.gather(*(s.container(s.backend.run_mutant(task, m)) for m in mutants))    # all at once
+    for m, a in zip(mutants, accepted):
+        detail.append({"id": m["id"], "kind": m["kind"], "what": m.get("what", ""), "verifier_accepted": bool(a),
+                       "error": m.get("error", ""), **({"broken": m["broken"]} if m.get("broken") else {})})
+        if a is None:               # the variant itself did not run: it counts for nothing
+            broken.append(m["id"])
+            continue
+        if m["kind"] == "wrong" and a:
+            wrong_accepted.append(m["id"])
+        if m["kind"] == "equivalent" and not a:
+            right_rejected.append(m["id"])
     ok = not wrong_accepted and not right_rejected
     s.record(task.benchmark, "decision", task, stage="probe", gate="verifier", tier="worker",
                 model=s.cfg.tiers.worker.model, value=f"{len(mutants)} mutants", cost=written["cost"],
@@ -274,7 +277,8 @@ async def mutants(s: Session, cell: CellState, task: Task):
                  right_rejected=right_rejected, broken=broken, detail=detail)
     if ok:
         return "ok", ""
-    s.board(task)["why"] = "verifier accepted a wrong mutant" if wrong_accepted else "verifier rejected a correct variant"
+    s.board(task)["mutant_why"] = "verifier accepted a wrong mutant" if wrong_accepted else "verifier rejected a correct variant"
+    s.board(task)["why"] = s.board(task)["mutant_why"]
     return "fix", "verifier"
 
 

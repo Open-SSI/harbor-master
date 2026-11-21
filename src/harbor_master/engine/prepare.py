@@ -153,7 +153,7 @@ def unpullable(error: str, task_dir: Path) -> str:
             "packages to compiling from source.")
 
 
-SLOW = re.compile(r"EnvironmentStartTimeoutError|Environment start timed out|VerifierTimeoutError", re.I)
+SLOW = re.compile(r"EnvironmentStartTimeoutError|Environment start timed out|VerifierTimeoutError|AgentTimeoutError|Agent execution timed out", re.I)
 
 
 def slow_build(error: str, limits: dict | None = None) -> str:
@@ -164,6 +164,8 @@ def slow_build(error: str, limits: dict | None = None) -> str:
     limits = limits or {}
     if "Verifier" in error:
         return f"its verifier did not finish within {int(limits.get('max_verifier_seconds') or 300)} seconds, the protocol's limit"
+    if "Agent" in error:
+        return f"its reference solution did not finish within {limits.get('max_verify_minutes') or 30:g} minutes, the protocol's limit"
     return (f"its environment did not build within {int(limits.get('max_build_seconds') or 300)} seconds, the protocol's limit. "
             "Use a lighter environment: a base image that already has what the task needs, prebuilt packages instead of "
             "compiling from source, and only what the task uses")
@@ -171,7 +173,8 @@ def slow_build(error: str, limits: dict | None = None) -> str:
 
 def limits_of(cfg: Config) -> dict:
     """The protocol's caps on building an environment and on running a verifier."""
-    return {"max_build_seconds": cfg.triage.max_build_seconds, "max_verifier_seconds": cfg.triage.max_verifier_seconds}
+    return {"max_build_seconds": cfg.triage.max_build_seconds, "max_verifier_seconds": cfg.triage.max_verifier_seconds,
+            "max_verify_minutes": cfg.triage.max_verify_minutes}
 
 
 async def check(adapter_dir: Path, source: Path, work: Path, entry: dict, sandbox: bool, oracle: int,

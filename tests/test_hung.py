@@ -83,3 +83,11 @@ def test_an_agents_latest_step_is_read_from_its_event_stream():
                         '{"type":"system","subtype":"thinking_tokens","estimated_tokens":1400}'])
     assert harbor.now_doing(stream) == "Bash: python fit.py --all"
     assert harbor.now_doing('{"type":"system","subtype":"init"}') == "thinking"
+
+
+def test_a_reference_solution_over_the_verify_limit_drops_its_task():
+    from harbor_master.engine.prepare import SLOW, slow_build
+    error = "AgentTimeoutError: Agent execution timed out after 1800.0 seconds"
+    assert SLOW.search(error)
+    assert slow_build(error, {"max_verify_minutes": 30}) == \
+        "its reference solution did not finish within 30 minutes, the protocol's limit"

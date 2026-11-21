@@ -226,12 +226,12 @@ class RealBackend(Backend):
 
     # ----- tier W -----
 
-    async def write_mutants(self, task: Task, n: int = 4) -> dict:
+    async def write_mutants(self, task: Task, n: int = 3) -> dict:
         if "probe" in self.assumed:
             return {**await self.sim.write_mutants(task), "cost": 0.0}
         skill = skills.load("probe/write-mutants")
         r = await self._ask("worker", skill.system, skill.fill(n=n, task=describe(task, 3000)), MUTANT_SCHEMA,
-                            cwd=task.path, max_turns=40)
+                            cwd=task.path, max_turns=20)
         mutants = [{**m, "files": {f["path"]: f["content"] for f in m["files"]}} for m in r.data["mutants"]]
         self.mutants[task.digest] = mutants        # run_mutant adds what the verifier said: a repair reads it
         return {"mutants": mutants, "cost": r.cost, "tokens": r.tokens, "skill": skill.tag}
@@ -408,12 +408,17 @@ class RealBackend(Backend):
         return harbor.settle(result, keep, self.run_dir / "trials", re.sub(r"[^A-Za-z0-9._-]+", "-", label),
                              self.run_dir.parents[1])
 
+    def solution_cap(self) -> float:
+        """The most a reference solution, or a probe answer made from it, may run: the protocol's limit on verify."""
+        return self.cfg.triage.max_verify_minutes * 60
+
     async def run_oracle(self, task: Task) -> TrialResult:
-        r = await harbor.run(task.path, self.jobs, "oracle", **self.limits(task, "the reference solution's run"))
+        r = await harbor.run(task.path, self.jobs, "oracle", max_agent_seconds=self.solution_cap(),
+                             **self.limits(task, "the reference solution's run"))
         return self._settle(r, keep=not r.passed or bool(r.error), label=f"{task.name}.oracle.{uuid.uuid4().hex[:6]}")
 
     async def run_noop(self, task: Task) -> TrialResult:
-        r = await harbor.run(task.path, self.jobs, "nop", **self.limits(task, "the no-op run"))
+        r = await harbor.run(task.path, self.jobs, "nop", max_agent_seconds=self.solution_cap(), **self.limits(task, "the no-op run"))
         return self._settle(r, keep=r.passed or bool(r.error), label=f"{task.name}.noop.{uuid.uuid4().hex[:6]}")
 
     async def run_mutant(self, task: Task, mutant: dict, stage: str = "probe") -> bool | None:
@@ -421,10 +426,15 @@ class RealBackend(Backend):
             return await self.sim.run_mutant(task, mutant, stage)
         copy = harbor.with_solution(task.path, mutant["files"], self.scratch)
         try:
-            result = await harbor.run(copy, self.jobs, "oracle", **self.limits(task, f"the run of wrong answer {mutant['id']}"))
+            result = await harbor.run(copy, self.jobs, "oracle", max_agent_seconds=self.solution_cap(),
+                                      **self.limits(task, f"the run of probe answer {mutant['id']}"))
         finally:
             shutil.rmtree(copy.parent, ignore_errors=True)
         mutant["reward"], mutant["error"] = result.reward, result.error
+        if result.error and not result.passed:      # it did not run to the end, such as over the time limit: no evidence
+            mutant["broken"] = result.error[:200]
+            self._settle(result, keep=True, label=f"{task.name}.mutant-{mutant['id']}")
+            return None
         if result.exit_code not in (None, 0) and not result.passed:
             # The variant's own script failed: its output says nothing about the verifier, either way. A "correct"
             # variant that crashes is not a right answer the verifier rejected.

@@ -101,7 +101,7 @@ Measured on the 70 tasks of Terminal-Bench-Science: 468 requests, $0.023, 11 sec
 
 ## 5. Where this goes beyond the paper
 
-1. **Verifier probes before frontier trials.** A worker writes mutants of the reference solution: some wrong in a way that matters, some right in another form. The verifier must reject the first and accept the second.
+1. **Verifier probes before frontier trials.** A worker writes three probe answers, each one small edit of the reference solution: two wrong in a way that matters, one right in another form. They run side by side, each under verify's time limit, while the coverage question is asked; the verifier must reject the wrong ones and accept the right one.
 2. **Calibrated escalation.** Every decision is stored with its probability, and every later overturn is a label. Thresholds can be refit on those labels.
 3. **Sequential difficulty filter**, run once per task after a smaller model has tried, with early stop and reuse of any valid trial in the ledger.
 4. **Content-addressed record.** A repair changes a digest, so the cheap checks that depend on it run again. The frontier trials do not.
