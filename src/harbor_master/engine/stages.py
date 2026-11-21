@@ -505,6 +505,20 @@ def _reasons(board: dict) -> list[str]:
     return out
 
 
+def _sentences(text: str, most: int = 2, limit: int = 320) -> str:
+    """The first sentences of a model's explanation, whole: the log wraps a long line, so it is never cut mid-word."""
+    import re
+    parts = re.split(r"(?<=[.!?])\s+", " ".join(text.split()))
+    found = [p for p in parts if not re.match(r"I (only |also )?(read|opened|looked|checked|did not|didn't|went|reviewed|inspected)\b", p)]
+    parts = found or parts          # what the model read is no finding: the line shows what it found
+    out = ""
+    for part in parts[:most]:
+        if out and len(out) + len(part) > limit:
+            break
+        out = f"{out} {part}".strip()
+    return out if len(out) <= limit else out[:limit].rsplit(" ", 1)[0] + " ..."
+
+
 def progress(stage: str, r: dict) -> str:
     """One line for the log on what a stage of a task found, as it ends: what a person watching wants to know."""
     n = lambda k: len(r.get(k) or [])  # noqa: E731
@@ -530,7 +544,7 @@ def progress(stage: str, r: dict) -> str:
                 "off": "the worker model's tries are switched off"}.get(r.get("cheap_solve", ""), "")
     if stage == "audit":
         verdict = str(r.get("verdict", "?")).replace("_", " ")         # what is to be fixed has a line of its own
-        return f"audit: {verdict}" + (f". {str(r['rationale'])[:110]}" if r.get("rationale") and verdict == "accept" else "")
+        return f"audit: {verdict}" + (f". {_sentences(str(r['rationale']))}" if r.get("rationale") and verdict == "accept" else "")
     if stage == "fix":
         return (f"repaired the {r.get('defect', 'task')}" + (f": {r['what']}" if r.get("what") else "") if r.get("fixed") else
                 f"round {r.get('round', '?')} could not repair the {r.get('defect', 'task')}")

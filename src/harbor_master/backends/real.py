@@ -297,7 +297,14 @@ class RealBackend(Backend):
                 continue
             outcome = "error: " + t["error"][:200] if t["error"] else ("passed" if t["passed"] else "failed")
             lines.append(f"- trials/{t['label']}/: {t['who']}, reward {t['reward']}, {outcome}")
-        text = ("EVIDENCE\nThe current directory holds the task under task/" + (" and these trials:\n" + "\n".join(lines) if lines
+            # Where its steps and its grading are, so that the trajectory is read, not only what the tests said
+            for what, pattern in (("its steps", "agent/trajectory.json"), ("the agent's own output", "agent/*.txt"),
+                                  ("what the tests said", "verifier/test-stdout.txt")):
+                found = sorted(where.glob(f"**/{pattern}"))[:1]
+                if found:
+                    lines.append(f"    {what}: {found[0].relative_to(folder)}")
+        text = ("EVIDENCE\nThe current directory holds the task under task/" + (" and these trials. Read each one's steps, not only "
+                "what the tests said: a judgment of how an agent failed that reads no trajectory is not one.\n" + "\n".join(lines) if lines
                 else ". No agent trial of this version of it is on this machine: judge from the task's own files."))
         return folder, text
 
