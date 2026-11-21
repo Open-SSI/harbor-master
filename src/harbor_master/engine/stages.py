@@ -234,7 +234,10 @@ async def coverage(s: Session, cell: CellState, task: Task):
     t0 = enter(cell, STAGE_NO["probe"], "instruction against the tests")
     d = await s.backend.covers(task)
     tiers = [d.tier]
-    if d.prob < s.cfg.escalation.min_confidence:
+    # The decision model's "unstated" names nothing, however sure it is, and it reads only the start of long tests. So it
+    # is never acted on as it is: the worker agent reads the task's files, and confirms it, saying what is not stated
+    # (which is what the repair is then told to add), or overturns it.
+    if d.prob < s.cfg.escalation.min_confidence or d.value == "unstated":
         s.record(task.benchmark, "decision", task, stage="probe", gate="coverage", tier=d.tier, model=d.model,
                  value=d.value, probability=round(d.prob, 3), outcome="escalate", cost=d.cost, skill=d.skill)
         d = await s.backend.covers(task, d)
@@ -494,6 +497,41 @@ def _reasons(board: dict) -> list[str]:
     elif cheap:
         out.append(cheap + ".")
     return out
+
+
+def progress(stage: str, r: dict) -> str:
+    """One line for the log on what a stage of a task found, as it ends: what a person watching wants to know."""
+    n = lambda k: len(r.get(k) or [])  # noqa: E731
+    if stage == "verify" and "oracle_passed" in r:
+        if r.get("errors"):
+            return f"a run failed: {str(r['errors'][0])[:90]}"
+        return ("reference solution passes, a no-op fails" if r["oracle_passed"] and not r.get("noop_passed") else
+                "reference solution fails its own tests" if not r["oracle_passed"] else "a no-op passes: the tests check too little") + \
+               (f", in {r['verifier_seconds']:.0f} s" if r.get("verifier_seconds") else "")
+    if stage == "verify" and "trivial_tried" in r:
+        return (f"none of {r['trivial_tried']} trivial answers is accepted" if not n("trivial_accepted") else
+                f"{n('trivial_accepted')} of {r['trivial_tried']} trivial answers are accepted")
+    if stage == "probe" and "mutants" in r:
+        wrong, right = n("wrong_accepted"), n("right_rejected")
+        return (f"the verifier tells right from wrong on all {r['mutants']} probe answers" if not (wrong or right) else
+                f"of {r['mutants']} probe answers, {wrong} wrong accepted and {right} right rejected")
+    if stage == "probe" and "coverage" in r:
+        return "the instruction states everything the tests check" if r["coverage"] == "covered" else \
+            "the tests check something the instruction does not state"
+    if stage == "worker":
+        return {"failed": "the worker model failed it: not too easy", "passed": f"the worker model solved it every time: too easy",
+                "off": "the worker model's tries are switched off"}.get(r.get("cheap_solve", ""), "")
+    if stage == "audit":
+        verdict = str(r.get("verdict", "?")).replace("_", " ")         # what is to be fixed has a line of its own
+        return f"audit: {verdict}" + (f". {str(r['rationale'])[:110]}" if r.get("rationale") and verdict == "accept" else "")
+    if stage == "fix":
+        return (f"repaired the {r.get('defect', 'task')}" + (f": {r['what']}" if r.get("what") else "") if r.get("fixed") else
+                f"round {r.get('round', '?')} could not repair the {r.get('defect', 'task')}")
+    if stage == "difficulty" and r.get("trials"):
+        return f"{r['passes']} of {r['trials']} frontier trials passed" + (", stopped early" if r.get("stopped_early") else "")
+    if stage == "report":
+        return "report written"
+    return ""
 
 
 def _evidence(done: dict) -> str:

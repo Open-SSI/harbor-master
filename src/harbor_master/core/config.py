@@ -129,6 +129,7 @@ class Run(BaseModel):
     claim_hours: float = 12.0      # how long a claim on a benchmark holds. A run that goes on renews it
     watch_minutes: float = 3.0     # how often a running trial's logs are looked at
     quiet_minutes: float = 9.0     # a trial whose logs have not moved for this long is read by the worker agent: hung, or working
+    agent_setup_minutes: float = 30.0   # the most that installing an agent in a task's container may take, before it runs
 
 
 class Requires(BaseModel):

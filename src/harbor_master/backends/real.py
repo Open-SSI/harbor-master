@@ -11,6 +11,7 @@ report is written by code from the records, with no model.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import shutil
@@ -23,7 +24,7 @@ from ..core.config import Config, SuiteEntry
 from ..curation import gates
 from ..tasks import Task
 from ..tasks.model import digest_dir
-from . import claude, harbor, jev, sessions
+from . import agents, claude, harbor, jev, sessions
 from .base import Backend, Decision, NotImplementedBackend, TrialResult, Usage
 from .simulated import SimulatedBackend
 
@@ -256,8 +257,12 @@ class RealBackend(Backend):
                                                         {"coverage": jev.choice(asked["question"], asked["criteria"])})
             self.usage("decision", cost, tokens)
             return self._jev_decision(COVERAGE, answers.get("coverage") or {}, cost, tokens, skill.tag)
-        said = (f"A first check said \"{first.value or '(no answer)'}\" with probability {first.prob:.2f}. "
-                "Read the task's files where that helps.\n\n")
+        said = (f"A first check, by a small model that saw only the start of long files, said \"{first.value or '(no answer)'}\" "
+                f"with probability {first.prob:.2f}. It may be wrong: read the instruction and the tests in full before you answer. "
+                "What the verifier sets up or checks about itself, and anything a correct answer made from the instruction "
+                "alone would satisfy, is not unstated. If you answer \"unstated\", name in the rationale each thing the tests "
+                "rely on that the instruction does not state, with the test that relies on it, so that exactly that can be "
+                "added to the instruction.\n\n")
         r = await self._ask("worker", skill.data["system"], f"{asked['question']}\n\n{said}{describe(task)}\n\nTESTS\n{tests}",
                             _choice_schema(COVERAGE, rationale=True), cwd=task.path, max_turns=12)
         return Decision(r.data["value"], float(r.data["confidence"]), "worker", self.cfg.tiers.worker.model, r.cost, r.tokens,
@@ -416,15 +421,25 @@ class RealBackend(Backend):
         self._settle(result, keep=finding or bool(result.error), label=f"{task.name}.mutant-{mutant['id']}")
         return result.passed
 
+    async def _agent_run(self, task: Task, entry: SuiteEntry, max_hours: float, mounts: list[dict]) -> TrialResult:
+        return await harbor.run(task.path, self.jobs, entry.agent, entry.model,
+                                {"version": entry.version, "reasoning_effort": entry.reasoning_effort}, with_keys=True,
+                                max_agent_seconds=(max_hours or self.cfg.difficulty.max_agent_hours) * 3600,
+                                agent_setup_seconds=self.cfg.run.agent_setup_minutes * 60, mounts=mounts,
+                                agent_env=entry.env or None, **self.limits(task, f"a trial of {entry.agent} with {entry.model}"))
+
     async def run_trial(self, task: Task, entry: SuiteEntry, index: int, max_hours: float = 0) -> TrialResult:
         if "difficulty" in self.assumed:
             result = await self.sim.run_trial(task, entry, index)
             result.cost, result.tokens_in, result.tokens_out, result.seconds = 0.0, 0, 0, 0.0
             return result
-        r = await harbor.run(task.path, self.jobs, entry.agent, entry.model,
-                             {"version": entry.version, "reasoning_effort": entry.reasoning_effort}, with_keys=True,
-                             max_agent_seconds=(max_hours or self.cfg.difficulty.max_agent_hours) * 3600,
-                             agent_env=entry.env or None, **self.limits(task, f"a trial of {entry.agent} with {entry.model}"))
+        # The agent's program at its pinned version is downloaded once here and mounted into the container, in place of
+        # an install of several minutes in every one. Should a trial fail in setup with it mounted (an image it cannot
+        # run in), it is run once more the plain way.
+        shared = await asyncio.to_thread(agents.mounts, entry.agent, entry.version)
+        r = await self._agent_run(task, entry, max_hours, shared)
+        if shared and r.error and "setup" in r.error.lower():
+            r = await self._agent_run(task, entry, max_hours, [])
         worker = bool(max_hours)            # the worker agent's tries carry their own limit; the suite's use the protocol's
         who = f"{entry.agent} with {entry.model}" + (f", effort {entry.reasoning_effort}" if entry.reasoning_effort else "")
         label = re.sub(r"[^A-Za-z0-9._-]+", "-", f"{'worker' if worker else 'frontier'}-{entry.agent}-{entry.reasoning_effort or 'default'}-{index}")

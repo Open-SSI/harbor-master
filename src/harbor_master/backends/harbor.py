@@ -146,20 +146,24 @@ def remove_containers(job: Path) -> None:
 async def run(task_dir: Path, jobs_dir: Path, agent: str, model: str = "", agent_kwargs: dict | None = None,
               with_keys: bool = False, timeout: float = 3 * 3600, max_agent_seconds: float = 0,
               agent_env: dict[str, str] | None = None, max_build_seconds: float = 0,
-              max_verifier_seconds: float = 0, watch: Watch | None = None) -> TrialResult:
+              max_verifier_seconds: float = 0, watch: Watch | None = None, agent_setup_seconds: float = 0,
+              mounts: list[dict] | None = None) -> TrialResult:
     """One Harbor job with one trial. Infrastructure failures come back as a failed result with `error` set.
     `max_build_seconds` and `max_verifier_seconds` cap the task's own limits: a build or a verifier that takes longer
     fails, with Harbor's timeout as the error. With `watch`, a trial whose logs stop moving is judged, and a hung one is
     stopped, its containers removed, and run again or its task dropped, as `watch.judge` says."""
     while True:
         result = await _run_once(task_dir, jobs_dir, agent, model, agent_kwargs, with_keys, timeout, max_agent_seconds,
-                                 agent_env, max_build_seconds, max_verifier_seconds, watch)
+                                 agent_env, max_build_seconds, max_verifier_seconds, watch, agent_setup_seconds, mounts)
         if result is not None:
             return result
 
 
+HARBOR_AGENT_SETUP = 360.0          # what Harbor allows for installing an agent in the container, unless told otherwise
+
+
 async def _run_once(task_dir, jobs_dir, agent, model, agent_kwargs, with_keys, timeout, max_agent_seconds, agent_env,
-                    max_build_seconds, max_verifier_seconds, watch) -> TrialResult | None:
+                    max_build_seconds, max_verifier_seconds, watch, agent_setup_seconds=0, mounts=None) -> TrialResult | None:
     """One try. None when it hung and is to be run again."""
     name = f"{agent}-{uuid.uuid4().hex[:8]}"
     jobs_dir.mkdir(parents=True, exist_ok=True)
@@ -176,11 +180,16 @@ async def _run_once(task_dir, jobs_dir, agent, model, agent_kwargs, with_keys, t
                            ("--verifier-timeout-multiplier", max_verifier_seconds, own_limit(task_dir, "verifier"))):
         if cap and own > cap:          # Harbor scales the task's own limit: a factor brings it down to the cap
             cmd += [flag, f"{cap / own:.6f}"]
+    if mounts:                  # the agent's own program, from this machine's cache: Harbor then installs nothing
+        cmd += ["--mounts", json.dumps(mounts)]
+    if agent_setup_seconds > HARBOR_AGENT_SETUP:       # installing Node.js and the agent in a bare image takes minutes
+        cmd += ["--agent-setup-timeout-multiplier", f"{agent_setup_seconds / HARBOR_AGENT_SETUP:.4f}"]
+        timeout += agent_setup_seconds
     if max_agent_seconds:
         own = agent_limit(task_dir)
         if own > max_agent_seconds:        # Harbor scales the task's own limit, so cap it by a factor
             cmd += ["--agent-timeout-multiplier", f"{max_agent_seconds / own:.6f}"]
-        timeout = min(own or max_agent_seconds, max_agent_seconds) + 3600      # room for setup and the verifier
+        timeout = min(own or max_agent_seconds, max_agent_seconds) + 3600 + agent_setup_seconds     # room for setup and the verifier
     env = dict(os.environ)
     if with_keys:      # only an agent trial gets keys, and only through the process environment
         env.update(keys.agent_env(agent))

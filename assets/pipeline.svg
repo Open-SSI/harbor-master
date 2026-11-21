@@ -1,0 +1,264 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1720 690" width="1720" height="690" font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#9a99a6"/></marker><marker id="ahp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#7a72e6"/></marker></defs>
+<rect width="1720" height="690" rx="16" fill="#ffffff"/>
+<g transform="translate(14 14)">
+<rect x="1" y="30" width="1228" height="162" rx="14" fill="none" stroke="#cfced8" stroke-dasharray="8 7" stroke-width="1.5"/>
+<text x="14" y="20" font-size="17" font-weight="400" fill="#6f6e7a" text-anchor="start">Once per benchmark</text>
+<g opacity="1">
+<rect x="20" y="48" width="180" height="104" rx="10" fill="#f6f6f8" stroke="#b9b8c4" stroke-width="1.6"/>
+</g>
+<text x="110.0" y="75" font-size="20" font-weight="700" fill="#1f1f2a" text-anchor="middle">Benchmark</text>
+<rect x="36.5" y="88" width="14" height="14" rx="3" fill="#5dc7a4"/>
+<rect x="55.5" y="88" width="14" height="14" rx="3" fill="#bdbcc8"/>
+<rect x="74.5" y="88" width="14" height="14" rx="3" fill="#e6e5ec"/>
+<rect x="93.5" y="88" width="14" height="14" rx="3" fill="#bdbcc8"/>
+<rect x="112.5" y="88" width="14" height="14" rx="3" fill="#5dc7a4"/>
+<rect x="131.5" y="88" width="14" height="14" rx="3" fill="#bdbcc8"/>
+<rect x="150.5" y="88" width="14" height="14" rx="3" fill="#bdbcc8"/>
+<rect x="169.5" y="88" width="14" height="14" rx="3" fill="#e6e5ec"/>
+<rect x="36.5" y="107" width="14" height="14" rx="3" fill="#bdbcc8"/>
+<rect x="55.5" y="107" width="14" height="14" rx="3" fill="#5dc7a4"/>
+<rect x="74.5" y="107" width="14" height="14" rx="3" fill="#bdbcc8"/>
+<rect x="93.5" y="107" width="14" height="14" rx="3" fill="#e6e5ec"/>
+<rect x="112.5" y="107" width="14" height="14" rx="3" fill="#bdbcc8"/>
+<rect x="131.5" y="107" width="14" height="14" rx="3" fill="#e6e5ec"/>
+<rect x="150.5" y="107" width="14" height="14" rx="3" fill="#bdbcc8"/>
+<rect x="169.5" y="107" width="14" height="14" rx="3" fill="#5dc7a4"/>
+<rect x="36.5" y="126" width="14" height="14" rx="3" fill="#bdbcc8"/>
+<rect x="55.5" y="126" width="14" height="14" rx="3" fill="#bdbcc8"/>
+<rect x="74.5" y="126" width="14" height="14" rx="3" fill="#e6e5ec"/>
+<rect x="93.5" y="126" width="14" height="14" rx="3" fill="#bdbcc8"/>
+<rect x="112.5" y="126" width="14" height="14" rx="3" fill="#5dc7a4"/>
+<rect x="131.5" y="126" width="14" height="14" rx="3" fill="#bdbcc8"/>
+<rect x="150.5" y="126" width="14" height="14" rx="3" fill="#e6e5ec"/>
+<rect x="169.5" y="126" width="14" height="14" rx="3" fill="#bdbcc8"/>
+<g opacity="1">
+<rect x="222" y="48" width="180" height="104" rx="10" fill="#f6f6f8" stroke="#b9b8c4" stroke-width="1.6"/>
+<text x="312.0" y="89.4" font-size="21" font-weight="700" fill="#2a2a33" text-anchor="middle">Fetch</text>
+<text x="312.0" y="109.3" font-size="14.5" font-weight="400" fill="#6f6e7a" text-anchor="middle">its pinned release</text>
+<text x="312.0" y="126.3" font-size="13.5" font-weight="400" fill="#6f6e7a" text-anchor="middle" font-style="italic">code</text>
+</g>
+<path d="M203,100.0 H218" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)"/>
+<g opacity="1">
+<rect x="424" y="48" width="180" height="104" rx="10" fill="#f6f6f8" stroke="#b9b8c4" stroke-width="1.6"/>
+<text x="514.0" y="89.4" font-size="21" font-weight="700" fill="#2a2a33" text-anchor="middle">Check</text>
+<text x="514.0" y="109.3" font-size="14.5" font-weight="400" fill="#6f6e7a" text-anchor="middle">cheap checks first</text>
+<text x="514.0" y="126.3" font-size="13.5" font-weight="400" fill="#6f6e7a" text-anchor="middle" font-style="italic">code</text>
+</g>
+<path d="M405,100.0 H420" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)"/>
+<g opacity="1">
+<rect x="626" y="48" width="180" height="104" rx="10" fill="#efedfd" stroke="#9a92ee" stroke-width="1.6"/>
+<text x="716.0" y="89.4" font-size="21" font-weight="700" fill="#3a36b0" text-anchor="middle">Adapt</text>
+<text x="716.0" y="109.3" font-size="14.5" font-weight="400" fill="#6f6e7a" text-anchor="middle">into Harbor tasks</text>
+<text x="716.0" y="126.3" font-size="13.5" font-weight="400" fill="#6f6e7a" text-anchor="middle" font-style="italic">worker agent</text>
+</g>
+<path d="M607,100.0 H622" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)"/>
+<g opacity="1">
+<rect x="828" y="48" width="180" height="104" rx="10" fill="#e6f7f1" stroke="#5dc7a4" stroke-width="1.6"/>
+<text x="918.0" y="89.4" font-size="21" font-weight="700" fill="#14684a" text-anchor="middle">Screen</text>
+<text x="918.0" y="109.3" font-size="14.5" font-weight="400" fill="#6f6e7a" text-anchor="middle">admission gates</text>
+<text x="918.0" y="126.3" font-size="13.5" font-weight="400" fill="#6f6e7a" text-anchor="middle" font-style="italic">decision model</text>
+</g>
+<path d="M809,100.0 H824" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)"/>
+<g opacity="1">
+<rect x="1030" y="48" width="180" height="104" rx="10" fill="#e6f7f1" stroke="#5dc7a4" stroke-width="1.6"/>
+<text x="1120.0" y="89.4" font-size="21" font-weight="700" fill="#14684a" text-anchor="middle">Rank, select</text>
+<text x="1120.0" y="109.3" font-size="14.5" font-weight="400" fill="#6f6e7a" text-anchor="middle">by your brief</text>
+<text x="1120.0" y="126.3" font-size="13.5" font-weight="400" fill="#6f6e7a" text-anchor="middle" font-style="italic">decision model</text>
+</g>
+<path d="M1011,100.0 H1026" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)"/>
+<text x="1106.0" y="178" font-size="16" font-weight="400" fill="#9c2f4a" text-anchor="end" font-style="italic">you give the brief and approve the selection</text>
+<text x="1262" y="20" font-size="17" font-weight="700" fill="#1f1f2a" text-anchor="start">Who does a stage</text>
+<text x="1262" y="43" font-size="14" font-weight="400" fill="#6f6e7a" text-anchor="start">the next is asked only when one is unsure or stuck</text>
+<g opacity="1">
+<rect x="1262" y="62" width="92" height="84" rx="10" fill="#e6f7f1" stroke="#5dc7a4" stroke-width="1.6"/>
+<text x="1308.0" y="92.1" font-size="15" font-weight="700" fill="#14684a" text-anchor="middle">Decision</text>
+<text x="1308.0" y="109.7" font-size="14" font-weight="400" fill="#6f6e7a" text-anchor="middle">model</text>
+<text x="1308.0" y="126.1" font-size="13" font-weight="400" fill="#6f6e7a" text-anchor="middle" font-style="italic">Jev</text>
+</g>
+<g opacity="1">
+<rect x="1370" y="62" width="92" height="84" rx="10" fill="#efedfd" stroke="#9a92ee" stroke-width="1.6"/>
+<text x="1416.0" y="92.1" font-size="15" font-weight="700" fill="#3a36b0" text-anchor="middle">Worker</text>
+<text x="1416.0" y="109.7" font-size="14" font-weight="400" fill="#6f6e7a" text-anchor="middle">agent</text>
+<text x="1416.0" y="126.1" font-size="13" font-weight="400" fill="#6f6e7a" text-anchor="middle" font-style="italic">Sonnet</text>
+</g>
+<path d="M1356,104 H1367" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)"/>
+<g opacity="1">
+<rect x="1478" y="62" width="92" height="84" rx="10" fill="#fdf3e1" stroke="#e9a94a" stroke-width="1.6"/>
+<text x="1524.0" y="92.1" font-size="15" font-weight="700" fill="#8a5a0a" text-anchor="middle">Frontier</text>
+<text x="1524.0" y="109.7" font-size="14" font-weight="400" fill="#6f6e7a" text-anchor="middle">agents</text>
+<text x="1524.0" y="126.1" font-size="13" font-weight="400" fill="#6f6e7a" text-anchor="middle" font-style="italic">Opus</text>
+</g>
+<path d="M1464,104 H1475" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)"/>
+<g opacity="1">
+<rect x="1586" y="62" width="92" height="84" rx="10" fill="#fdecef" stroke="#e07f97" stroke-width="1.6"/>
+<text x="1632.0" y="100.1" font-size="15" font-weight="700" fill="#9c2f4a" text-anchor="middle">You</text>
+<text x="1632.0" y="117.8" font-size="14" font-weight="400" fill="#6f6e7a" text-anchor="middle">sign</text>
+</g>
+<path d="M1572,104 H1583" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)"/>
+<path d="M1120.0,152 V214 H12 V513 H27" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)"/>
+<path d="M12,293 H27" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)"/>
+<path d="M12,403 H27" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)"/>
+<text x="250" y="207" font-size="17" font-weight="400" fill="#1f1f2a" text-anchor="start">each selected task goes into a work cell of its own, and the cells run in parallel</text>
+<rect x="30" y="244" width="1350" height="98" rx="12" fill="#fbfbfd" stroke="#cfced8" stroke-dasharray="8 7" stroke-width="1.5"/>
+<text x="48" y="276" font-size="16" font-weight="400" fill="#9a99a6" text-anchor="start">cell 1</text>
+<text x="48" y="302" font-size="20" font-weight="400" fill="#1f1f2a" text-anchor="start" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace">t0036</text>
+<text x="48" y="325" font-size="15" font-weight="400" fill="#9c2f4a" text-anchor="start">verdict</text>
+<g opacity="1">
+<rect x="196" y="261" width="146" height="64" rx="10" fill="#f6f6f8" stroke="#b9b8c4" stroke-width="1.6"/>
+<text x="269.0" y="291.3" font-size="19" font-weight="700" fill="#2a2a33" text-anchor="middle">Verify</text>
+<text x="269.0" y="308.8" font-size="12.5" font-weight="400" fill="#6f6e7a" text-anchor="middle" font-style="italic">solution vs no-op</text>
+</g>
+<g opacity="1">
+<rect x="366" y="261" width="146" height="64" rx="10" fill="#efedfd" stroke="#9a92ee" stroke-width="1.6"/>
+<text x="439.0" y="291.3" font-size="19" font-weight="700" fill="#3a36b0" text-anchor="middle">Probe</text>
+<text x="439.0" y="308.8" font-size="12.5" font-weight="400" fill="#6f6e7a" text-anchor="middle" font-style="italic">wrong answers fail</text>
+</g>
+<path d="M344,293 H362" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)"/>
+<g opacity="1">
+<rect x="536" y="261" width="146" height="64" rx="10" fill="#efedfd" stroke="#9a92ee" stroke-width="1.6"/>
+<text x="609.0" y="291.3" font-size="19" font-weight="700" fill="#3a36b0" text-anchor="middle">Worker</text>
+<text x="609.0" y="308.8" font-size="12.5" font-weight="400" fill="#6f6e7a" text-anchor="middle" font-style="italic">twice = too easy</text>
+</g>
+<path d="M514,293 H532" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)"/>
+<g opacity="1">
+<rect x="706" y="261" width="146" height="64" rx="10" fill="#efedfd" stroke="#9a92ee" stroke-width="1.6"/>
+<text x="779.0" y="291.3" font-size="19" font-weight="700" fill="#3a36b0" text-anchor="middle">Audit</text>
+<text x="779.0" y="308.8" font-size="12.5" font-weight="400" fill="#6f6e7a" text-anchor="middle" font-style="italic">task's fault or not</text>
+</g>
+<path d="M684,293 H702" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)"/>
+<g opacity="1">
+<rect x="876" y="261" width="146" height="64" rx="10" fill="#fdf3e1" stroke="#e9a94a" stroke-width="1.6"/>
+<text x="949.0" y="291.3" font-size="19" font-weight="700" fill="#8a5a0a" text-anchor="middle">Difficulty</text>
+<text x="949.0" y="308.8" font-size="12.5" font-weight="400" fill="#6f6e7a" text-anchor="middle" font-style="italic">frontier, ≤ 3 of 6</text>
+</g>
+<path d="M854,293 H872" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)"/>
+<g opacity="1">
+<rect x="1046" y="261" width="146" height="64" rx="10" fill="#efedfd" stroke="#9a92ee" stroke-width="1.6"/>
+<text x="1119.0" y="291.3" font-size="19" font-weight="700" fill="#3a36b0" text-anchor="middle">Report</text>
+<text x="1119.0" y="308.8" font-size="12.5" font-weight="400" fill="#6f6e7a" text-anchor="middle" font-style="italic">worker agent</text>
+</g>
+<path d="M1024,293 H1042" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)"/>
+<g opacity="1">
+<rect x="1216" y="261" width="146" height="64" rx="10" fill="#fdecef" stroke="#e07f97" stroke-width="4"/>
+<text x="1289.0" y="291.3" font-size="19" font-weight="700" fill="#9c2f4a" text-anchor="middle">Verdict</text>
+<text x="1289.0" y="308.8" font-size="12.5" font-weight="400" fill="#6f6e7a" text-anchor="middle" font-style="italic">you, signed</text>
+</g>
+<path d="M1194,293 H1212" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)"/>
+<path d="M1364,293 H1428" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)"/>
+<rect x="30" y="354" width="1350" height="98" rx="12" fill="#fbfbfd" stroke="#cfced8" stroke-dasharray="8 7" stroke-width="1.5"/>
+<text x="48" y="386" font-size="16" font-weight="400" fill="#9a99a6" text-anchor="start">cell 2</text>
+<text x="48" y="412" font-size="20" font-weight="400" fill="#1f1f2a" text-anchor="start" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace">t0008</text>
+<text x="48" y="435" font-size="15" font-weight="400" fill="#8a5a0a" text-anchor="start">in repair</text>
+<g opacity="1">
+<rect x="196" y="371" width="146" height="64" rx="10" fill="#f6f6f8" stroke="#b9b8c4" stroke-width="1.6"/>
+<text x="269.0" y="401.3" font-size="19" font-weight="700" fill="#2a2a33" text-anchor="middle">Verify</text>
+<text x="269.0" y="418.8" font-size="12.5" font-weight="400" fill="#6f6e7a" text-anchor="middle" font-style="italic">solution vs no-op</text>
+</g>
+<g opacity="1">
+<rect x="366" y="371" width="146" height="64" rx="10" fill="#efedfd" stroke="#9a92ee" stroke-width="1.6"/>
+<text x="439.0" y="401.3" font-size="19" font-weight="700" fill="#3a36b0" text-anchor="middle">Probe</text>
+<text x="439.0" y="418.8" font-size="12.5" font-weight="400" fill="#6f6e7a" text-anchor="middle" font-style="italic">wrong answers fail</text>
+</g>
+<path d="M344,403 H362" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)"/>
+<g opacity="1">
+<rect x="536" y="371" width="146" height="64" rx="10" fill="#efedfd" stroke="#9a92ee" stroke-width="1.6"/>
+<text x="609.0" y="401.3" font-size="19" font-weight="700" fill="#3a36b0" text-anchor="middle">Worker</text>
+<text x="609.0" y="418.8" font-size="12.5" font-weight="400" fill="#6f6e7a" text-anchor="middle" font-style="italic">twice = too easy</text>
+</g>
+<path d="M514,403 H532" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)"/>
+<g opacity="1">
+<rect x="706" y="371" width="146" height="64" rx="10" fill="#fdf3e1" stroke="#e9a94a" stroke-width="4"/>
+<text x="779.0" y="401.3" font-size="19" font-weight="700" fill="#8a5a0a" text-anchor="middle">Audit</text>
+<text x="779.0" y="418.8" font-size="12.5" font-weight="400" fill="#6f6e7a" text-anchor="middle" font-style="italic">task's fault or not</text>
+</g>
+<path d="M684,403 H702" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)"/>
+<g opacity="0.4">
+<rect x="876" y="371" width="146" height="64" rx="10" fill="#fdf3e1" stroke="#e9a94a" stroke-width="1.6"/>
+<text x="949.0" y="401.3" font-size="19" font-weight="700" fill="#8a5a0a" text-anchor="middle">Difficulty</text>
+<text x="949.0" y="418.8" font-size="12.5" font-weight="400" fill="#6f6e7a" text-anchor="middle" font-style="italic">frontier, ≤ 3 of 6</text>
+</g>
+<path d="M854,403 H872" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)" opacity="0.4"/>
+<g opacity="0.4">
+<rect x="1046" y="371" width="146" height="64" rx="10" fill="#efedfd" stroke="#9a92ee" stroke-width="1.6"/>
+<text x="1119.0" y="401.3" font-size="19" font-weight="700" fill="#3a36b0" text-anchor="middle">Report</text>
+<text x="1119.0" y="418.8" font-size="12.5" font-weight="400" fill="#6f6e7a" text-anchor="middle" font-style="italic">worker agent</text>
+</g>
+<path d="M1024,403 H1042" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)" opacity="0.4"/>
+<g opacity="0.4">
+<rect x="1216" y="371" width="146" height="64" rx="10" fill="#fdecef" stroke="#e07f97" stroke-width="1.6"/>
+<text x="1289.0" y="401.3" font-size="19" font-weight="700" fill="#9c2f4a" text-anchor="middle">Verdict</text>
+<text x="1289.0" y="418.8" font-size="12.5" font-weight="400" fill="#6f6e7a" text-anchor="middle" font-style="italic">you, signed</text>
+</g>
+<path d="M1194,403 H1212" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)" opacity="0.4"/>
+<path d="M1364,403 H1428" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)" opacity="0.4"/>
+<path d="M779.0,437 V445 H269.0 V438" fill="none" stroke="#7a72e6" stroke-width="1.8" marker-end="url(#ahp)"/>
+<rect x="324.0" y="436" width="400" height="16" fill="#fbfbfd"/>
+<text x="524.0" y="450" font-size="15" font-weight="700" fill="#3a36b0" text-anchor="middle">Fix · broken, so repaired and verified again</text>
+<rect x="30" y="464" width="1350" height="98" rx="12" fill="#fbfbfd" stroke="#cfced8" stroke-dasharray="8 7" stroke-width="1.5"/>
+<text x="48" y="496" font-size="16" font-weight="400" fill="#9a99a6" text-anchor="start">cell 3</text>
+<text x="48" y="522" font-size="20" font-weight="400" fill="#1f1f2a" text-anchor="start" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace">t0021</text>
+<text x="48" y="545" font-size="15" font-weight="400" fill="#8a5a0a" text-anchor="start">difficulty</text>
+<g opacity="1">
+<rect x="196" y="481" width="146" height="64" rx="10" fill="#f6f6f8" stroke="#b9b8c4" stroke-width="1.6"/>
+<text x="269.0" y="511.3" font-size="19" font-weight="700" fill="#2a2a33" text-anchor="middle">Verify</text>
+<text x="269.0" y="528.8" font-size="12.5" font-weight="400" fill="#6f6e7a" text-anchor="middle" font-style="italic">solution vs no-op</text>
+</g>
+<g opacity="1">
+<rect x="366" y="481" width="146" height="64" rx="10" fill="#efedfd" stroke="#9a92ee" stroke-width="1.6"/>
+<text x="439.0" y="511.3" font-size="19" font-weight="700" fill="#3a36b0" text-anchor="middle">Probe</text>
+<text x="439.0" y="528.8" font-size="12.5" font-weight="400" fill="#6f6e7a" text-anchor="middle" font-style="italic">wrong answers fail</text>
+</g>
+<path d="M344,513 H362" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)"/>
+<g opacity="1">
+<rect x="536" y="481" width="146" height="64" rx="10" fill="#efedfd" stroke="#9a92ee" stroke-width="1.6"/>
+<text x="609.0" y="511.3" font-size="19" font-weight="700" fill="#3a36b0" text-anchor="middle">Worker</text>
+<text x="609.0" y="528.8" font-size="12.5" font-weight="400" fill="#6f6e7a" text-anchor="middle" font-style="italic">twice = too easy</text>
+</g>
+<path d="M514,513 H532" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)"/>
+<g opacity="1">
+<rect x="706" y="481" width="146" height="64" rx="10" fill="#efedfd" stroke="#9a92ee" stroke-width="1.6"/>
+<text x="779.0" y="511.3" font-size="19" font-weight="700" fill="#3a36b0" text-anchor="middle">Audit</text>
+<text x="779.0" y="528.8" font-size="12.5" font-weight="400" fill="#6f6e7a" text-anchor="middle" font-style="italic">task's fault or not</text>
+</g>
+<path d="M684,513 H702" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)"/>
+<g opacity="1">
+<rect x="876" y="481" width="146" height="64" rx="10" fill="#fdf3e1" stroke="#e9a94a" stroke-width="4"/>
+<text x="949.0" y="511.3" font-size="19" font-weight="700" fill="#8a5a0a" text-anchor="middle">Difficulty</text>
+<text x="949.0" y="528.8" font-size="12.5" font-weight="400" fill="#6f6e7a" text-anchor="middle" font-style="italic">frontier, ≤ 3 of 6</text>
+</g>
+<path d="M854,513 H872" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)"/>
+<g opacity="0.4">
+<rect x="1046" y="481" width="146" height="64" rx="10" fill="#efedfd" stroke="#9a92ee" stroke-width="1.6"/>
+<text x="1119.0" y="511.3" font-size="19" font-weight="700" fill="#3a36b0" text-anchor="middle">Report</text>
+<text x="1119.0" y="528.8" font-size="12.5" font-weight="400" fill="#6f6e7a" text-anchor="middle" font-style="italic">worker agent</text>
+</g>
+<path d="M1024,513 H1042" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)" opacity="0.4"/>
+<g opacity="0.4">
+<rect x="1216" y="481" width="146" height="64" rx="10" fill="#fdecef" stroke="#e07f97" stroke-width="1.6"/>
+<text x="1289.0" y="511.3" font-size="19" font-weight="700" fill="#9c2f4a" text-anchor="middle">Verdict</text>
+<text x="1289.0" y="528.8" font-size="12.5" font-weight="400" fill="#6f6e7a" text-anchor="middle" font-style="italic">you, signed</text>
+</g>
+<path d="M1194,513 H1212" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)" opacity="0.4"/>
+<path d="M1364,513 H1428" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)" opacity="0.4"/>
+<rect x="1432" y="244" width="250" height="318" rx="14" fill="#f3f1fe" stroke="#9a92ee" stroke-width="2.5"/>
+<text x="1557" y="284" font-size="25" font-weight="700" fill="#3a36b0" text-anchor="middle">Index</text>
+<text x="1557" y="308" font-size="15" font-weight="400" fill="#6f6e7a" text-anchor="middle" font-style="italic">accepted tasks, e.g. OpenSSI</text>
+<rect x="1462" y="328" width="190" height="44" rx="9" fill="#e6f7f1" stroke="#5dc7a4" stroke-width="1.8" stroke-dasharray="6 5"/>
+<text x="1557" y="357" font-size="18" font-weight="400" fill="#14684a" text-anchor="middle" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace">t0036</text>
+<rect x="1462" y="386" width="190" height="44" rx="9" fill="#e6f7f1" stroke="#5dc7a4" stroke-width="1.8"/>
+<text x="1557" y="415" font-size="18" font-weight="400" fill="#14684a" text-anchor="middle" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace">t0029</text>
+<rect x="1462" y="444" width="190" height="44" rx="9" fill="#e6f7f1" stroke="#5dc7a4" stroke-width="1.8"/>
+<text x="1557" y="473" font-size="18" font-weight="400" fill="#14684a" text-anchor="middle" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace">t0011</text>
+<text x="1557" y="521" font-size="14" font-weight="400" fill="#6f6e7a" text-anchor="middle">kept in the task store,</text>
+<text x="1557" y="540" font-size="14" font-weight="400" fill="#6f6e7a" text-anchor="middle">a Hugging Face dataset</text>
+<g opacity="1">
+<rect x="1" y="590" width="1681" height="70" rx="10" fill="#f6f6f8" stroke="#b9b8c4" stroke-width="1.6"/>
+</g>
+<text x="24" y="621" font-size="21" font-weight="700" fill="#1f1f2a" text-anchor="start">Index repository</text>
+<text x="262" y="621" font-size="17" font-weight="400" fill="#1f1f2a" text-anchor="start">protocol · pinned benchmarks · contributors' keys · signed ledger</text>
+<text x="24" y="646" font-size="15" font-weight="400" fill="#6f6e7a" text-anchor="start">every stage writes signed records, keyed by the task's content digest: nothing runs twice, and anyone can check how a task got in</text>
+<path d="M400,566 V587" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)" stroke-dasharray="6 6"/>
+<path d="M1060,566 V587" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)" stroke-dasharray="6 6"/>
+<path d="M1557,566 V587" fill="none" stroke="#9a99a6" stroke-width="1.8" marker-end="url(#ah)" stroke-dasharray="6 6"/>
+</g></svg>

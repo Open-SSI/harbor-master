@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 
 from harbor_master import ledger, tasks
@@ -80,3 +81,20 @@ async def test_a_benchmark_of_which_no_task_is_accepted_is_dropped(workspace, id
         assert "Rejected" in interact.decide(s, task, "reject the verifier is too loose")
     assert s.benches["demo-bench"].kept + s.benches["demo-bench"].dropped == 1
     assert status() == "dropped" and "no task was accepted" in s.benches["demo-bench"].detail
+
+
+async def test_an_unstated_check_is_the_worker_agents_to_confirm_never_the_small_models_word(workspace, session, monkeypatch):
+    from harbor_master.backends import Decision
+    from harbor_master.engine import stages
+    from harbor_master.engine.state import CellState
+    task = tasks.load_benchmark(Path(tasks.read_registry(workspace)["demo-bench"]["path"]), "demo-bench")[0]
+    asked = []
+
+    async def covers(task, first=None):         # the small model is sure, and wrong; the worker agent reads the files
+        asked.append(first)
+        return (Decision("unstated", 0.95, "decision", "small") if first is None else
+                Decision("covered", 0.9, "worker", "agent", rationale="everything is stated"))
+    monkeypatch.setattr(session.backend, "covers", covers)
+    assert await stages.coverage(session, CellState(1), task) == ("ok", "") and len(asked) == 2
+    said = [e for e in session.ledger.events if e.get("gate") == "coverage"]
+    assert [(e["tier"], e["outcome"]) for e in said] == [("decision", "escalate"), ("worker", "pass")]

@@ -130,7 +130,8 @@ class SimulatedBackend(Backend):
             self._spend("worker", 0.05, 6_000)
             await self._step()
             return Decision(value, 0.97, "worker", self.cfg.tiers.worker.model, 0.05, 6_000,
-                            "Read the tests against the instruction.")
+                            "The tests require a tolerance of 1% on each value, and the instruction never states one."
+                            if value == "unstated" else "Everything the tests rely on is in the instruction.")
         r = _rng("covers", task.digest)
         tokens = max(400, len(task.instruction) // 2)
         cost = tokens * 0.042e-6

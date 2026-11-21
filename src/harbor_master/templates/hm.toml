@@ -11,3 +11,4 @@ sandbox = "docker"              # "docker" | "daytona" | "modal". "none" runs an
 claim_hours = 12.0              # how long a claim on a benchmark holds. A run that goes on renews it
 watch_minutes = 3.0             # how often a running trial's logs are looked at
 quiet_minutes = 9.0             # logs still for this long: the worker agent reads them, and a hung trial is stopped
+agent_setup_minutes = 30.0      # installing an agent in a task's container, before it runs: Harbor's own limit is 6

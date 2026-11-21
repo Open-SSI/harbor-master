@@ -219,6 +219,9 @@ class Session:
         self.durations.setdefault((task.benchmark, stage), []).append(seconds)
         self.board(task)["stages"].append({"stage": STAGES[stage], "seconds": round(seconds, 2), **record})
         self.save_board(task)
+        said = stages.progress(STAGES[stage], record)        # what it found, in the log, for whoever watches
+        if said:
+            self.note_recent(STAGES[stage], task.task_id, said)
 
     async def container(self, coro):
         while self.containers_used >= self.max_containers:     # the limit can change while the run goes on
@@ -478,6 +481,8 @@ class Session:
             cell.task, cell.started, cell.cost, cell.attention, cell.stopping = task, time.time(), 0.0, False, False
             cell.runner = asyncio.current_task()
             BENCH.set(task.benchmark)
+            title = str((task.meta.get("task") or {}).get("title") or "")
+            self.note_recent("started", task.task_id, f"in work cell {cell.n}" + (f": {title}" if title else ""))
             bench = self.benches[task.benchmark]
             try:
                 await stages.process(self, cell, task)

@@ -5,10 +5,8 @@
 </p>
 
 <p align="center">
-  <img src="assets/curate.png" width="100%" alt="The curate screen: the benchmark's stages as boxes joined by arrows with curate lit, four work cells, and work cell 1's task at its worker stage, with an arrow from fix back to verify.">
+  <img src="assets/pipeline.svg" width="100%" alt="How a benchmark becomes index tasks. Once per benchmark: fetch, check, adapt, screen, rank and select. Each selected task then goes through a work cell of its own, in parallel: verify, probe, worker, audit (with a fix loop back to verify), difficulty, report, verdict. Accepted tasks land in the index, and every stage writes signed records to the index repository.">
 </p>
-
-> **Status.** Built and tested on a simulated backend that spends nothing; real runs have been tried end to end on two benchmarks. [DESIGN.md](DESIGN.md), Section 13, says what is built.
 
 ## Install
 
@@ -35,16 +33,15 @@ hm clone INDEX && cd INDEX
 hm curate
 ```
 
-Send the owner the line `hm init` printed, so they can add you. Your clone has its own `secrets.env` and `hm.toml` at its top, made from the examples the index commits; git ignores both, and you edit them with any editor. The first real `hm curate` lists the keys it still needs: a Claude and an OpenAI key or subscription (one is enough), and your own `HF_TOKEN`. Before anything is spent, it tries each key, the task store, a push to the index's repository, and Docker.
+Send the owner the line `hm init` printed, so they can add you. Put your keys in the clone's `secrets.env` (git ignores it): a Claude and an OpenAI key or subscription, an OpenRouter key, and your own `HF_TOKEN`. `hm curate` checks them all, and Docker, before anything is spent.
 
-**The curate screen.** Type a listed benchmark's name, or paste any link to a new one: an agent finds its repository and release, and you check the draft once. Cheap checks on the whole benchmark follow (recent, tasks for agents, graded by a program, public). Then the benchmark goes through its stages, and each work cell takes one chosen task through its own:
+## The curate screen
 
-```
-fetch ─▶ check ─▶ adapt ─▶ screen ─▶ rank ─▶ select ─▶ curate ─▶ review ─▶ curated
-verify ─▶ probe ─▶ worker ─▶ audit ─▶ fix ─▶ difficulty ─▶ report
-```
+<p align="center">
+  <img src="assets/curate.png" width="100%" alt="The curate screen: the benchmark's stages as boxes joined by arrows with curate lit, four work cells, work cell 1's task at its worker stage, and the log of what each stage found.">
+</p>
 
-You type in three places; every other box is one `enter` on what is already filled in.
+Type a listed benchmark's name, or paste any link to a new one: an agent finds its repository and release, and you check the draft once. You type in three places; every other box is one `enter`.
 
 | You type | You confirm |
 |---|---|
@@ -52,13 +49,11 @@ You type in three places; every other box is one `enter` on what is already fill
 | The **selection**: how many ranked tasks go on | How many work cells run at once |
 | A **verdict** on each kept task: `accept`, or `reject <why>` | A benchmark that is rejected, with why |
 
-If a trial hangs (its logs stand still and the worker agent reads them as stuck), it is stopped and a box asks whether to retry it or drop the task.
+A trial that hangs is stopped, and a box asks whether to retry it or drop the task. `ctrl+l` leaves (a real run goes on, and `hm curate` shows it again), `ctrl+z` ends the run.
 
 <p align="center">
   <img src="assets/review.png" width="100%" alt="The review box: the report on a kept task, opening with its recommendation and the reasons for it, and an input for accept or reject.">
 </p>
-
-Keys: `1`–`8` a work cell, `enter` its task, `pgup`/`pgdn` the log, `ctrl+l` leaves (a real run goes on, and `hm curate` shows it again; a demo ends), `ctrl+z` ends the run. Both work from every box.
 
 ## Start your own index
 
@@ -66,15 +61,14 @@ Create an empty GitHub repository, and have a Hugging Face token with write acce
 
 ```bash
 HF_TOKEN=hf_... hm new my-index --tasks my-lab/my-index-tasks --repo my-lab/my-index
-cd my-index
 ```
 
-`--tasks` is the **task store**, a private Hugging Face dataset for the accepted tasks; `--repo` is where the index's files and records are shared. `hm new` checks both before it makes anything.
+`--tasks` is the **task store**, a private Hugging Face dataset for the accepted tasks; `--repo` is where the index's files and records are shared.
 
 | To | Do |
 |---|---|
 | Set it up | Edit `about.toml`, `protocol.toml` and `skills/` |
-| Let someone in | `hm contributors add ...` with the line they sent; `hm contributors role HANDLE lead` |
+| Let someone in | `hm contributors add ...` with the line they sent |
 | See where it stands | `hm view` |
 | Make the final cut | `hm cut TASK why`; `hm restore TASK` undoes it |
 | Get it listed | `hm publish` |
@@ -85,21 +79,21 @@ cd my-index
 
 ## How curation works
 
-A fast **decision** model takes every gate, a **worker** model builds, audits and repairs, and a **frontier** model is called only when they are unsure or stuck.
+A fast **decision** model takes every gate, a **worker** agent builds, audits and repairs, and **frontier** agents are called only when those are unsure or stuck.
 
 1. **Fetch** the benchmark at its pinned release, **check** it as a whole, and **adapt** it to Harbor format if needed.
 2. **Screen** each task: an agent executes work, a program grades it, and no model is reported to solve it more than 40% of the time.
 3. **Rank** the tasks under your brief and **select** the top ones (at most 24, and a quarter of the benchmark).
-4. **Verify and probe** each: it builds, its reference solution passes (one is written if missing), a no-op and wrong answers fail.
-5. **Worker**: a task the worker model solves twice is too easy. An audit reads its failures; a broken task is repaired and checked again.
+4. **Verify and probe**: the reference solution passes (one is written if missing), a no-op and wrong answers fail.
+5. **Worker and audit**: a task the worker agent solves twice is too easy; a broken one is repaired and checked again.
 6. **Difficulty**: two frontier agents try three times each; a task is kept if at most 3 of the 6 pass.
-7. **Report**: you accept or reject each kept task. A dropped task gets no report.
+7. **Report**: you accept or reject each kept task.
 
-A benchmark rejected before curating, or of which no task is accepted, is dropped after you confirm. A dropped benchmark stays on the list, and anyone may curate it again.
+A benchmark that is rejected, or of which no task is accepted, is dropped after you confirm; anyone may curate it again.
 
 ## An index
 
-An index is a git repository; your clone is its folder.
+An index is a git repository; your clone is its folder. Every `hm` command in it pulls first and pushes what is new, and a run claims a whole benchmark, so two people never curate the same one.
 
 | File | Holds |
 |---|---|
@@ -107,8 +101,6 @@ An index is a git repository; your clone is its folder.
 | `benchmarks.toml`, `contributors.toml` | The benchmarks it may curate, and who may contribute |
 | `adapters/` | Code that turns a benchmark into Harbor tasks |
 | `ledger/`, `reports/`, `index.toml` | Every signed record, the reports, and the accepted tasks |
-
-Every `hm` command inside an index pulls first and pushes what is new, so there is no sync step. A run claims a whole benchmark, so two people never curate the same one. Simulated runs (`--demo`, `--simulate`) never count: their records stay in `.hm/`, which git ignores.
 
 ## Commands
 
@@ -118,7 +110,7 @@ Every `hm` command inside an index pulls first and pushes what is new, so there 
 | | `hm indexes`, `hm clone INDEX` | The listed indexes; clone one |
 | | `hm new INDEX --tasks ORG/NAME --repo OWNER/NAME` | Start your own |
 | In an index | `hm curate` | The curate screen |
-| | `hm benchmarks` | The benchmarks and where each stands (`add`, `revise`, `confirm`, `remove`) |
+| | `hm benchmarks` | The benchmarks and where each stands |
 | Owner and leads | `hm view`, `hm cut`, `hm restore` | The dashboard; the final cut |
 | Owner | `hm contributors`, `hm publish` | Who may contribute; ask to be listed |
 
@@ -130,7 +122,7 @@ uv sync && uv run pytest
 uv tool install --editable .     # hm from this checkout
 ```
 
-`src/harbor_master/` is the package, with the agents' instructions in `skills/` and a new index's files in `templates/`. [DESIGN.md](DESIGN.md) has the design, the costs, and what is built.
+[DESIGN.md](DESIGN.md) has the design, the costs, and what is built.
 
 ## Citation
 
