@@ -8,7 +8,7 @@ from .. import ledger
 from ..engine.state import STAGES
 from ..tasks import Task
 from . import answers
-from .registry import command, help_text, planned
+from .registry import command, help_text
 
 if TYPE_CHECKING:
     from ..engine import Session
@@ -81,12 +81,12 @@ WORDS = {"accept": "accept", "a": "accept", "reject": "reject", "r": "reject", "
 
 
 def decide(session, task, line: str) -> str:
-    """What a reviewer types under a report they have open: accept [why] or reject why. A verdict is given
-    nowhere else, so none is given unread."""
+    """What a reviewer types under a report they have open: accept [why] or reject <why>. A rejection needs a reason.
+    A verdict is given nowhere else, so none is given unread."""
     words = line.split()
     what = WORDS.get(words[0].lower().lstrip("/")) if words else None
     if what is None:
-        return "Type accept [why] or reject <why>."
+        return "Type accept, or reject <why>."
     name, value, need = {"accept": ("accept", "accept", False), "reject": ("reject", "drop", True)}[what]
     return _verdict(session, [task.task_id, *words[1:]], name, value, need)
 
@@ -99,8 +99,6 @@ def report(session, args):
 @command("selection", "view", "/selection benchmark")
 def selection(session, args):
     return answers.selection_list(session, args[0]) if args else "Use /selection BENCHMARK"
-planned("logs", "view", "/logs ID")
-planned("trajectory", "view", "/trajectory ID")
 
 
 # ----- control: confirmed when read from plain text -----
@@ -191,7 +189,6 @@ def undo(session, args):
     return "Undone."
 
 
-planned("sync", "control", "/sync")
 
 
 # ----- confirm: spends, discards, or decides, so always confirmed -----
@@ -228,24 +225,10 @@ def drop(session, args):
     return f"Dropped {task.task_id}."
 
 
-@command("budget", "confirm", "/budget N", "the session may spend up to ${0}")
-def budget(session, args):
-    try:
-        value = float(args[0])
-    except (IndexError, ValueError):
-        return "Give an amount in dollars: /budget 300"
-    session.budget = value
-    if session.spent < value:
-        session.requests[:] = [r for r in session.requests if r.kind != "budget"]
-        session.write_requests()
-        session.paused = False
-    return f"Budget is now ${value:.0f}. Spent so far: ${session.spent:.2f}."
-
-
 @command("model", "view", "/model")
 def model(session, args):
-    return ("The tiers and their models are part of the locked protocol, so they cannot change during a curation. "
-            "To change one, the owner edits protocol.toml and locks the new protocol: hm lock")
+    return ("The tiers and their models are set in the index's protocol.toml, so they cannot change during a curation. "
+            "To change one, the owner edits protocol.toml, and their next hm command shares it.")
 
 
 @command("brief", "answer", "/brief benchmark text", "your brief is written to the ledger")
@@ -295,25 +278,6 @@ def _adapter_request(session, args, kind: str):
     return next((r for r in session.requests if r.kind == kind and (not args or r.target == args[0])), None)
 
 
-@command("recheck", "control", "/recheck benchmark", "its adapter is checked again: your fix if you made one, otherwise one more try by the frontier model")
-def recheck(session, args):
-    waiting = _adapter_request(session, args, "adapter")
-    if waiting is None:
-        return "No adapter is waiting for you" + (f" for {args[0]}." if args else ".")
-    session.answer_request(waiting, "retry")
-    return f"Checking the adapter for {waiting.target} again."
-
-
-@command("abandon", "confirm", "/abandon benchmark", "the benchmark is given up for this index until someone builds its adapter by hand")
-def abandon(session, args):
-    waiting = _adapter_request(session, args, "adapter")
-    if waiting is None:
-        return "No adapter is waiting for you" + (f" for {args[0]}." if args else ".")
-    session.answer_request(waiting, "abandon")
-    return (f"{waiting.target} is abandoned: its adapter could not be made to pass. To try again later, "
-            f"take it off the list and add it again: hm benchmarks remove {waiting.target}, then hm benchmarks add URL")
-
-
 @command("lock", "answer", "/lock benchmark", "its adapter is recorded as passing, and its tasks start")
 def lock(session, args):
     waiting = _adapter_request(session, args, "lock")
@@ -333,7 +297,7 @@ def _verdict(session, args, name: str, value: str, need_reason: bool) -> str:
         return f"{task.task_id} has no report waiting for your verdict."
     reason = " ".join(args[1:])
     if need_reason and not reason:
-        return f"Give a reason: {name} <why>"
+        return f"Give a brief reason: {name} <why>"
     if value == "accept" and any(e.get("assumed") and e.get("digest") == task.digest
                                  for e in session.ledger.by_task.get(task.task_id, [])):
         return (f"{task.task_id} cannot be accepted: some of its results were assumed, not run. "
@@ -360,7 +324,7 @@ def included(session, args):
 
 
 def accept(session, args):
-    return _verdict(session, args, "accept", "accept", need_reason=False)
+    return _verdict(session, args, "accept", "accept", need_reason=True)
 
 
 def reject(session, args):
@@ -374,9 +338,6 @@ def kill(session, args):
     return "Stopped everything."
 
 
-for _name, _usage in (("restart", "/restart ID"), ("retry", "/retry ID [stage]"), ("escalate", "/escalate ID"),
-                      ("limit", "/limit tokens N")):
-    planned(_name, "confirm", _usage)
 
 
 @command("theme", "view", "/theme [light|dark]")

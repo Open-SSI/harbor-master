@@ -1,14 +1,18 @@
 # What this index is. Shown wherever indexes are listed, with its owner (from
 # contributors.toml) and its accepted tasks (from index.toml).
-# Not part of the locked protocol: the owner may change it at any time.
+# The owner changes it at any time, and the change is shared from their next hm command.
 
-# Marks this repository as a Harbor-Master index: hm open refuses a repository without it. It also marks
+# Marks this repository as a Harbor-Master index: hm clone refuses a repository without it. It also marks
 # the index's contents as benchmark data, which should never appear in training corpora.
 canary = "harbor-master-canary GUID $canary"
 
 # The short name (lower case, digits and hyphens), and the full one.
 name = "$name"
 title = "$title"
+
+# The index's version. The owner sets it: raise it when protocol.toml or skills/ change in a way
+# that changes results, such as 0.1.0 to 0.2.0, and to 1.0.0 when the index is finished.
+version = "0.1.0"
 
 # One or two sentences: what the index measures, and for whom.
 description = ""
@@ -20,5 +24,5 @@ license = ""
 # Where the accepted tasks are kept, each as one archive named by its digest, so that a later
 # benchmark run gets exactly the version that was accepted. A Hugging Face dataset repository,
 # written as "org/name". Every index has one: it is named, and created, when the index is.
-# To name another, the owner changes it here, then runs hm lock, which creates it.
+# To name another, the owner changes it here, and their next hm command creates it.
 tasks = ""

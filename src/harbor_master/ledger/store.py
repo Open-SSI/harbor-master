@@ -108,7 +108,7 @@ class Ledger:
         if key is not None:
             self.taken.setdefault(key, e)
         if e["type"] == "decision":
-            self._decisions[(e["digest"], e.get("stage", ""), e.get("gate", ""), e["protocol"])].append(e)
+            self._decisions[(e.get("digest") or e.get("benchmark", ""), e.get("stage", ""), e.get("gate", ""), e["protocol"])].append(e)
 
     def _kinds(self, kind: str) -> tuple[str, ...]:
         return (kind, kind + ":assumed") if self.accept_assumed else (kind,)

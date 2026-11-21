@@ -1,4 +1,4 @@
-"""Take a picture of every box of hm init, of hm init run again, of the eval screen, and of an index's dashboard.
+"""Take a picture of every box of hm init, of hm init run again, and of the dashboard of demo-index.
 
     uv run --with pillow --with fonttools python tools/onboarding_shots.py OUT_DIR [--font-dir DIR]
 
@@ -58,88 +58,35 @@ async def main(out: Path, font_dir: Path | None) -> None:
         from harbor_master.core import identity
         from harbor_master.tui.wizard import WizardApp
 
-        n = await walk(WizardApp("hm init", flows.init_steps(None)), [*WHO, None], out, "init", font_dir)
+        await walk(WizardApp("hm init", [*flows.init_steps(None), flows.start_step()]), [*WHO, None, None], out, "init", font_dir)
         me = identity.create(*WHO)
-        await walk(WizardApp("getting started", flows.start_steps(None)), ["", None, 1], out, "init", font_dir, n)
         # hm init again: every box shows what this machine has, to keep with enter or to change.
         await walk(WizardApp("hm init", flows.init_steps(me)), [None, None, None, None, None], out, "rerun", font_dir)
 
-        # The eval screen, on the demo: the made-up tasks, accepted in a simulated run, and their simulated evaluation.
-        from harbor_master import ledger, tasks
-        from harbor_master.core import config as config_mod
-        from harbor_master.engine import Evaluation, Session
-        from harbor_master.tui.evals import EvalApp
-        ws = flows.get_index("")
-        from harbor_master.cli.home import demo_eval
-        await asyncio.to_thread(demo_eval, ws)
-        cfg = config_mod.load(ws)
-        index = ledger.index_entries(ledger.Ledger(config_mod.simulated(ws), simulated=True).events)
-        by_id = {t.task_id: t for t in tasks.load_benchmark(Path(tasks.read_registry(ws)["demo-bench"]["path"]), "demo-bench")}
-        run = Evaluation(Session(ws, cfg, me, tasks.read_registry(ws), simulate=True, speed=0.06, no_input=True), index,
-                         config_mod.demo_roster(cfg), lambda entry: by_id[entry["task"]])
-        screen = EvalApp(run, "Practice index")
-        async with screen.run_test(size=(132, 40)) as pilot:
-            await pilot.pause(2.6)
-            draw(grab(screen), 132, out / "eval-01-screen.png", font_dir, size=22)
-            print("eval-01-screen.png")
-            run.quitting = True
-            await pilot.pause(1.5)
-
-        # The index's dashboard, with simulated progress in both stages: two made-up benchmarks curated, some reports
-        # still to review, and part of the evaluation done by three people.
-        import tomli_w
-
+        # The index's dashboard, on demo-index: the made-up people's curation, and the person's own demo benchmark,
+        # curated in a simulated run with its reports signed.
         from harbor_master import interact
-        from harbor_master.cli.dev import fake_benchmark
-        from harbor_master.ledger import evals
+        from harbor_master.cli.home import demo_bench, demo_world
+        from harbor_master.cli.setup import make_demo
+        from harbor_master.core import config as config_mod
+        from harbor_master.engine import Session
+        from harbor_master.tasks import read_registry
         from harbor_master.tui import IndexApp
-        ws = Path("science-index").resolve()
-        from harbor_master.cli.setup import index_new
         with flows.console.capture():
-            index_new("science-index", None, "Open Science Index", "", str(Path(tmp) / "store"))
-        people = [("Grace Hopper", "grace", "lead"), ("Alan Turing", "alan", "evaluator")]
-        who = {"ada": me}
-        for name, handle, _ in people:
-            os.environ["HM_CONFIG_DIR"] = str(Path(tmp) / f"config-{handle}")
-            who[handle] = identity.create(name, "Analytical University", f"{handle}@example.org", handle)
-        os.environ["HM_CONFIG_DIR"] = str(Path(tmp) / "config")
-        listed = ledger.load_contributors(ws) + [{"name": n, "github": h, "key": who[h].public_key, "role": r} for n, h, r in people]
-        (ws / ledger.CONTRIBUTORS).write_text(tomli_w.dumps({"contributor": listed}))
-        for bench, n in (("chem-bench", 40), ("earth-bench", 32)):
-            fake_benchmark(bench, n, directory=config_mod.local(ws) / "fake", seed=3)
-            tasks.register(ws, bench, config_mod.local(ws) / "fake" / bench, dev=True)
+            ws = make_demo(Path("demo-index").resolve())
+            await asyncio.to_thread(demo_world, ws)
+            demo_bench(ws)
         cfg = config_mod.load(ws)
         cfg.select.require_brief = cfg.select.require_signoff = False
-        s1 = Session(ws, cfg, me, tasks.read_registry(ws), simulate=True, speed=0, no_input=True)
-        s1.is_reviewer = True
-        await s1.run()
-        for n, task in enumerate(list(s1.ready)):
-            if n % 4 != 3:                              # some reports still wait for their reviewer
-                interact.decide(s1, task, "accept clean and hard" if n % 5 else "reject the tolerance looks arbitrary")
-        root = config_mod.simulated(ws)
-        index = ledger.index_entries(ledger.Ledger(root, simulated=True).events)
-        by_id = {t.task_id: t for b in tasks.read_registry(ws).values() for t in tasks.load_benchmark(Path(b["path"]), Path(b["path"]).name)}
-        (ws / "roster.toml").write_text(tomli_w.dumps({"config": [
-            *({"name": e.model, **e.model_dump(exclude={"env", "key", "use"}, exclude_none=True)} for e in cfg.difficulty.suite),
-            {"name": "claude-opus-5.5", "agent": "claude-code", "model": "claude-opus-5-5", "version": "2.1.292", "reasoning_effort": "high"},
-            {"name": "gpt-5.5-codex", "agent": "codex", "model": "gpt-5.5", "version": "0.162.1", "reasoning_effort": "high"},
-            {"name": "gemini-3-pro", "agent": "gemini-cli", "model": "gemini-3-pro", "version": "0.31.0"}]}))
-        roster = config_mod.roster(ws)
-        for handle, k in (("ada", 4), ("grace", 3), ("alan", 4)):
-            os.environ["HM_CONFIG_DIR"] = str(Path(tmp) / ("config" if handle == "ada" else f"config-{handle}"))
-            part = Evaluation(Session(ws, cfg, who[handle], tasks.read_registry(ws), simulate=True, speed=0, no_input=True), index,
-                              roster, lambda entry: by_id[entry["task"]], k)
-            await part.run(rounds=1)
-        os.environ["HM_CONFIG_DIR"] = str(Path(tmp) / "config-grace")      # a claim that is still held, by someone else
-        done = evals.agent_trials(ledger.Ledger(root, simulated=True).events, evals.read(root, True))
-        cells = [c for c in evals.cells(index, roster, cfg.eval, done, evals.read(root, True), 0) if c.open][:3]
-        import time
-        evals.append(root, who["grace"], "claim", True, cells=[c.key for c in cells], machine="other", expires=round(time.time() + 3600))
-        os.environ["HM_CONFIG_DIR"] = str(Path(tmp) / "config")
-        board = IndexApp(ws)
-        async with board.run_test(size=(140, 44)) as pilot:
+        s = Session(ws, cfg, me, {"demo-bench": read_registry(ws)["demo-bench"]}, simulate=True, speed=0, no_input=True)
+        s.is_reviewer = True
+        await s.run()
+        for task in list(s.ready):
+            interact.decide(s, task, "accept clean and hard")
+        board = IndexApp(ws, demo=True)
+        async with board.run_test(size=(140, 40)) as pilot:
             await pilot.pause(0.5)
-            for name, button in (("index-01-dashboard", None), ("index-02-leaderboard", "#view-leaderboard"), ("index-03-status", "#view-status")):
+            for name, button in (("index-01-dashboard", None), ("index-02-status", "#view-status"), ("index-03-benchmarks", "#view-benchmarks")):
                 if button:
                     await pilot.click(button)
                     await pilot.pause(0.8)
@@ -148,7 +95,6 @@ async def main(out: Path, font_dir: Path | None) -> None:
                 if button:
                     await pilot.press("escape")
                     await pilot.pause(0.3)
-
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()

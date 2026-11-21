@@ -38,13 +38,13 @@ def make_store(cfg) -> bool:
         else:
             there.create()
             console.print(f"[{theme.TE}]Created the task store:[/] {there.where}. It is private: on Hugging Face, give your "
-                          "contributors write access to it, and open it to everyone when the index is released.", highlight=False)
+                          "contributors write access to it, and open it to everyone when the index is finished.", highlight=False)
         why = there.writable()      # every contributor must be able to put an accepted task there, and get one back
         if why:
-            console.print(f"[{theme.AM}]{why}[/] Give the token that access, then run hm lock again.", highlight=False)
+            console.print(f"[{theme.AM}]{why}[/] Give the token that access: the next hm command tries again.", highlight=False)
         return not why
     except store.StoreError as err:
-        console.print(f"[{theme.AM}]The task store is named and not created yet:[/] {err}\nhm lock creates it once that is fixed.",
+        console.print(f"[{theme.AM}]The task store is named and not created yet:[/] {err}\nThe owner's next hm command creates it once that is fixed.",
                       highlight=False)
         return False
 

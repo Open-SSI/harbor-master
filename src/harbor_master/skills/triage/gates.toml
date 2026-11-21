@@ -34,11 +34,3 @@ question = "Judging only from this task, is it 'distinct', or does its own text 
 distinct = "Nothing in the task says it copies another task."
 variant = "The task's own text says it is a variant of another task."
 same = "The task's own text says it is the same as another task."
-
-[license]
-question = "May the task be used for evaluation? 'ok' if a license or the text allows it or nothing forbids it, 'no_redistribution' if it forbids sharing, 'unclear' if it cannot be told."
-
-[license.criteria]
-ok = "A license or the task's text allows use for evaluation, or nothing forbids it."
-no_redistribution = "The license or text forbids sharing or redistribution."
-unclear = "No license is given and the text does not settle it."

@@ -1,8 +1,10 @@
-"""Drafting a benchmark's entry when someone adds it to an index (DESIGN.md Section 10).
+"""Drafting a benchmark's entry when someone adds it to an index (DESIGN.md Section 9).
 
-The person gives an address. The code reads what can be read without judgment: the release, the
-commit, where the tasks are. A small agent reads the repository for the rest: name, description,
-paper, and the date the benchmark was released, which the recency gate compares. The person confirms the draft or says what to change, and only then is it signed.
+The person gives whatever they have: a repository in any form, a Hugging Face page, a paper, a project page, or a
+name. The worker agent searches the web for the benchmark's repository and for what is known about it: name,
+description, paper, and the date it was released, which the recency gate compares. The code then does what needs no
+judgment: it pins the release, downloads it, and finds the tasks. The person checks the draft once, or says what to
+change, and only then is it signed.
 """
 from __future__ import annotations
 
@@ -15,12 +17,27 @@ from . import sessions
 
 SKILL = "session/describe-benchmark"
 EDITABLE = ("name", "description", "paper", "released", "license", "homepage")
+# What the agent reads, for the benchmark-level checks (tasks/checks.py): not edited by hand, but kept in the entry.
+ASSESSED = ("task_kind", "grading", "solutions", "access", "best_reported", "assessed_from")
+KINDS = ["agentic", "multiple_choice", "question_answering", "short_answer", "mixed", "unknown"]
+GRADING = ["programmatic", "llm_judge", "human", "none", "unknown"]
+SOLUTIONS = ["all", "some", "none", "unknown"]
+ACCESS = ["public", "gated", "held_out", "unknown"]
 SCHEMA = {
-    "type": "object", "additionalProperties": False, "required": list(EDITABLE),
-    "properties": {"name": {"type": "string"}, "description": {"type": "string"}, "paper": {"type": "string"},
+    "type": "object", "additionalProperties": False, "required": ["repository", "release", *EDITABLE, *ASSESSED, "sources"],
+    "properties": {"repository": {"type": "string", "description": "the plain address to download it from, or empty"},
+                   "release": {"type": "string", "description": "the newest release tag, or empty"},
+                   "name": {"type": "string"}, "description": {"type": "string"}, "paper": {"type": "string"},
                    "released": {"type": "string", "description": "YYYY-MM-DD, or empty"},
                    "license": {"type": "string"},
-                   "homepage": {"type": "string"}},
+                   "homepage": {"type": "string"},
+                   "task_kind": {"type": "string", "enum": KINDS},
+                   "grading": {"type": "string", "enum": GRADING},
+                   "solutions": {"type": "string", "enum": SOLUTIONS},
+                   "access": {"type": "string", "enum": ACCESS},
+                   "best_reported": {"type": "number", "description": "the best share of tasks any model or agent is reported to solve, 0 to 1, or -1"},
+                   "assessed_from": {"type": "string", "description": "one sentence: where those five came from"},
+                   "sources": {"type": "array", "items": {"type": "string"}, "maxItems": 5}},
 }
 PAPER = re.compile(r"https?://(?:arxiv\.org/(?:abs|pdf)/[\w.\-/]+|doi\.org/[\w.\-/()]+|openreview\.net/forum\?id=[\w\-]+)")
 
@@ -38,7 +55,15 @@ def guess(repo: Path) -> dict:
 
 
 def merge(entry: dict, data: dict) -> dict:
-    """Take what was filled in. An empty answer leaves what the draft had."""
+    """Take what was filled in. An empty answer leaves what the draft had. What the agent assessed for the checks is
+    taken as it is, and an unknown one leaves what was there."""
+    for key in ASSESSED:
+        value = data.get(key)
+        if key == "best_reported":
+            if isinstance(value, (int, float)) and 0 <= value <= 1:
+                entry[key] = round(float(value), 3)
+        elif isinstance(value, str) and value.strip() and value != "unknown":
+            entry[key] = " ".join(value.split())[:300]
     for key in EDITABLE:
         value = data.get(key)
         if isinstance(value, str):
@@ -66,11 +91,14 @@ def _lines(entry: dict, keys) -> str:
     return "\n".join(f"{k}: {entry[k]}" for k in keys if entry.get(k) not in (None, "", [])) or "(nothing)"
 
 
-async def fill(cfg: Config, entry: dict, repo: Path, note: str = "") -> tuple[dict, float]:
-    """One short session of the worker tier, reading the repository. Returns what it filled in, and what it cost."""
+async def find(cfg: Config, given: str, entry: dict | None = None, repo: Path | None = None, note: str = "") -> tuple[dict, float]:
+    """One session of the worker tier that searches the web for the benchmark: from what the person gave, its
+    repository, its newest release and its entry. With `entry` and `repo`, a draft is being corrected: the agent sees
+    it, and can read the repository as it was downloaded. Returns what it found, and what it cost."""
     skill = skills.load(SKILL)
-    known = _lines(entry, ("id", "github", "version", "released", "tasks", "task_count", "format"))
+    entry = entry or {}
+    known = _lines(entry, ("id", "github", "ref", "version", "tasks", "task_count", "format"))
     reply = await sessions.ask(cfg.tier("worker"), skill.system,
-                             skill.fill(known=known, draft=_lines(entry, EDITABLE), note=note or "(nothing yet)"),
-                             SCHEMA, cwd=repo, max_turns=10)
+                               skill.fill(given=given, known=known, draft=_lines(entry, EDITABLE), note=note or "(nothing yet)"),
+                               SCHEMA, cwd=repo if repo is not None and repo.is_dir() else None, max_turns=24, web=True)
     return reply.data, reply.cost

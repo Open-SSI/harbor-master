@@ -97,17 +97,14 @@ def submitted(events: Iterable[dict]) -> dict[str, dict]:
 
 
 def abandoned(events: Iterable[dict]) -> dict[str, dict]:
-    """The benchmarks given up because no adapter could be made to pass: benchmark -> the record that says so.
-    The latest record of the adapt stage decides, so an adapter that passes later reopens the benchmark. So does
-    adding the benchmark to the list again: what was decided before that no longer counts."""
-    events = list(events)
-    added = {e["entry"]["id"]: e["time"] for e in sorted(events, key=lambda e: e["time"])
-             if e["type"] == "benchmark" and e.get("value") == "add" and isinstance(e.get("entry"), dict)}
-    last: dict[str, dict] = {}
-    for e in sorted((e for e in events if e["type"] == "decision" and e.get("stage") == "adapt"), key=lambda e: e["time"]):
-        if e["time"] >= added.get(e["benchmark"], 0):
-            last[e["benchmark"]] = e
-    return {b: e for b, e in last.items() if e.get("outcome") == "drop"}
+    """The benchmarks dropped before curating: no adapter could be made to pass, or a person confirmed another reason, such
+    as tasks whose environments are not public. benchmark -> the record that says so. A dropped benchmark stays dropped:
+    it cannot be added to the index again."""
+    out: dict[str, dict] = {}
+    for e in sorted((e for e in events if e["type"] == "decision" and e.get("stage") in ("adapt", "benchmark") and e.get("outcome") == "drop"),
+                    key=lambda e: e["time"]):
+        out.setdefault(e["benchmark"], e)
+    return out
 
 
 def credits(events: Iterable[dict]) -> dict[str, dict]:
@@ -122,55 +119,6 @@ def credits(events: Iterable[dict]) -> dict[str, dict]:
         c[{"trial": "trials", "submission": "submissions", "repair": "repairs", "verdict": "verdicts",
            "brief": "briefs", "decision": "decisions"}.get(e["type"], "other")] += 1
     return out
-
-
-def leaderboard(events: Iterable[dict], roster: list[dict] | None = None,
-                suite: Iterable[tuple[str, str]] = (), evals: Iterable[dict] = ()) -> tuple[list[dict], int]:
-    """How each agent configuration does on the accepted tasks. Returns the rows and the number of accepted tasks.
-
-    Only accepted tasks count, at the version that was accepted, so a task that was repaired after its
-    difficulty run is evaluated afresh. The trials are those of the evaluation, `evals`, and the difficulty
-    trials of curation, which are not run a second time. A trial that failed for an infrastructure reason,
-    or whose results were assumed, is left out. A configuration's score is its pass rate on each task,
-    averaged over the tasks it has run, so a task with more trials does not weigh more. `roster` adds a row
-    for every configuration that should be run, even with nothing yet. `suite` marks the configurations the
-    tasks were selected against, and each row counts its trials that the selection itself rested on.
-    """
-    events = list(events)
-    index = {s.task_id: s.digest for s in fold(events).values() if s.status == "accepted"}
-    rows: dict[tuple, dict] = {}
-
-    def row(agent: str, version: str, model: str, effort: str, name: str = "") -> dict:
-        return rows.setdefault((agent, version, model, effort), {
-            "name": name, "agent": agent, "version": version, "model": model, "effort": effort, "trials": 0,
-            "selection_trials": 0, "per_task": {}, "runners": set(), "selected_against": (agent, model) in set(suite)})
-
-    for c in roster or []:
-        row(c["agent"], c.get("version", ""), c["model"], c.get("reasoning_effort", ""), c.get("name", ""))
-    seen: set[tuple] = set()
-    for e in (*events, *evals):
-        if e["type"] != "trial" or e.get("purpose") not in ("difficulty", "benchmark") or e.get("assumed") or e.get("error"):
-            continue
-        slot = (e["digest"], e.get("agent", ""), e.get("agent_version", ""), e.get("model", ""), e.get("reasoning_effort", ""), e.get("trial_index", 0))
-        if index.get(e["task_id"]) != e["digest"] or slot in seen:
-            continue
-        seen.add(slot)
-        r = row(*slot[1:5])
-        r["trials"] += 1
-        r["selection_trials"] += e["purpose"] == "difficulty"
-        r["runners"].add(e["runner"])
-        p = r["per_task"].setdefault(e["task_id"], [0, 0])
-        p[0] += int(bool(e.get("passed")))
-        p[1] += 1
-    out = []
-    for r in rows.values():
-        done = r.pop("per_task")
-        r["tasks"] = len(done)
-        r["score"] = sum(p / n for p, n in done.values()) / len(done) if done else None
-        r["complete"] = bool(index) and len(done) == len(index)
-        out.append(r)
-    out.sort(key=lambda r: (not r["complete"], -(r["score"] if r["score"] is not None else -1), r["name"] or r["model"]))
-    return out, len(index)
 
 
 def index_entries(events: Iterable[dict]) -> list[dict]:
@@ -192,7 +140,7 @@ SIMULATED_HEADER = "# SIMULATED. These tasks were accepted in simulated runs on 
 INDEX_HEADER = """# The index: the accepted tasks.
 #
 # Nobody edits this file. It is written from the signed verdicts in the ledger, and
-# `hm sync` rejects a copy that lists anything those verdicts do not support.
+# The ledger check before every push rejects a copy that lists anything those verdicts do not support.
 # A task gets in by a contributor's accept verdict, and out by a reject verdict or the final cut.
 
 """

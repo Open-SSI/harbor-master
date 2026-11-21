@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import os
 import re
-from functools import lru_cache
 from pathlib import Path
 
 from .config import Config
@@ -11,16 +10,16 @@ from .identity import config_dir
 
 # The variable each provider reads. Values never enter hm.toml, the ledger, or an upload.
 # Each agent takes an API key, or a sign-in to a subscription. The sign-in is used when both are set.
-AGENT_KEYS = {  # the agents that also take a sign-in to a subscription, which Harbor does not list: [API key, sign-in]
+AGENT_KEYS = {  # the only agents a trial runs, and the credentials each takes: [API key, subscription sign-in]
     "claude-code": ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
     "codex": ["OPENAI_API_KEY", "CODEX_AUTH_JSON_PATH"],
 }
-REFERENCE = re.compile(r"\$\{(\w+)\}")      # ${NAME} in a configuration's env: a key named, never written out
 PATH_KEYS = {"CODEX_AUTH_JSON_PATH"}     # the value is the path of a file that holds the credential
 PROVIDER_KEYS = {
     "openrouter": ["OPENROUTER_API_KEY"],
     "claude-agent-sdk": ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],  # either one
-    "codex": ["CODEX_AUTH_JSON_PATH"],      # the sign-in that `codex login` writes. ~/.codex/auth.json is found without it
+    "codex": ["CODEX_AUTH_JSON_PATH", "OPENAI_API_KEY"],    # either one: the sign-in `codex login` writes (~/.codex/auth.json
+                                                            # is found without the variable), or an API key
     "mock": [],
 }
 OTHER_KEYS = ["HF_TOKEN"]
@@ -85,100 +84,40 @@ def get(name: str) -> str | None:
     return value
 
 
-@lru_cache(maxsize=None)
-def agent_names() -> frozenset[str]:
-    """Every agent the installed Harbor has, by name. Harbor is the one list: an agent it gains is usable here
-    with no change. Empty when Harbor cannot be imported. This reads one small module, so it is quick."""
-    try:
-        from harbor.models.agent.name import AgentName
-    except Exception:           # not installed, or a version without this module
-        return frozenset()
-    return frozenset(n.value for n in AgentName)
+def needs(agent: str) -> list[str]:
+    """The variables that can hold an agent's credential: any one of them is enough. Only Claude Code and Codex are run."""
+    return list(AGENT_KEYS.get(agent, []))
 
 
-@lru_cache(maxsize=None)
-def harbor_agents() -> dict[str, list[str]]:
-    """Each agent Harbor has, with the variables it reads its API key from.
-
-    Reading that means loading every agent's code, which takes seconds. It changes only with Harbor's
-    version, so it is done once per version and kept in the user's configuration folder."""
-    import json
-    from importlib.metadata import PackageNotFoundError, version
-    if not agent_names():
-        return {}
-    try:
-        note = config_dir() / f"harbor-agents-{version('harbor')}.json"
-    except PackageNotFoundError:
-        return {n: [] for n in sorted(agent_names())}
-    try:
-        kept = json.loads(note.read_text())
-        if isinstance(kept, dict) and set(kept) == set(agent_names()):
-            return kept
-    except (OSError, ValueError):
-        pass
-    out: dict[str, list[str]] = {}
-    try:
-        from harbor.agents.factory import AgentFactory
-        from harbor.models.agent.name import AgentName
-    except Exception:
-        return {n: [] for n in sorted(agent_names())}
-    for name in sorted(agent_names()):
-        names: list[str] = []
-        try:
-            access = getattr(getattr(AgentFactory.get_agent_class(AgentName(name)), "MODEL_CONNECTION", None), "agent_provider_access", None)
-            names = list(getattr(access, "api_key_candidate_names", None) or [])
-        except Exception:       # an agent whose own package is not installed: it is still an agent by name
-            pass
-        out[name] = names
-    try:
-        note.parent.mkdir(parents=True, exist_ok=True)
-        note.write_text(json.dumps(out))
-    except OSError:
-        pass
-    return out
+def found(agent: str) -> bool:
+    """Whether an agent can run here: its API key, or its subscription's sign-in."""
+    return any(get(n) for n in needs(agent)) or (agent == "codex" and codex_sign_in() is not None)
 
 
-def known_agent(agent: str) -> bool:
-    """Whether Harbor has this agent. When Harbor cannot be asked, nothing is called unknown."""
-    listed = agent_names()
-    return not listed or agent in listed
+def codex_sign_in() -> Path | None:
+    """The file that holds a Codex sign-in to a ChatGPT subscription: the one CODEX_AUTH_JSON_PATH names, else the
+    ~/.codex/auth.json that `codex login` writes. Codex has no long-lived token to put in a variable, as Claude has:
+    its sign-in is this file, which Codex refreshes itself."""
+    named = get("CODEX_AUTH_JSON_PATH")
+    if named:
+        return Path(named)
+    usual = Path.home() / ".codex" / "auth.json"
+    return usual if usual.is_file() else None
 
 
-def needs(agent: str, model: str = "", key: str = "") -> list[str]:
-    """The variables that can hold this configuration's credential: any one of them is enough.
+def agent_env(agent: str = "") -> dict[str, str]:
+    """The credentials an agent trial gets, as environment variables: Claude's and OpenAI's. No other key in
+    secrets.env is passed on.
 
-    The key the configuration names comes first. Then the agent's sign-in, where it has one, and the
-    variables Harbor says the agent reads. An agent that calls models through LiteLLM reads the key of
-    the provider its model names: `openrouter/...` reads OPENROUTER_API_KEY.
+    The same rule as for the curation agents: where both an API key and a subscription's sign-in are there, the
+    sign-in is used. Harbor uses a Codex sign-in only when it is named, so the one found is named for it.
     """
-    names = [key] if key else []
-    if not key or key in AGENT_KEYS.get(agent, []):     # a key for another provider's endpoint is not replaced by the sign-in
-        names += AGENT_KEYS.get(agent, [])
-    if not key:
-        if agent not in AGENT_KEYS:         # the two agents named above need no look into Harbor, which is slow the first time
-            names += harbor_agents().get(agent, [])
-        if "/" in model:
-            names.append(model.split("/", 1)[0].upper().replace("-", "_") + "_API_KEY")
-    return list(dict.fromkeys(n for n in names if n))
-
-
-def found(key: str, agent: str = "", model: str = "") -> bool:
-    """Whether a configuration can run: its key, or the agent's sign-in in its place."""
-    return any(get(n) for n in needs(agent, model, key))
-
-
-def agent_env(agent: str = "", model: str = "", key: str = "", settings: dict[str, str] | None = None) -> dict[str, str]:
-    """The credentials an agent trial gets, as environment variables: the ones its configuration can
-    use, and any that its own settings name as ${NAME}. No other key in secrets.env is passed on.
-
-    Where an agent has both an API key and a sign-in, the sign-in is used, as for the curation agents.
-    Harbor already prefers a Codex sign-in file, and prefers the Claude key unless told otherwise.
-    """
-    wanted = ["OPENROUTER_API_KEY", *sum(AGENT_KEYS.values(), []), *needs(agent, model, key),
-              *(m for v in (settings or {}).values() for m in REFERENCE.findall(str(v)))]
-    env = {n: v for n in dict.fromkeys(wanted) if (v := get(n))}
-    if "CLAUDE_CODE_OAUTH_TOKEN" in env and agent in ("", "claude-code") and key in ("", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"):
+    env = {n: v for n in sum(AGENT_KEYS.values(), []) if (v := get(n))}
+    if "CLAUDE_CODE_OAUTH_TOKEN" in env and agent in ("", "claude-code"):
         env["CLAUDE_FORCE_OAUTH"] = "1"
+    found = codex_sign_in()
+    if found is not None and found.is_file() and agent in ("", "codex"):
+        env["CODEX_AUTH_JSON_PATH"] = str(found.resolve())
     return env
 
 
@@ -202,19 +141,16 @@ def doctor(cfg: Config) -> list[tuple[str, str, bool, str]]:
         if not names:
             rows.append((f"{tier} tier", "none needed", True, f"{t.provider}: {t.model}"))
             continue
-        present = any(get(n) for n in names)
-        if t.provider == "codex" and not present:        # Codex's own sign-in file needs no variable
-            present = (Path.home() / ".codex" / "auth.json").is_file()
+        present = any(get(n) for n in names) or (t.provider == "codex" and codex_sign_in() is not None)
         rows.append((f"{tier} tier", " or ".join(names), present, f"{t.provider}: {t.model}"))
-    def agent_row(what: str, agent: str, model: str, key: str = "") -> None:
-        names = needs(agent, model, key)
-        if not known_agent(agent):
-            rows.append((what, "not an agent Harbor has", False, f"{agent}: {model}"))
+    def agent_row(what: str, agent: str, model: str) -> None:
+        if agent not in AGENT_KEYS:
+            rows.append((what, "not an agent Harbor-Master runs (claude-code or codex)", False, f"{agent}: {model}"))
         else:
-            rows.append((what, " or ".join(names) or "none named", any(get(n) for n in names), f"{agent}: {model}"))
+            rows.append((what, " or ".join(needs(agent)), found(agent), f"{agent}: {model}"))
 
     for entry in cfg.difficulty.suite:
-        agent_row("difficulty suite", entry.agent, entry.model, entry.key)
+        agent_row("difficulty suite", entry.agent, entry.model)
     d = cfg.difficulty
     if d.cheap_solve and all(e.agent != d.cheap_agent for e in d.suite):      # the worker model's tries run in this agent
         agent_row("cheap solve", d.cheap_agent, cfg.tiers.worker.model)

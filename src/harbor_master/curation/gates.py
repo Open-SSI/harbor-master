@@ -10,7 +10,6 @@ D_GATES: dict[str, tuple[list[str], set[str]]] = {
     "verifier": (["programmatic", "llm_judge", "rubric", "none"], {"programmatic"}),
     "verifier_cost": (["cheap", "costly"], {"cheap"}),
     "duplicate": (["distinct", "variant", "same"], {"distinct"}),
-    "license": (["ok", "no_redistribution", "unclear"], {"ok"}),
 }
 
 

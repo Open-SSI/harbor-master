@@ -1,8 +1,10 @@
-"""Who works on which task (DESIGN.md Section 7, Two people at once).
+"""Who curates which benchmark (DESIGN.md Section 7, Two people at once).
 
-Before any work, a run pulls the shared ledger, leaves out what is already done or held by
-someone else, writes a claim for the rest, and pushes it. The push is the lock: if someone
-else pushed first, this run pulls, sees their claim, and gives those tasks up.
+A benchmark is curated by one person at a time. Before any work, a run pulls the shared ledger and claims the
+whole benchmark with one signed record, which it pushes. The push is the lock: if someone else pushed a claim
+first, this run pulls, sees it, and leaves the benchmark to them. Nothing about single tasks is claimed or
+shared while the run works: its records go out when a report is ready, when a verdict is signed, and when the
+run ends. A run that goes on longer than the claim renews it, and a machine that stops lets it run out.
 """
 from __future__ import annotations
 
@@ -17,6 +19,7 @@ if TYPE_CHECKING:
     from .session import Session
 
 DONE = {"dropped", "report_ready", "accepted", "rejected", "contested"}
+BENCH = "__benchmark__"     # the one thing a curation claims: the whole benchmark
 
 
 def completed(s: Session, benchmark: str) -> dict[str, str]:
@@ -32,13 +35,10 @@ def _names(tasks: list[Task]) -> str:
 
 
 async def take(s: Session, bench: BenchState, chosen: list[Task]) -> list[Task]:
-    """Claim what is free among `chosen`, and return it. The rest is rejected, with the reason noted."""
-    await s.pull()
+    """What is left to run among `chosen`: the tasks that have no outcome yet. The benchmark is this run's already,
+    so nothing is claimed or pushed here."""
     done = completed(s, bench.id)
-    held = s.ledger.claims(bench.id, time.time(), me=s.ident.github, machine=s.machine)
     finished = [t for t in chosen if t.task_id in done]
-    running = [t for t in chosen if t.task_id in held and t.task_id not in done]
-    free = [t for t in chosen if t.task_id not in done and t.task_id not in held]
     if finished:
         s.note_recent("rejected", bench.id, f"{len(finished)} already completed, not run again: {_names(finished)}")
         states = fold(e for e in s.ledger.events if e.get("benchmark") == bench.id and e["protocol"] == s.protocol)
@@ -46,45 +46,58 @@ async def take(s: Session, bench: BenchState, chosen: list[Task]) -> list[Task]:
             if done[t.task_id] == "report_ready":
                 t.digest = states[t.task_id].digest or t.digest
                 s.report_ready(t)
-    if running:
-        who = sorted({held[t.task_id][0] for t in running})
-        s.note_recent("rejected", bench.id, f"{len(running)} being run by @{', @'.join(who)}, left to them: {_names(running)}")
-    if not free:
-        return []
-    ids = [t.task_id for t in free]
-    s.record(bench.id, "claim", tasks=ids, expires=time.time() + s.cfg.run.claim_hours * 3600)
-    s.claimed.setdefault(bench.id, []).extend(ids)
-    for _ in range(8):
-        if await s.push(f"claim {len(free)} tasks of {bench.id}"):
-            break
-        # Someone pushed first. Their work is pulled in now: give up whatever they claimed.
-        held = s.ledger.claims(bench.id, time.time(), me=s.ident.github, machine=s.machine)
-        lost = [t for t in free if t.task_id in held]
-        if lost:
-            who = sorted({held[t.task_id][0] for t in lost})
-            s.release(bench.id, [t.task_id for t in lost])
-            s.note_recent("rejected", bench.id, f"@{', @'.join(who)} claimed {len(lost)} first, left to them: {_names(lost)}")
-            free = [t for t in free if t.task_id not in held]
-    return free
+    return [t for t in chosen if t.task_id not in done]
 
 
-SCREEN = "__screening__"      # held while one runner screens, ranks and selects a benchmark
-
-
-async def screen(s: Session, bench: BenchState) -> str:
-    """Take the right to screen a benchmark. Returns "" when taken, or who holds it now.
-
-    Screening is cheap, but two people doing it at once would write the same decisions twice.
-    """
-    await s.pull()                                  # others' decisions are reused from here on
+async def claim(s: Session, bench: BenchState) -> str:
+    """Claim the whole benchmark for this run. Returns "" when it is this run's, or who holds it now."""
+    await s.pull()                                  # others' records are reused from here on
     for attempt in range(8):
-        holder = s.ledger.claims(bench.id, time.time(), me=s.ident.github, machine=s.machine).get(SCREEN)
+        holder = s.ledger.claims(bench.id, time.time(), me=s.ident.github, machine=s.machine).get(BENCH)
         if holder:
-            s.release(bench.id, [SCREEN])
+            s.release(bench.id, [BENCH])
             return holder[0]
         if attempt == 0:
-            s.record(bench.id, "claim", tasks=[SCREEN], expires=time.time() + 3600)
-            s.claimed.setdefault(bench.id, []).append(SCREEN)
-        if await s.push(f"screening {bench.id}"):
+            s.record(bench.id, "claim", tasks=[BENCH], expires=time.time() + s.cfg.run.claim_hours * 3600)
+            s.claimed.setdefault(bench.id, []).append(BENCH)
+            s.claim_until[bench.id] = time.time() + s.cfg.run.claim_hours * 3600
+        if await s.push(f"curating {bench.id}"):
             return ""
-    return ""
+    # The claim never reached the index: without it, someone else could curate the same benchmark. So it is not taken.
+    s.release(bench.id, [BENCH])
+    s.claim_until.pop(bench.id, None)
+    raise ClaimError(f"the claim on {bench.id} could not be pushed to the index's repository, so it is not taken. "
+                     "Check that your clone can push to the index's repository, then try again.")
+
+
+class ClaimError(RuntimeError):
+    """A claim that could not be shared: the benchmark is left to anyone."""
+
+
+async def renew(s: Session) -> None:
+    """Called at each sign of progress: a trial or a task that finished. A claim with less than half its time left is
+    renewed. One that ran out, because nothing finished for `claim_hours`, is someone else's to take: this run takes it
+    again only if nobody has, and otherwise stops working on that benchmark."""
+    now, hours = time.time(), s.cfg.run.claim_hours * 3600
+    held = [b for b in s.claim_until if BENCH in s.claimed.get(b, [])]
+    due = [b for b in held if s.claim_until[b] - now < hours / 2]
+    if not due:
+        return
+    if any(s.claim_until[b] <= now for b in due):        # ran out: see whether someone else took it meanwhile
+        await s.pull()
+    kept = []
+    for b in due:
+        holder = s.ledger.claims(b, now, me=s.ident.github, machine=s.machine).get(BENCH) if s.claim_until[b] <= now else None
+        if holder:
+            s.claimed[b] = [t for t in s.claimed[b] if t != BENCH]
+            s.claim_until.pop(b, None)
+            dropped = [t for t in s.queue if t.benchmark == b]
+            s.queue[:] = [t for t in s.queue if t.benchmark != b]
+            s.note_recent("rejected", b, f"the claim ran out with no progress, and @{holder[0]} has taken the benchmark: "
+                          f"{len(dropped)} queued task{'s are' if len(dropped) != 1 else ' is'} left to them")
+            continue
+        s.record(b, "claim", tasks=[BENCH], expires=now + hours)
+        s.claim_until[b] = now + hours
+        kept.append(b)
+    if kept:
+        await s.publish(f"still curating {', '.join(kept)}")

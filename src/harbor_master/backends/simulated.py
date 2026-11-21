@@ -7,11 +7,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import math
+import os
 import random
 
 from ..core.config import Config, SuiteEntry
 from ..tasks import Task
-from .base import Backend, Decision, TrialResult, Usage
+from .base import Backend, Decision, TaskDropped, TrialResult, Usage
 
 
 def _rng(*parts: object) -> random.Random:
@@ -53,6 +54,8 @@ class SimulatedBackend(Backend):
     def __init__(self, cfg: Config, usage: Usage, speed: float = 1.0):
         super().__init__(cfg, usage)
         self.speed = speed
+        # Tasks whose first trial hangs, to show what happens then: HM_SIMULATE_HANG=t0007,t0002
+        self.hangs = {n.strip() for n in os.environ.get("HM_SIMULATE_HANG", "").split(",") if n.strip()}
 
     async def _step(self, seconds: float = PACE) -> None:
         if self.speed > 0:
@@ -74,8 +77,6 @@ class SimulatedBackend(Backend):
                      "llm_judge" if "rubric" in text or "judged by" in text else "programmatic")
         elif gate == "verifier_cost":
             value = "costly" if "gpu" in text else "cheap"
-        elif gate == "license":
-            value = "ok"
         elif gate == "duplicate":
             value = "distinct"
         else:
@@ -137,6 +138,15 @@ class SimulatedBackend(Backend):
         return Decision(value, 0.70 + 0.14 * r.random() if r.random() < 0.08 else 0.90 + 0.099 * r.random(),
                         "decision", self.cfg.tiers.decision.model, cost, tokens)
 
+    async def diagnose(self, task: Task, defect: str, why: str) -> Decision:
+        x = _rng("diagnose", task.digest, defect).random()
+        value = "drop" if x < 0.05 else "write_solution" if defect == "solution" else "repair_solution"
+        self._spend("decision", 0.002, 1_500)
+        await self._step()
+        return Decision(value, 0.9, "decision", self.cfg.tiers.decision.model, 0.002, 1_500,
+                        {"drop": "Its grading needs data the task does not ship.", "write_solution": "Its instruction and data are "
+                         "enough to write one.", "repair_solution": "The reference solution reads a path the image does not have."}[value])
+
     async def audit(self, task: Task, round_no: int) -> Decision:
         r = _rng("audit", task.digest, round_no)
         flaw = latent(task)["design_flaw"]
@@ -160,13 +170,27 @@ class SimulatedBackend(Backend):
                         "Read four trajectories and the verifier. " +
                         ("The failures are legitimate." if value == "accept" else "The schema check is unstated."))
 
-    async def repair(self, task: Task, defect: str, round_no: int, tier: str) -> dict:
+    async def final_audit(self, task: Task) -> Decision:
+        """How the frontier agents failed, after the difficulty run: the agents' fault, so the task is hard, or the task's."""
+        x = _rng("final-audit", task.digest).random()
+        value = "accept" if x < 0.82 else "broken" if x < 0.94 else "unsure"
+        self._spend("worker", 0.40, 30_000)
+        await self._step()
+        notes = {"accept": "The frontier agents reached the setup and failed on the science itself: wrong method, or an answer out of "
+                           "tolerance. The task is hard, not broken.",
+                 "broken": "Every failing frontier trial stopped at the same point: a package the task needs is missing from its image, "
+                           "so the agents never got to the problem. That is the environment, not difficulty.",
+                 "unsure": "Some trials failed on the science and some on the output's format. The evidence is mixed."}
+        return Decision(value, 0.6 if value == "unsure" else 0.9, "worker", self.cfg.tiers.worker.model, 0.40, 30_000, notes[value])
+
+    async def repair(self, task: Task, defect: str, round_no: int, tier: str, why: str = "") -> dict:
         ok = latent(task)["fixable"] or tier == "frontier"
         cost, tokens = (1.50, 50_000) if tier == "frontier" else (0.50, 35_000)
         self._spend(tier, cost, tokens)
         await self._step()
         return {"fixed": ok, "cost": cost, "tokens": tokens,
-                "what": {"oracle": "pinned a dependency the reference solution needs",
+                "what": {"solution": "wrote solution/solve.sh from the instruction and the environment",
+                         "oracle": "pinned a dependency the reference solution needs",
                          "verifier": "the verifier now rejects wrong-unit output",
                          "design": "stated the tolerance in the instruction"}.get(defect, defect)}
 
@@ -183,8 +207,21 @@ class SimulatedBackend(Backend):
 
     # ----- Harbor: runs of the verifier and of agents -----
 
+    async def judge_stuck(self, what: str, log: str, quiet: float) -> Decision:
+        self._spend("worker", 0.03, 6_000)
+        await self._step()
+        return Decision("hung", 0.9, "worker", self.cfg.tiers.worker.model, 0.03, 6_000,
+                        "The container has been waiting on a package download that stopped answering; nothing has "
+                        "been written since, and nothing will move on its own.")
+
     async def run_oracle(self, task: Task) -> TrialResult:
         await self._step()
+        if task.name in self.hangs:         # it hangs once: the person retries it, or drops the task
+            self.hangs.discard(task.name)
+            quiet = self.cfg.run.quiet_minutes * 60
+            if await self.stuck(task, "the reference solution's run", "(simulated: the log stopped)", quiet) == "drop":
+                raise TaskDropped("hung", f"a trial was stuck for {quiet / 60:.0f} minutes, and was dropped")
+            await self._step()
         return TrialResult(not latent(task)["oracle_fails"], 1.0, 0, 0, 0.0, 40.0)
 
     async def run_noop(self, task: Task) -> TrialResult:

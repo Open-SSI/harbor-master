@@ -19,8 +19,8 @@ from ..core import identity as identity_mod
 from ..core.identity import Identity
 from ..ledger import REPORTS, Ledger, Shard, Sync, active, load_contributors, write_index
 from ..tasks import Task
-from . import shared, stages
-from .state import BENCH, STAGE, STAGES, BenchState, CellState, Request
+from . import claims, shared, stages
+from .state import BENCH, MAX_CELLS, STAGE, STAGES, BenchState, CellState, Request
 
 
 class Session:
@@ -44,11 +44,13 @@ class Session:
         self._file_protocol, self._config_changed = self.protocol, False
         self.calls: Counter[str] = Counter()
         self._keeping: list = []            # accepted tasks on their way into the task store
+        self._pushing: list = []            # verdicts on their way to the shared ledger
         self.usage_by: dict[tuple[str, str, str], list] = {}        # (benchmark, stage, tier) -> [calls, tokens, cost]
         self._usage_written: dict[tuple[str, str, str], tuple] = {}
         self.cost_by_tier: Counter[str] = Counter()
         self.trial_cost = 0.0
         self.backend = make_backend(cfg, self._usage, simulate, speed, self.run_dir, assume_after)
+        self.backend.on_hung = self.hung
         self.assumed: set[str] = getattr(self.backend, "assumed", set())    # stages whose results are assumed, not run
         self.ledger.accept_assumed = bool(self.assumed)     # a real run never reuses a made-up result
         self.sync = Sync(self.ledger_dir, ident.name, ident.github)
@@ -57,22 +59,23 @@ class Session:
         self.benches = {b: BenchState(b, Path(info["path"]) if info.get("path") else Path(),
                                    info.get("released", ""), info.get("license", ""), entry=info.get("entry"))
                         for b, info in benchmarks.items()}
-        self.cells = [CellState(i + 1, on_stage=self.explain) for i in range(cfg.run.cells)]
+        self.cells = [CellState(i + 1, on_stage=self.explain) for i in range(MAX_CELLS)]       # at most 8; active_cells take tasks
         self.walk: list[tuple[str, str]] = []       # a simulated run: each stage reached so far, with what it does
-        self.active_cells = cfg.run.cells
+        self.active_cells = min(MAX_CELLS, cfg.run.cells)
         self.queue: list[Task] = []
-        self.recent: deque[tuple[float, str, str, str]] = deque(maxlen=200)
+        self._retried: set[tuple[str, str]] = set()       # trials that failed to run and were tried once more
+        self.recent: deque[tuple[float, str, str, str]] = deque(maxlen=2000)     # the curate screen's log
         self.requests: list[Request] = []
         self.blackboards: dict[str, dict] = {}
         self.durations: dict[tuple[str, int], list[float]] = {}
         self.notes: dict[str, list[str]] = {}
-        self.budget = cfg.run.budget_usd
-        self._budget_asked = 0.0            # the budget at which the person was last asked whether to raise it
         self.paused = self.quitting = self.finished = False
         self.leaving = False            # the user asked to leave the screen: the screen does it and clears this
         self.started = time.time()
-        self.containers = asyncio.Semaphore(cfg.run.max_containers)
+        self.max_containers = cfg.run.max_containers
         self.containers_used = 0
+        self.asked_cells = False         # the person said how many cells and containers, once a benchmark's tasks were chosen
+        self.on_screen = False           # a screen is there to answer boxes: only then is the person asked for cells
         self._shards: dict[str, Shard] = {}
         self._request_ids = 0
         self._workers: list[asyncio.Task] = []
@@ -83,7 +86,8 @@ class Session:
         people = load_contributors(workspace)
         self.is_reviewer = any(c["github"] == ident.github for c in active(people))
         self.is_owner = any(c.get("github") == ident.github and c.get("role") == "owner" and c.get("key") for c in people)
-        self.claimed: dict[str, list[str]] = {}            # benchmark -> the task ids this run holds
+        self.claimed: dict[str, list[str]] = {}            # benchmark -> what this run holds of it: the whole benchmark
+        self.claim_until: dict[str, float] = {}            # benchmark -> when this run's claim on it runs out
 
     def _usage(self, tier: str, cost: float, tokens: int) -> None:
         self.calls[tier] += 1
@@ -123,7 +127,7 @@ class Session:
         digest = data.pop("digest_override", None) or (task.digest if task else "")
         if type == "claim":
             data.setdefault("machine", self.machine)
-        stage = data.get("stage") or {"difficulty": "difficulty", "cheap_solve": "difficulty", "probe": "probe"}.get(data.get("purpose", ""), "")
+        stage = data.get("stage") or {"difficulty": "difficulty", "cheap_solve": "worker", "probe": "probe"}.get(data.get("purpose", ""), "")
         if stage in self.assumed or (type in ("report", "repair") and self.assumed):
             data["assumed"] = True      # never evidence: no accept may rest on it
         if self.sandbox:
@@ -160,11 +164,12 @@ class Session:
             if await self.push(message):
                 return
 
-    def release(self, benchmark: str, task_ids: list[str]) -> None:
-        """Let go of tasks this run holds, so that others may take them."""
+    def release(self, benchmark: str, task_ids: list[str], curated: bool = False) -> None:
+        """Let go of what this run holds of a benchmark. `curated` says every task it selected has an outcome:
+        the benchmark is curated. Otherwise it is listed again, for anyone to take."""
         mine = [t for t in task_ids if t in self.claimed.get(benchmark, [])]
         if mine:
-            self.record(benchmark, "claim", tasks=mine, released=True, expires=0)
+            self.record(benchmark, "claim", tasks=mine, released=True, expires=0, **({"curated": True} if curated else {}))
             self.claimed[benchmark] = [t for t in self.claimed[benchmark] if t not in mine]
 
     def log(self, text: str) -> None:
@@ -175,8 +180,7 @@ class Session:
         """A simulated run is a walk-through: the first time it reaches a stage, it says what the stage does."""
         from ..interact.walk import STAGE as told
         if self.simulate and stage in told and all(name != stage for name, _ in self.walk):
-            self.walk.append((stage, told[stage]))
-            self.note_recent("stage", stage, told[stage])
+            self.walk.append((stage, told[stage]))           # kept with the run: the screen's own stage boxes say the rest
 
     def note_recent(self, kind: str, task_id: str, text: str) -> None:
         entry = (time.time(), kind, task_id, text)
@@ -217,12 +221,13 @@ class Session:
         self.save_board(task)
 
     async def container(self, coro):
-        async with self.containers:
-            self.containers_used += 1
-            try:
-                return await coro
-            finally:
-                self.containers_used -= 1
+        while self.containers_used >= self.max_containers:     # the limit can change while the run goes on
+            await asyncio.sleep(0.05)
+        self.containers_used += 1
+        try:
+            return await coro
+        finally:
+            self.containers_used -= 1
 
     async def ask(self, kind: str, text: str, target: str = "", choices: list[str] | None = None):
         """Raise a request and wait for its answer. Returns None when nothing can prompt."""
@@ -241,14 +246,34 @@ class Session:
             self.write_requests()
 
     async def failed(self, task: str, what: str, error: str) -> bool:
-        """A trial failed for an infrastructure reason. Put it to the person: what ran, and why it failed.
-        True when they want it tried again. With nobody to ask, it is not: the failure is recorded as it is."""
-        if self.no_input:
+        """A trial failed for an infrastructure reason, which counts for nothing either way. It is tried once more by
+        itself, and a second failure is recorded as it is. Nobody is asked. True when it is to be tried again."""
+        if self.quitting:               # an ending run tries nothing again: a trial it stopped itself is no failure
             return False
-        said = await self.ask("failure", f"A trial failed to run: {task}\n{what}.\n\nWhy: {error[:600]}\n\n"
-                              "This is a failure of the machinery, not of the agent, so it counts for nothing either way.", task, ["retry", "discard"])
-        self.note_recent("error", task, f"{what} failed to run: " + ("tried again" if said == "retry" else "discarded"))
-        return said == "retry"
+        again = (task, what) not in self._retried
+        self._retried.add((task, what))
+        self.note_recent("error", task, f"{what} failed to run ({error[:100]}): " + ("trying it once more" if again else "recorded as failed"))
+        return again
+
+    async def hung(self, task: Task, what: str, judged, quiet: float) -> str:
+        """A trial of a task is hung, as the worker agent read its log. It is stopped either way; the person says whether
+        it runs again or the task is dropped. With nobody to ask, it runs again once, and then the task is dropped."""
+        minutes = f"{quiet / 60:.0f} minutes"
+        self.record(task.benchmark, "decision", task, stage=STAGE.get(), gate="hung", tier=judged.tier, model=judged.model,
+                    value=judged.value, probability=round(judged.prob, 3), outcome="stopped", cost=judged.cost,
+                    rationale=judged.rationale[:400], skill=judged.skill)
+        self.note_recent("error", task.task_id, f"{what} hung: nothing moved for {minutes}. It is stopped")
+        text = (f"A trial of {task.task_id} is stuck, and was stopped.\n\n"
+                f"{what[:1].upper() + what[1:]} wrote nothing for {minutes}. The worker agent read its log: {judged.rationale.rstrip('.')}.\n\n"
+                "Retry runs it again. Drop drops the task, and its work cell takes the next one.")
+        said = await self.ask("hung", text, task.task_id, ["retry", "drop"])
+        if said is None:
+            said = "retry" if (task.task_id, "hung") not in self._retried else "drop"
+            self._retried.add((task.task_id, "hung"))
+        if said == "drop":
+            self.record(task.benchmark, "decision", task, stage=STAGE.get(), gate="hung", tier="human", value="drop",
+                        outcome="drop", reason="hung")
+        return said
 
     def report_ready(self, task: Task) -> None:
         """A report is written. If this user may sign verdicts, tell them, without blocking anything."""
@@ -265,6 +290,8 @@ class Session:
             self.ready.remove(task)
         write_index(self.ledger_dir, self.sandbox)      # the accepted list follows every verdict
         self._verdict_request()
+        with contextlib.suppress(RuntimeError):         # a signed verdict goes out at once; with no event loop, at the end
+            self._pushing.append(asyncio.get_running_loop().create_task(self.publish(f"verdict on {task.name}")))
         if value == "accept" and not self.sandbox:
             self.keep(task, digest or task.digest)
         return event
@@ -279,7 +306,7 @@ class Session:
                 ok, how = store.put(self.ws, self.cfg, task.benchmark, task.name, digest, task.path)
             except (store.StoreError, OSError) as err:
                 ok, how = False, f"not kept: {str(err)[:200]}"
-            if not ok:          # hm sync tries again
+            if not ok:          # the next hm command tries again
                 store.remember(self.ws, task.benchmark, task.name, digest)
             self.note_recent("checked" if ok else "stopped", task.task_id, f"accepted version {how}")
 
@@ -317,6 +344,9 @@ class Session:
             path.unlink(missing_ok=True)
 
     async def run(self) -> None:
+        while not self.benches and not self.quitting:      # started with none: the screen asks which one to curate
+            await asyncio.sleep(0.1)
+        self._started = True
         self._shared_tasks = [asyncio.create_task(shared.run_shared(self, b)) for b in self.benches.values()]
         self._workers = [asyncio.create_task(self._cell_loop(c)) for c in self.cells]
         await self._until_done()
@@ -329,6 +359,8 @@ class Session:
             return "This run is ending, so it takes nothing more."
         self.benches[benchmark] = BenchState(benchmark, Path(info["path"]) if info.get("path") else Path(),
                                              info.get("released", ""), info.get("license", ""), entry=info.get("entry"))
+        if not getattr(self, "_started", False):       # the run has not begun: it starts this one with the others
+            return f"{benchmark} is added to this run."
         self._shared_tasks.append(asyncio.create_task(shared.run_shared(self, self.benches[benchmark])))
         for i, cell in enumerate(self.cells):           # cells that had run out of work take tasks again
             if i >= len(self._workers) or self._workers[i].done():
@@ -351,8 +383,11 @@ class Session:
                 await asyncio.wait(pending)
         except asyncio.CancelledError:
             pass
-        for benchmark in list(self.claimed):              # let go of whatever this run still holds
-            self.release(benchmark, list(self.claimed[benchmark]))
+        for job in self._pushing:                         # verdicts that are still on their way out
+            with contextlib.suppress(Exception):
+                await job
+        for benchmark in list(self.claimed):              # let go of the benchmarks this run curated: curated, or listed again
+            self.release(benchmark, list(self.claimed[benchmark]), curated=self.curated(benchmark))
         self.flush_usage()
         with contextlib.suppress(Exception):
             await self.publish("end of run")
@@ -362,6 +397,14 @@ class Session:
                 (self.run_dir / leftover).rmdir()
         (self.run_dir / "run.json").write_text(json.dumps(self.summary(), indent=2) + "\n")
         self.write_requests()
+
+    def curated(self, benchmark: str) -> bool:
+        """Whether every task this run selected of a benchmark has an outcome, so that it is curated."""
+        bench = self.benches.get(benchmark)
+        if bench is None or bench.phase != "ready" or self.until:
+            return False
+        done = claims.completed(self, benchmark)
+        return all(tid in done for tid in bench.chosen)
 
     def summary(self) -> dict:
         return {
@@ -406,13 +449,14 @@ class Session:
             finally:
                 bench.done += 1
                 cell.task, cell.detail, cell.stage, cell.attention = None, "", 0, False
-            # Finished, failed, or stopped: either way this run no longer holds the task. A finished
-            # task is protected by its records from here on, and an unfinished one is free for others.
+            # Its records stay on this machine until there is something for others: a report to review.
+            reported = self.board(task).get("status") == "report_ready"
             self.flush_board(task)
             self.flush_usage(task.benchmark)
-            self.release(task.benchmark, [task.task_id])
             with contextlib.suppress(Exception):
-                await self.publish(f"records for {task.name}")
+                if reported:
+                    await self.publish(f"a report on {task.name} to review")
+                await claims.renew(self)
 
     def _check_config(self) -> None:
         """The settings on disk must not change during a run. This run keeps the protocol it started
@@ -428,12 +472,10 @@ class Session:
         if on_disk != self._file_protocol:
             self._config_changed = True
             self.note_recent("config", "", f"protocol.toml changed during the run (protocol {on_disk}). This run keeps "
-                             f"{self.protocol}. The next run is refused unless the owner locks the new settings.")
+                             f"{self.protocol}. The next run uses the new settings.")
 
     def _next_task(self, cell: CellState) -> Task | None:
-        if self.spent >= 0.9 * self.budget and not self.paused:
-            self._budget_reached()
-        if self.paused or cell.n > self.active_cells or self.spent >= self.budget:
+        if self.paused or cell.n > self.active_cells:
             return None
         for i, task in enumerate(self.queue):
             if not self.benches[task.benchmark].paused:
@@ -441,32 +483,12 @@ class Session:
                 return self.queue.pop(i)
         return None
 
-    def _budget_reached(self) -> None:
-        """The budget is nearly spent, or spent. The person is asked once at each: raise it, or not."""
-        full = self.spent >= self.budget
-        if self.spent < 0.9 * self.budget:
-            return
-        if full:
-            self.paused = True
-        if any(r.kind == "budget" for r in self.requests) or (not full and (self.no_input or self._budget_asked == self.budget)):
-            return
-        self._budget_asked = self.budget
-        text = (f"The ${self.budget:.0f} budget is spent.\nThe run takes no more tasks. What is running finishes." if full else
-                f"${self.spent:.2f} of the ${self.budget:.0f} budget is spent.\nWhen it is gone, the run takes no more tasks.")
-        self._request_ids += 1
-        self.requests.append(Request(self._request_ids, "budget", text))
-        self.write_requests()
-        self.note_recent("budget", "", text)
-        if self.no_input:
-            self.quitting = True
-
-    def set_cells(self, n: int) -> None:
-        """Change how many cells take tasks. New cells start at once, extra ones finish their task."""
-        self.active_cells = n
-        while len(self.cells) < n:
-            cell = CellState(len(self.cells) + 1)
-            self.cells.append(cell)
-            self._workers.append(asyncio.create_task(self._cell_loop(cell)))
+    def set_cells(self, n: int, containers: int | None = None) -> None:
+        """Change how many cells take tasks (at most 8), and how many containers run at once. A new cell starts at
+        once, and an extra one finishes its task first."""
+        self.active_cells = max(1, min(MAX_CELLS, n))
+        if containers:
+            self.max_containers = max(1, containers)
 
     def quit(self) -> None:
         """Stop taking tasks, and stop waiting for answers. A benchmark that was waiting for one is

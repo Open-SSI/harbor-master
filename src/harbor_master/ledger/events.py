@@ -5,8 +5,8 @@ import hashlib
 import json
 from typing import Any
 
-EVENT_TYPES = {"submission", "decision", "trial", "repair", "report", "verdict", "claim", "brief", "roster", "protocol",
-               "usage", "skip", "benchmark", "contributors", "release"}       # usage: what the model tiers were called for. skip: a benchmark a run left out, and why.
+EVENT_TYPES = {"submission", "decision", "trial", "repair", "report", "verdict", "claim", "brief", "protocol",
+               "usage", "skip", "benchmark", "contributors"}       # usage: what the model tiers were called for. skip: a benchmark a run left out, and why.
 #                                                 benchmark: one put on the index's list, or taken off it
 TRIAL_PURPOSES = {"oracle", "noop", "probe", "cheap_solve", "difficulty", "parity", "benchmark"}
 TIER_RANK = {"code": 0, "decision": 1, "worker": 2, "frontier": 3, "human": 4}
@@ -35,7 +35,8 @@ def trial_slot(e: dict) -> tuple:
 
 
 def decision_key(e: dict) -> tuple:
-    return (e["digest"], e.get("stage", ""), e.get("gate", ""), e["protocol"], e.get("tier", ""))
+    """A decision about a whole benchmark, such as dropping it, has no task and so no digest: it is keyed by its benchmark."""
+    return (e.get("digest") or e.get("benchmark", ""), e.get("stage", ""), e.get("gate", ""), e["protocol"], e.get("tier", ""))
 
 
 def duplicate_key(e: dict) -> tuple | None:

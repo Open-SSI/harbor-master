@@ -1,0 +1,14 @@
+# What to do with a selected task that is not yet a valid one: its reference solution is missing, or fails its own
+# tests, or a no-op passes, or a run failed. The decision model answers before any repair is paid for: a task that no
+# repair could make valid is dropped at once (and the next task in the ranking takes its place), and for the others its
+# answer tells the repairing model where to look. Which answer does what is a rule, in engine/stages.py.
+
+[diagnose]
+question = "This task was selected to curate, but it is not yet a valid task: see 'what_was_found'. What would make it valid? Judge from its files. Choose drop only when no edit to its own files could make it valid without changing the problem it poses."
+
+[diagnose.criteria]
+write_solution = "It has no reference solution, and one can be written from its instruction and its environment that its tests would accept."
+repair_solution = "Its reference solution is wrong or out of date (a bug, a wrong path, a missing step or package), while its tests are right."
+repair_verifier = "Its tests are wrong: they reject a correct answer, accept a wrong one such as a no-op, or give different results on the same answer."
+repair_environment = "Its environment is the fault: an image that cannot be pulled or built, a missing dependency, a build that runs too long."
+drop = "No edit to its own files could make it valid: grading needs a person, a live service or data it does not have, or the problem itself is ill-posed."

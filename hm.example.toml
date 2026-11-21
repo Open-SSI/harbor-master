@@ -9,8 +9,6 @@
 cells = 4                       # tasks in flight, one agent session each
 max_containers = 16
 sandbox = "docker"              # "docker" | "daytona" | "modal". "none" runs an adapter's code on this machine as it is
-budget_usd = 200.0              # the session stops taking tasks at this spend
-budget_usd_per_task = 50.0
-max_tokens_per_agent_session = 400000   # curation agents only
-on_incomplete = "resume"        # "resume" | "restart" | "skip", used when nothing can prompt
-claim_hours = 12.0              # how long a claim on tasks holds if the run never releases it
+claim_hours = 12.0              # how long a claim on a benchmark holds. A run that goes on renews it
+watch_minutes = 3.0             # how often a running trial's logs are looked at
+quiet_minutes = 9.0             # logs still for this long: the worker agent reads them, and a hung trial is stopped

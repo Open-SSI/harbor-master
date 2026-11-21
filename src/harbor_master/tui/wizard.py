@@ -1,4 +1,4 @@
-"""A walk-through in boxes: one question at a time, each in a box of its own (DESIGN.md Section 11).
+"""A walk-through in boxes: one question at a time, each in a box of its own (DESIGN.md Section 10).
 
 `hm init` asks its questions this way, and nothing else does. A box has a line to type the answer in, or only
 something to read. Every box says which step it is, and ends in two buttons at its right: Cancel, and Next,

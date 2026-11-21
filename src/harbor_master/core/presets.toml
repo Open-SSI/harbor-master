@@ -1,17 +1,15 @@
 # Agent configurations with a short name: one Harbor agent, one model, and the settings they were run with.
 #
-# An index names one in its roster.toml, or in the difficulty suite of its protocol.toml:
+# An index names one in the difficulty suite of its protocol.toml:
 #
 #   [[config]]
 #   use = "claude-opus-5.5"
 #
-# Any field written beside `use` replaces the preset's. A configuration that is not here is
-# written out in full: every agent the installed Harbor has can be used.
-#
-# These ten are the configurations run on Autonomous Science Bench, with the settings used there.
+# Any field written beside `use` replaces the preset's. A configuration that is not here is written out in
+# full. The agent is Claude Code (Claude models) or Codex (OpenAI models): each takes an API key or a
+# subscription, whichever is set (see secrets.env.example).
 #   version   the agent's own version, where it was pinned. Empty means the newest at run time,
 #             so an index that wants repeatable results sets it beside `use`
-#   key       the variable in secrets.env the configuration needs
 #   env       settings passed to the agent. Never a key
 # No key belongs in this file.
 
@@ -19,58 +17,31 @@
 agent = "claude-code"
 model = "claude-opus-5-5"
 reasoning_effort = "max"
-key = "ANTHROPIC_API_KEY"
 env = { CLAUDE_CODE_MAX_OUTPUT_TOKENS = "128000" }
 
 [preset."claude-sonnet-5.5"]
 agent = "claude-code"
 model = "claude-sonnet-5-5"
 reasoning_effort = "high"
-key = "ANTHROPIC_API_KEY"
 
 [preset."claude-haiku-4.5"]
 agent = "claude-code"
 model = "claude-haiku-4-5-20251001"
-key = "ANTHROPIC_API_KEY"
 
 [preset."gpt-6-astra"]
 agent = "codex"
 model = "gpt-6-astra"
 reasoning_effort = "max"
 version = "0.162.1"             # older Codex builds refuse this model, or quietly ignore "max"
-key = "OPENAI_API_KEY"
 
 [preset."gpt-5.6-terra"]
 agent = "codex"
 model = "gpt-5.6-terra"
 reasoning_effort = "max"
 version = "0.162.1"
-key = "OPENAI_API_KEY"
 
 [preset."gpt-5.6-luna"]
 agent = "codex"
 model = "gpt-5.6-luna"
 reasoning_effort = "max"
 version = "0.162.1"
-key = "OPENAI_API_KEY"
-
-[preset."muse-wonder"]
-agent = "muse-code"
-model = "muse-wonder-1.0"
-reasoning_effort = "xhigh"      # Harbor refuses "max" for this agent
-key = "META_API_KEY"            # the agent cannot be pinned: its installer always takes the newest release
-
-[preset."glm-5.3-flash"]
-agent = "mini-swe-agent"
-model = "openrouter/z-ai/glm-5.3-flash"
-key = "OPENROUTER_API_KEY"
-
-[preset."qwen3.8-27b"]
-agent = "mini-swe-agent"
-model = "openrouter/qwen/qwen3.8-27b"
-key = "OPENROUTER_API_KEY"
-
-[preset."minimax-m3"]
-agent = "mini-swe-agent"
-model = "openrouter/minimax/minimax-m3"
-key = "OPENROUTER_API_KEY"

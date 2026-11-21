@@ -7,7 +7,6 @@ from pathlib import Path
 
 from ..core import identity as identity_mod
 from .events import CONTRIBUTORS, EVENT_TYPES, TRIAL_PURPOSES, duplicate_key, event_id
-from . import protocol
 from .fold import INDEX_FILE, fold, index_entries
 from .store import read_shard, shard_paths
 
@@ -24,15 +23,9 @@ def active(contributors: list[dict]) -> list[dict]:
     return [c for c in contributors if c.get("github") and c.get("key")]
 
 
-def can_evaluate(c: dict | None) -> bool:
-    """Whether a listed person can evaluate the released index: anyone with a GitHub handle and a signing key."""
-    return bool(c and c.get("github") and c.get("key"))
-
-
 def can_contribute(c: dict | None) -> bool:
-    """Whether a listed person can curate: add benchmarks, run them and sign verdicts. An evaluator cannot:
-    they run the released index's evaluation, and nothing else."""
-    return can_evaluate(c) and c.get("role") != "evaluator"
+    """Whether a listed person can curate: add benchmarks, run them and sign verdicts. Anyone with a GitHub handle and a key."""
+    return bool(c and c.get("github") and c.get("key"))
 
 
 def can_cut(c: dict | None) -> bool:
@@ -43,8 +36,6 @@ def can_cut(c: dict | None) -> bool:
 def status(c: dict) -> str:
     if can_contribute(c):
         return {"owner": "owner", "lead": "lead: makes the final cut"}.get(c.get("role", ""), "can contribute")
-    if can_evaluate(c):
-        return "evaluator: runs the evaluation only"
     missing = [w for w in ("github", "key") if not c.get(w)]
     return "listed, waiting for " + " and ".join("GitHub handle" if w == "github" else "signing key" for w in missing)
 
@@ -99,13 +90,6 @@ def owner_keys(contributors: list[dict]) -> list[str]:
     return sorted(f"{c['github']} {c['key']}" for c in contributors if c.get("role") == "owner" and c.get("github") and c.get("key"))
 
 
-def _safe(path: Path) -> list[dict]:
-    try:
-        return read_shard(path)
-    except json.JSONDecodeError:
-        return []
-
-
 def verify(ledger_dir: Path, simulated: bool = False, index_dir: Path | None = None) -> list[str]:
     """Check every shard. Returns a list of problems, empty when the ledger is sound.
 
@@ -151,7 +135,7 @@ def verify(ledger_dir: Path, simulated: bool = False, index_dir: Path | None = N
             if who is None:
                 problems.append(f"{at}: runner @{e['runner']} is not on the contributor list")
             elif not can_contribute(who):
-                problems.append(f"{at}: signed by @{e['runner']}, an evaluator, who may sign evaluation records only")
+                problems.append(f"{at}: signed by @{e['runner']}, who has no signing key on the contributor list")
             elif not identity_mod.verify(who.get("key", ""), e["id"], e["sig"]):
                 problems.append(f"{at}: signature does not match @{e['runner']}'s key")
             key = duplicate_key(e)
@@ -165,24 +149,10 @@ def verify(ledger_dir: Path, simulated: bool = False, index_dir: Path | None = N
     wrong = list_problem(index_dir or ledger_dir, events) if not simulated else ""
     if wrong:
         problems.append(wrong)
-    found = protocol.locks(events)
-    owners = {c["github"] for c in contributors if c.get("role") == "owner"}
-    for lock in found:
-        if lock["runner"] not in owners:
-            problems.append(f"protocol {lock['protocol']} was locked by @{lock['runner']}, who is not the owner")
     cutters = {c["github"] for c in contributors if can_cut(c)}
     for e in events:
         if e["type"] == "verdict" and e.get("value") in ("cut", "restore") and e["runner"] not in cutters:
             problems.append(f"{e.get('task_id', '?')}: its {e['value']} was signed by @{e['runner']}, who is neither the owner nor a lead")
-    if found:
-        allowed, since = {lock["protocol"] for lock in found}, found[0]["time"]
-        seen: set[str] = set()
-        for e in events:
-            if e["type"] in ("decision", "trial", "repair", "report", "verdict") and e["time"] >= since \
-                    and e["protocol"] not in allowed and e["protocol"] not in seen:
-                seen.add(e["protocol"])
-                problems.append(f"records were made under protocol {e['protocol']}, which was never locked "
-                                f"(first by @{e['runner']})")
     import hashlib
     for e in events:        # a report is what a reviewer signs on: the file must be the one that was recorded
         if e["type"] == "report" and e.get("report_digest") and e.get("location"):
@@ -216,5 +186,4 @@ def verify(ledger_dir: Path, simulated: bool = False, index_dir: Path | None = N
         if not any(e["type"] == "decision" and e.get("stage") == "difficulty" and e.get("outcome") == "pass"
                    for e in mine):
             problems.append(f"{tid}: accepted without a difficulty result under the threshold")
-    from . import evals
-    return problems + evals.verify(ledger_dir, contributors, simulated)
+    return problems

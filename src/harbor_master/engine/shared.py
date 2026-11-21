@@ -12,8 +12,8 @@ from typing import TYPE_CHECKING
 from .. import ledger as ledger_mod
 from pathlib import Path
 
-from ..backends import Decision, NotImplementedBackend
-from ..curation import gates, leak, ranking
+from ..backends import NotImplementedBackend
+from ..curation import gates, ranking
 from ..tasks import Task, load_benchmark
 from . import claims, prepare
 from .state import BENCH, STAGE, BenchState
@@ -27,17 +27,19 @@ async def run_shared(s: Session, bench: BenchState) -> None:
     BENCH.set(bench.id)
     STAGE.set("intake")
     try:
-        holder = await claims.screen(s, bench)
+        try:
+            holder = await claims.claim(s, bench)
+        except claims.ClaimError as err:
+            bench.phase, bench.skip, bench.detail = "skipped", "claim_failed", str(err)
+            s.note_recent("rejected", bench.id, bench.detail)
+            s.note_skip(bench)
+            return
         if holder:
-            bench.phase, bench.skip = "skipped", "being_screened"
-            bench.detail = f"@{holder} is screening this benchmark now. Run again when they are done."
+            bench.phase, bench.skip = "skipped", "claimed"
+            bench.detail = f"@{holder} is curating this benchmark. It is theirs until they are done."
             s.note_recent("rejected", bench.id, bench.detail)
         else:
-            try:
-                await _run_shared(s, bench)
-            finally:
-                s.release(bench.id, [claims.SCREEN])
-                await s.publish(f"screening of {bench.id} done")      # others must see that it is free again
+            await _run_shared(s, bench)
     except asyncio.CancelledError:
         raise
     except Exception as err:
@@ -49,9 +51,23 @@ async def run_shared(s: Session, bench: BenchState) -> None:
     s.flush_usage(bench.id)
 
 
+ASK_FIRST = ("fetch_failed", "adapter_failed", "model_error", "not_harbor_format", "no_task_passed")   # rejections a person confirms
+
+
+async def rejected(s: Session, bench: BenchState) -> None:
+    """A benchmark turned away before curating: unless a person already decided, a box asks them to confirm, and whether
+    to drop it for good or keep it listed for another run."""
+    if bench.skip in ASK_FIRST and not bench.confirmed:
+        why, code = bench.detail, bench.skip
+        if await prepare.confirm_drop(s, bench, why[:1].upper() + why[1:], code) == "drop":
+            bench.skip, why = "abandoned", f"dropped: {why}"
+        bench.phase, bench.detail = "skipped", why
+    s.note_recent("rejected", bench.id, bench.detail)
+
+
 async def _run_shared(s: Session, bench: BenchState) -> None:
     if not await prepare.ready(s, bench):       # fetched, and adapted if it is in another format
-        s.note_recent("rejected", bench.id, bench.detail)
+        await rejected(s, bench)
         return
     bench.phase, bench.detail = "triage", "loading tasks"
     s.explain("triage")
@@ -60,9 +76,8 @@ async def _run_shared(s: Session, bench: BenchState) -> None:
         bench.tasks = load_benchmark(bench.path, bench.id)
     except ValueError as err:
         bench.phase, bench.detail, bench.skip = "skipped", str(err), "not_harbor_format"
+        await rejected(s, bench)
         return
-    for task in bench.tasks:
-        task.meta["_benchmark_license"] = bench.license
     bench.detail = "reading the benchmark's published results"
     bench.reported = await reported_results(s, bench)
     if s.only:
@@ -92,6 +107,11 @@ async def _run_shared(s: Session, bench: BenchState) -> None:
 
     await asyncio.gather(*(one(t) for t in bench.tasks))
     kept.sort(key=lambda t: t.name)
+    if not kept and bench.tasks and not s.only:      # every task failed a gate: the benchmark is rejected, if a person agrees
+        bench.phase, bench.skip = "skipped", "no_task_passed"
+        bench.detail = f"none of its {len(bench.tasks)} tasks passed the admission gates"
+        await rejected(s, bench)
+        return
 
     brief = s.ledger.brief(bench.id)
     if brief is None and s.cfg.select.require_brief and kept:
@@ -105,7 +125,8 @@ async def _run_shared(s: Session, bench: BenchState) -> None:
 
     # A simulation is for watching the stages: every task that passes the gates goes through them, up to top_k.
     # The setting itself is left as it is, so the run's protocol is the one in the file.
-    limit_n = ranking.cap(len(bench.tasks), s.cfg.select.top_k, 1.0 if s.sandbox else s.cfg.select.max_fraction)
+    # Tasks named for this run (--tasks) were chosen by a person: the share of the benchmark is not applied to them.
+    limit_n = ranking.cap(len(bench.tasks), s.cfg.select.top_k, 1.0 if s.sandbox or s.only else s.cfg.select.max_fraction)
     while True:
         bench.phase, bench.detail = "ranking", f"scoring {len(kept)} tasks, then comparing the top ones"
         s.explain("rank")
@@ -173,9 +194,17 @@ async def _run_shared(s: Session, bench: BenchState) -> None:
         bench.done = len(chosen)
         s.note_recent("checked", bench.id, f"{len(kept)} of {len(bench.tasks)} tasks passed the gates, {len(chosen)} selected, stopped there")
         return
-    bench.detail = "claiming tasks"
-    free = await claims.take(s, bench, chosen)      # leaves out what is done or held, and locks the rest
+    bench.chosen = [t.task_id for t in chosen]
+    free = await claims.take(s, bench, chosen)      # leaves out what already has an outcome
     bench.selected = len(free)
+    if free and not s.asked_cells and s.on_screen and not s.no_input:     # the curating stage starts: how much runs at once
+        s.asked_cells = True
+        bench.phase, bench.detail = "cells", "how many work cells and containers"
+        said = await s.ask("cells", f"{len(free)} task{'s' if len(free) != 1 else ''} of {bench.id} chosen. How many run at once?\n"
+                           "Each work cell takes one task through its stages; each trial runs in a container.", bench.id)
+        if said:
+            cells, _, boxes = str(said).partition(",")
+            s.set_cells(int(cells), int(boxes) if boxes else None)
     s.queue.extend(free)
     bench.phase, bench.detail = "ready", ""
 
@@ -208,8 +237,11 @@ def about(bench: BenchState, kept: list[Task]) -> str:
         return "\n".join([*lines, "", passed + "."])
     lines += ["", f"{passed}, in {len(top)} categories:"]
     notes, width = said.get("categories") or {}, max(len(a) for a, _ in top[:8])
+    import textwrap
+    indent = 2 + width + 2 + 3 + 3                  # a long note wraps under itself, not under the categories
     for area, n in top[:8]:
-        lines.append(f"  {area:<{width}}  {n:>3}   {notes.get(area, '')}".rstrip())
+        row = f"  {area:<{width}}  {n:>3}   {notes.get(area, '')}".rstrip()
+        lines.append(textwrap.fill(row, width=94, subsequent_indent=" " * indent, break_on_hyphens=False))
     if len(top) > 8:
         lines.append(f"  and {len(top) - 8} more categories")
     return "\n".join(lines)
@@ -218,7 +250,7 @@ def about(bench: BenchState, kept: list[Task]) -> str:
 def repository(path: Path) -> Path:
     """The benchmark's whole repository, where its results are likely to be, not only its task folder."""
     for folder in (path, *list(path.parents)[:4]):
-        if (folder / ".git").exists():
+        if (folder / ".git").exists() or (folder / ".hm-pinned").exists():
             return folder
     return path
 
@@ -279,23 +311,14 @@ async def triage(s: Session, task: Task) -> bool:
                  reason=f"{failed}:{answers[failed]['value']}" if failed else "", cost=cost, skill=skill)
         return not failed
 
-    released, cutoff = s.benches[task.benchmark].released, s.cfg.triage.released_after
-    if released:                    # the release date comes from the benchmark list. An unknown date passes
-        answers["recency"] = {"value": released, "tier": "code"}
-        if released < cutoff:
-            return done("recency")
+    # Recency and license are the benchmark's, checked once for the whole of it (tasks/checks.py): not asked per task.
     seen = s.benches[task.benchmark].reported.get(task.name)
     if seen:                        # what the benchmark's own results say of this task. One with no result passes
         answers["reported"] = {"value": seen["pass_rate"], "tier": "worker", "model": seen.get("model", "")}
         if seen["pass_rate"] > s.cfg.triage.max_reported_pass_rate:
             return done("reported")
-    answers["reference_solution"] = {"value": "present" if task.has_solution else "missing", "tier": "code"}
-    if not task.has_solution and s.cfg.triage.require_reference_solution:
-        return done("reference_solution")
-    kind, where = await asyncio.to_thread(leak.find, task.path, task.instruction)
-    answers["leak"] = {"value": kind, "tier": "code", **({"where": where[:5]} if where else {})}
-    if kind != leak.NONE:           # the answer is within the agent's reach: no model is asked about the rest
-        return done("leak")
+    # A task with no reference solution goes on: if it is selected, its work cell writes one (engine/stages.py).
+    answers["reference_solution"] = {"value": "present" if task.has_solution else "missing: written if selected", "tier": "code"}
     wanted = {g: choices for g, (choices, _) in gates.D_GATES.items()}
     decided = await s.backend.decide_gates(task, wanted)       # one request where the backend can
     cost = sum(d.cost for d in decided.values())

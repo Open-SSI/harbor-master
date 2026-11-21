@@ -9,9 +9,11 @@ STAGE = {
     "verify": "The task's own reference solution must pass. A run that does nothing must fail, and so must an empty or placeholder output.",
     "probe": "The verifier is tested: wrong variants of the solution must be rejected, right ones accepted. "
              "Then the instruction must state everything the tests check.",
-    "difficulty": "The worker model tries twice. A task it solves both times is too easy. Otherwise two frontier agents try three "
-                  "times each, and the task is kept if at most 40% pass. This runs once per task.",
-    "audit": "An agent reads how the frontier agents failed. Was the task hard, or was it broken?",
-    "fix": "A broken task is repaired and goes back through verify and probe. Its difficulty result is kept, not run again.",
-    "report": "One page per kept task, for a reviewer: /review shows each one in turn, and you type accept or reject under it.",
+    "worker": "The worker agent tries the task twice. A task it solves both times is too easy, and no frontier trial is spent on it.",
+    "audit": "An agent reads how the worker agent failed. Was the task hard, or was it broken?",
+    "fix": "A broken task is repaired, and the new version goes back through verify, probe, the worker's tries and the audit.",
+    "difficulty": "Last, once per task, and only for a task that passed every cheap check: two frontier agents try three times "
+                  "each, and the task is kept if at most 3 of the 6 pass. Nothing loops back from here.",
+    "report": "The frontier agents' failures are audited, and one page per kept task goes to a reviewer, with a recommendation: "
+              "reject when the failures look like the task's fault, such as a broken environment. You type accept or reject under it.",
 }

@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import subprocess
-import json
 import sys
 from pathlib import Path
 from typing import Optional
@@ -14,7 +12,7 @@ from .. import ledger as ledger_mod
 from .. import tasks as tasks_mod
 from ..core import config as config_mod
 from ..tui import theme
-from .common import Workspace, app, check_lock, console, fail, need_identity, need_workspace
+from .common import Workspace, app, check_index, console, fail, need_identity, need_workspace
 
 
 benchmarks_app = typer.Typer(invoke_without_command=True, help="The benchmarks this index may curate, and adding one.")
@@ -31,51 +29,18 @@ def benchmarks(ctx: typer.Context, workspace: Optional[Path] = Workspace):
     show(need_workspace(workspace))
     console.print(f"[{theme.MU}]A run works only on these. Anyone on the contributor list adds one: hm benchmarks add URL[/]")
 
-DRAFT = "benchmark-draft.json"      # in .hm: the entry being added, until it is confirmed
-
-
-def _may_add(ws: Path, ident) -> None:
-    from .common import is_contributor
-    if not is_contributor(ws, ident):
-        fail(f"@{ident.github} is not on this index's contributor list yet, so cannot add a benchmark to it. See: hm contributors")
-
-
-def _clash(ws: Path, name: str, github: str) -> None:
-    """Refuse a benchmark that is on the list already, by its ID or by its repository."""
-    same = lambda a, b: a.lower().rstrip("/").removesuffix(".git") == b.lower().rstrip("/").removesuffix(".git")  # noqa: E731
-    found = next((e for e in tasks_mod.supported.supported(ws) if same(e["github"], github)), None)
-    if found:
-        fail(f"That repository is on this index's list already, as {found['id']}, added by @{found.get('added_by', '?')} "
-             f"on {found.get('added', '?')}. See: hm benchmarks")
-    found = tasks_mod.supported.find(ws, name)
-    if found:
-        fail(f"{found['id']} is on this index's list already, for another repository ({found['github']}). "
-             "Give this one another name with --id.")
-
-
-def _draft(ws: Path) -> dict:
-    path = config_mod.local(ws) / DRAFT
-    if not path.exists():
-        fail("No benchmark is being added. Start with: hm benchmarks add URL")
-    return json.loads(path.read_text())
-
-
-def _keep(ws: Path, entry: dict) -> None:
-    """Save the draft and show it, with what it still lacks and how to answer."""
-    path = config_mod.local(ws) / DRAFT
-    path.parent.mkdir(exist_ok=True)
-    path.write_text(json.dumps(entry, indent=2) + "\n")
-    console.print(f"[bold]{entry.get('name', entry['id'])}[/]  [{theme.MU}]{entry['id']}, not added yet[/]", highlight=False)
-    for key in ("description", "paper", "released", "license", "homepage"):
-        value = entry.get(key, "")
-        if key == "released" and value == entry.get("pinned_on"):
-            value += "  (the date of the pinned commit: reply `released: YYYY-MM-DD` if the benchmark came out earlier)"
-        console.print(f"  [{theme.MU}]{key:<13}[/]{value or f'[{theme.AM}]not known[/]'}", highlight=False, soft_wrap=False)
-    tasks = f"{entry['task_count']} Harbor tasks under {entry['tasks']}" if entry.get("format") == "harbor" else \
-        "not Harbor task folders: the first run writes an adapter"
-    console.print(f"  [{theme.MU}]{'pinned':<13}[/]{entry['ref']} ({entry['commit'][:10]}), from {entry['github']}", highlight=False)
-    console.print(f"  [{theme.MU}]{'tasks':<13}[/]{tasks}", highlight=False)
-    lacks = [k for k in ledger_mod.benchmarks.missing(entry) if k in ("name", "description", "paper")]
+def _show(entry: dict) -> None:
+    """The draft, with what it still lacks and how to answer."""
+    from ..tasks import adding
+    console.print(f"[bold]{entry.get('name') or entry['id']}[/]  [{theme.MU}]{entry['id']}, not added yet[/]", highlight=False)
+    from rich.markup import escape
+    rows = []
+    for key, value in adding.lines(entry):
+        if key == "released" and value and value == entry.get("pinned_on"):
+            value += "  (the date of the pinned commit: give the real one if it came out earlier)"
+        rows.append((key, escape(value)))
+    console.print(adding.table(rows, theme.MU, theme.AM, "not known", indent=2), highlight=False)
+    lacks = [k for k in adding.lacking(entry) if k in ("name", "description", "paper")]
     if lacks:
         console.print(f"[{theme.AM}]Still needed: {', '.join(lacks)}.[/] Give it with hm benchmarks revise, such as "
                       "hm benchmarks revise paper: https://..." + (" (paper: none when it has none)." if "paper" in lacks else "."), highlight=False)
@@ -84,84 +49,93 @@ def _keep(ws: Path, entry: dict) -> None:
                       "revise, then what to change, in plain words or as description: ...", highlight=False)
 
 
-def _agent(ws: Path, entry: dict, note: str = "") -> str:
-    """Have the agent fill in the draft. Returns why it did not, or "" when it did."""
-    from ..backends import NotImplementedBackend, describe
+def _clash(ws: Path, name: str, github: str) -> None:
+    from ..tasks import adding
     try:
-        data, cost = asyncio.run(describe.fill(config_mod.load(ws), entry, config_mod.local(ws) / "sources" / entry["id"], note))
-    except (RuntimeError, NotImplementedBackend) as err:
-        return str(err)
-    describe.merge(entry, data)
-    console.print(f"[{theme.MU}]An agent read the repository and filled this in (${cost:.2f}). Check it.[/]", highlight=False)
-    return ""
+        adding.clash(ws, name, github)
+    except adding.AddError as err:
+        fail(str(err))
 
 
 @benchmarks_app.command("add")
-def benchmarks_add(url: str = typer.Argument(..., help="The address of the benchmark's git repository."),
-                   ref: str = typer.Option("", help="The tag or branch to pin. Default: the newest tag, else the main branch."),
+def benchmarks_add(url: str = typer.Argument(..., help="A link to the benchmark: its repository in any form, its paper, its page, or its name."),
+                   ref: str = typer.Option("", help="The tag or branch to pin. Default: the newest release."),
                    id_: str = typer.Option("", "--id", help="Its short name here. Default: from the repository's name."),
-                   agent: bool = typer.Option(True, "--agent/--no-agent", help="Have an agent read the repository and draft the entry."),
+                   agent: bool = typer.Option(True, "--agent/--no-agent", help="Have the worker agent search the web for it. "
+                                              "Without, URL must be the repository's own address, and only the code reads it."),
                    workspace: Optional[Path] = Workspace):
-    """Draft a benchmark's entry from its repository, to confirm or revise. Anyone on the contributor list may add one."""
-    from ..backends import describe
+    """Draft a benchmark's entry, to confirm or revise: the worker agent searches the web for its repository and what is
+    known about it, and the code downloads it and finds its tasks. Anyone on the contributor list may add one. The curate
+    screen does the same in a box, when it starts."""
+    from ..tasks import adding
     ws, ident = need_workspace(workspace), need_identity()
-    _may_add(ws, ident)
-    github = url.rstrip("/").removesuffix(".git")
-    sync = ledger_mod.Sync(ws, ident.name, ident.github)
     try:
-        if sync.enabled:            # the list as everyone has it now, so that what someone else just added is seen
-            sync.pull()
-        _clash(ws, id_ or github, github)
-        ref, commit = tasks_mod.supported.pin(url, ref)
-        entry = tasks_mod.supported.describe(url, ref, commit, config_mod.local(ws) / "sources", id_)
-    except (ValueError, subprocess.CalledProcessError, ledger_mod.SyncError) as err:
-        fail(str(getattr(err, "stderr", "") or err).strip())
-    entry["pinned_on"] = entry["released"]          # until someone says when it came out, the pinned commit's date stands in
-    describe.merge(entry, describe.guess(config_mod.local(ws) / "sources" / entry["id"]))
-    why = _agent(ws, entry) if agent else ""
-    if why:
-        console.print(f"[{theme.AM}]No agent filled this in[/] ({why[:160]}). What the code could read is below.", highlight=False)
-    _keep(ws, entry)
+        if agent:
+            console.print("The worker agent searches the web for it ...", highlight=False)
+            found, _ = asyncio.run(adding.find(ws, ident, url))
+            entry = adding.from_found(ws, ident, {**found, **({"release": ref} if ref else {})}, id_)
+            if found.get("sources"):
+                console.print(f"[{theme.MU}]Found from: {' · '.join(found['sources'])}[/]", highlight=False)
+        else:
+            entry = adding.draft(ws, ident, url, ref, id_)
+    except adding.AddError as err:
+        fail(str(err))
+    _show(entry)
 
 
 @benchmarks_app.command("revise")
 def benchmarks_revise(words: list[str] = typer.Argument(..., help="What to change, in plain words or as `paper: URL`."),
                       workspace: Optional[Path] = Workspace):
     """Change the benchmark entry that is being added."""
-    from ..backends import describe
+    from ..tasks import adding
     ws = need_workspace(workspace)
-    entry, text = _draft(ws), " ".join(words)
-    if not describe.direct(entry, text):
-        why = _agent(ws, entry, text)
-        if why:
-            fail(f"No agent could read that ({why[:160]}). Write it as `paper: https://...` or `description: ...`.")
-    _keep(ws, entry)
+    entry, text = adding.kept(ws), " ".join(words)
+    if entry is None:
+        fail("No benchmark is being added. Start with: hm benchmarks add URL")
+    if not adding.direct(ws, entry, text):
+        try:
+            entry, _ = asyncio.run(adding.refine(ws, need_identity(), entry, text))
+        except adding.AddError as err:
+            fail(f"{err} Or write it as `paper: https://...` or `description: ...`.")
+    _show(entry)
 
 
 @benchmarks_app.command("confirm")
 def benchmarks_confirm(workspace: Optional[Path] = Workspace):
-    """Add the drafted benchmark to this index's list: a record signed with your key."""
+    """Check the drafted benchmark as a whole, with the cheap benchmark-level checks, and add it to this index's list: a
+    record signed with your key. A benchmark that a check rejects is not added."""
+    from rich.markup import escape
+
+    from ..tasks import adding
+    from ..tasks import checks as checks_mod
     ws, ident = need_workspace(workspace), need_identity()
-    _may_add(ws, ident)
-    entry = _draft(ws)
-    lacks = ledger_mod.benchmarks.missing(entry)
-    if lacks:
-        fail(f"Not added yet: it still needs {', '.join(lacks)}. Give it with: hm benchmarks revise {lacks[0]}: ...")
-    sync = ledger_mod.Sync(ws, ident.name, ident.github)
+    entry = adding.kept(ws)
+    if entry is None:
+        fail("No benchmark is being added. Start with: hm benchmarks add URL")
+    if adding.lacking(entry):
+        fail(f"Not added yet: it still needs {', '.join(adding.lacking(entry))}.")
+    cfg = config_mod.load(ws)
+    source = adding.source_of(ws, entry)
+    found = checks_mod.run(entry, source if source.is_dir() else None, cfg)
+    look = {"pass": ("✓", theme.TE), "warn": ("!", theme.AM), "fail": ("✗", theme.RD), "unknown": ("?", theme.MU)}
+    for c in found:
+        mark, color = look[c.status]
+        console.print(f"  [{color}]{mark}[/] {c.label:<38} [{color if c.status in ('fail', 'warn') else theme.MU}]{escape(c.detail)}[/]",
+                      highlight=False)
+    failed = [c for c in found if c.failed]
+    if failed:
+        fail(f"Not added: its checks reject it. {checks_mod.why(found)}")
+    from ..ledger.store import MANUAL
+    ledger_mod.Shard(ws, entry["id"], ident, MANUAL, cfg.protocol).append(      # first, so that it is shared with the entry
+        "decision", "", checks_mod.key(entry), stage="benchmark", gate="checks", tier="code",
+        value=checks_mod.summary(found), outcome="pass", checks={c.key: [c.status, c.detail[:240]] for c in found})
     try:
-        if sync.enabled:
-            sync.pull()
-        _clash(ws, entry["id"], entry["github"])
-        entry.pop("pinned_on", None)
-        ledger_mod.benchmarks.add(ws, ident, config_mod.load(ws).protocol, entry)
-        ledger_mod.benchmarks.write_list(ws)
-        if sync.enabled:
-            sync.publish(f"add benchmark {entry['id']}")
-    except ledger_mod.SyncError as err:
-        fail(str(err))
-    (config_mod.local(ws) / DRAFT).unlink(missing_ok=True)
+        entry = adding.confirm(ws, ident, entry)
+    except adding.AddError as err:
+        fail(f"Not added yet: {err}")
+    sync = ledger_mod.Sync(ws, ident.name, ident.github)
     console.print(f"[{theme.TE}]Added {entry['id']}[/] to this index, signed by @{ident.github}"
-                  + (" and shared." if sync.enabled else ".") + " The list is in benchmarks.toml. Run it with: hm curate",
+                  + (" and shared." if sync.enabled else ".") + " The list is in benchmarks.toml. Curate it with: hm curate",
                   highlight=False)
 
 
@@ -173,6 +147,8 @@ def benchmarks_remove(name: str, reason: str = typer.Option("", help="Why it is 
     entry = tasks_mod.supported.find(ws, name)
     if entry is None:
         fail(f"{name} is not on this index's list. See: hm benchmarks")
+    if entry["id"] in ledger_mod.abandoned(ledger_mod.Ledger(ws).events):
+        fail(f"{entry['id']} was dropped because no model could adapt it. It stays on the list as dropped, so that nobody adds it again.")
     if entry.get("added_by") != ident.github and not is_owner(ws, ident):
         fail(f"{entry['id']} was added by @{entry.get('added_by', '?')}. Only they, or the owner, can take it off.")
     sync = ledger_mod.Sync(ws, ident.name, ident.github)
@@ -192,7 +168,6 @@ def curate(benchmarks: list[str] = typer.Argument(None, help="Benchmarks to run.
         demo: bool = typer.Option(False, help="Try it: a made-up benchmark of 10 tasks, simulated. Spends nothing, and nothing enters the index."),
         speed: float = typer.Option(1.0, help="Simulation only: scale the pretend durations. 0 is instant."),
         cells: int = typer.Option(None, help="Tasks in flight at once."),
-        budget: float = typer.Option(None, help="Spending limit in dollars."),
         plain: bool = typer.Option(False, help="Print lines, with no full-screen view."),
         no_input: bool = typer.Option(False, help="Never prompt. Skip what needs an answer and record it."),
         only: str = typer.Option("", "--tasks", help="Run only these tasks of the benchmark: names separated by commas."),
@@ -210,12 +185,17 @@ def curate(benchmarks: list[str] = typer.Argument(None, help="Benchmarks to run.
     from ..tui import render, run_app, run_plain
     ws, ident = need_workspace(workspace), need_identity()
     if demo:
-        from .home import demo_bench
+        from .home import demo_bench, demo_world, people_dir
+        if people_dir(ws).is_dir() and not foreground:
+            console.print("The other contributors' part of the demo is made up first ...", highlight=False)
+            with console.capture():
+                demo_world(ws)
         demo_bench(ws)
-        benchmarks, simulate = ["demo-bench"], True
-    if not simulate and ledger_mod.evals.release(ledger_mod.evals.read(ws)):
-        fail("This index is released, so its curation is closed. Its evaluation is open: hm eval")
+        simulate = True
     plain = plain or not (sys.stdout.isatty() and sys.stdin.isatty())
+    if demo and plain and not benchmarks:       # with no screen to pick in, the demo's own benchmark
+        benchmarks = ["demo-bench"]
+    ask_first = not benchmarks and not plain    # on the screen, with none named: its first box asks which one
     going = None if foreground else host.active(ws)
     if going is not None:           # one run per index: join the one that is going
         if plain or not going.get("socket"):
@@ -234,11 +214,9 @@ def curate(benchmarks: list[str] = typer.Argument(None, help="Benchmarks to run.
     cfg = config_mod.load(ws)
     if cells:
         cfg.run.cells = cells
-    if budget:
-        cfg.run.budget_usd = budget
     registry = tasks_mod.read_registry(ws)
     listed = {e["id"]: e for e in tasks_mod.supported.supported(ws)}
-    wanted = benchmarks or [*listed, *(b for b in registry if b not in listed and (simulate or registry[b].get("supported")))]
+    wanted = [] if ask_first else benchmarks or [*listed, *(b for b in registry if b not in listed and (simulate or registry[b].get("supported")))]
     resolved = {}
     for b in wanted:
         info, why = tasks_mod.resolve(ws, b, simulate)
@@ -250,39 +228,34 @@ def curate(benchmarks: list[str] = typer.Argument(None, help="Benchmarks to run.
         if b in gone:
             from ..engine import prepare
             fail(f"Refused: {b} was {prepare.abandoned_text(b, gone[b])}")
-    if not resolved:
+    if not resolved and not ask_first:
         fail("Nothing to run: this index lists no benchmark yet. Add one with hm benchmarks add URL, or try made-up tasks with hm curate --demo")
-    lock = ledger_mod.protocol.current(ledger_mod.Ledger(ws).events)
-    if not simulate and not plain and not foreground:       # the owner changed a list or a setting: lock it here, not in another step
-        from ..interact import guide as guide_mod
-        from .common import is_owner
-        if is_owner(ws, ident) and guide_mod.look(ws).lock != "locked":
-            from .results import lock_protocol
-            from .views import protocol
-            protocol(ws)
-            if typer.confirm("A real run needs these locked. Lock them now, signed with your key?", default=True):
-                lock_protocol(ws)
-                lock = ledger_mod.protocol.current(ledger_mod.Ledger(ws).events)
-    if lock is None and not simulate:
-        fail("No protocol is locked in this ledger, so a real run has no fixed settings to run under. "
-             "The owner locks them in a shell: hm lock")
-    check_lock(lock, cfg, ws)
+    check_index(cfg, ws)
     if not simulate:
         from .common import is_contributor
         if not is_contributor(ws, ident):
             fail(f"@{ident.github} is not on this index's contributor list, so cannot curate in it. See: hm contributors")
+    if not simulate and not foreground:        # the keys first: nothing can be spent without them
+        from .common import curate_keys, need_keys
+        need_keys(lambda: curate_keys(cfg), "A real curation")
     if not simulate:
         from ..tasks import store
         why = store.not_ready(cfg)          # an accepted task must reach the store, so this is asked before anything is spent
         if why:
             fail(f"Refused: {why}")
+    if not simulate and not foreground:     # every part tried once, before anything is claimed or spent
+        from ..core import access
+        console.print("Checking your keys, the task store, the index's repository and Docker ...", highlight=False)
+        missing = access.problems(cfg, ws)
+        if missing:
+            fail("Nothing was started:\n" + "\n".join(f"- {p}" for p in missing))
     if until not in ("", "select", "verify", "probe") or assume_after not in ("", "verify", "probe"):
         fail("--until takes select, verify or probe. --assume-after takes verify or probe.")
-    command = "/run " + " ".join([b.split("/")[-1] for b in resolved] + (["--simulate"] if simulate else [])
+    command = "hm curate " + " ".join([b.split("/")[-1] for b in resolved] + (["--simulate"] if simulate else [])
                                    + ([f"--assume-after {assume_after}"] if assume_after else []))
     if not plain and not foreground:        # everything checks out: start the run behind a relay, and view it from here
         argv = [*(benchmarks or []), *(["--simulate"] if simulate else []), "--speed", str(speed),
-                *(["--cells", str(cells)] if cells else []), *(["--budget", str(budget)] if budget else []),
+                *(["--cells", str(cells)] if cells else []), 
                 *(["--no-input"] if no_input else []), *(["--tasks", only] if only else []),
                 *(["--until", until] if until else []), *(["--assume-after", assume_after] if assume_after else [])]
         try:
@@ -317,6 +290,8 @@ def _view(ws: Path) -> None:
     from .. import host
     state = host.attach(ws)
     if state == "going":
-        console.print(f"[{theme.TE}]The run goes on[/] in the background. hm curate inside this folder shows it again.", highlight=False)
+        here = Path.cwd().resolve() == ws.resolve()
+        console.print(f"You left the screen. [{theme.TE}]The run goes on.[/] To get back to it: "
+                      + ("[bold]hm curate[/]" if here else f"[bold]cd {ws}[/], then [bold]hm curate[/]"), highlight=False)
     else:
         console.print("The run has ended. hm curate shows it again, and starts a new one.", highlight=False)

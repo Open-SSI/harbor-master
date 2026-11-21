@@ -1,7 +1,7 @@
 """List prices, for costing a session or a trial from its tokens (DESIGN.md Section 2).
 
-A cost that a provider reports is recorded as it is. Some report none: the Codex SDK, and some agents
-on a sign-in to a subscription. So that a run's budget and its statistics still mean something, the
+A cost that a provider reports is recorded as it is. Some report none: the Codex SDK, and an agent
+on a subscription's sign-in. So that a run's budget and its statistics still mean something, the
 cost recorded then is the tokens at the provider's published standard rate. That is an estimate at
 list price, not an invoice: no discount, no long-context or batch rate.
 
@@ -27,9 +27,6 @@ PER_MTOK: dict[str, tuple[float, float, float, float]] = {
     "gpt-5.6-sol": (4.00, 0.40, 4.00, 20.00),
     "gpt-5.6-terra": (2.00, 0.20, 2.00, 12.00),
     "gpt-5.6-luna": (0.20, 0.02, 0.20, 1.20),
-    "muse-wonder-1.0": (4.00, 0.20, 4.00, 20.00),
-    "muse-spark-1.3": (1.25, 0.15, 1.25, 4.25),
-    "muse-spark-1.2": (1.25, 0.15, 1.25, 4.25),
 }
 
 

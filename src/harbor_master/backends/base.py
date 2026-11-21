@@ -8,7 +8,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Awaitable, Callable
 
 from ..core.config import Config, SuiteEntry
 from ..tasks import Task
@@ -45,6 +45,14 @@ class TrialResult:
 Usage = Callable[[str, float, int], None]  # (tier, cost, tokens)
 
 
+class TaskDropped(Exception):
+    """A person chose to drop the task while one of its trials was running: the work cell drops it and moves on."""
+
+    def __init__(self, reason: str, why: str):
+        super().__init__(why)
+        self.reason, self.why = reason, why
+
+
 class NotImplementedBackend(RuntimeError):
     pass
 
@@ -52,6 +60,22 @@ class NotImplementedBackend(RuntimeError):
 class Backend(ABC):
     def __init__(self, cfg: Config, usage: Usage):
         self.cfg, self.usage = cfg, usage
+        # Set by the session: a person is asked what to do with a hung trial, and answers "retry" or "drop".
+        self.on_hung: Callable[[Task, str, Decision, float], Awaitable[str]] | None = None
+
+    async def stuck(self, task: Task, what: str, log: str, quiet: float) -> str:
+        """A trial whose logs stopped moving: the worker agent reads them. "wait" when it judges the trial still working;
+        when hung, what the person chose: "retry" or "drop". With nobody to ask, it is run again."""
+        d = await self.judge_stuck(what, log, quiet)
+        if d.value != "hung":
+            return "wait"
+        return await self.on_hung(task, what, d, quiet) if self.on_hung else "retry"
+
+    @abstractmethod
+    async def judge_stuck(self, what: str, log: str, quiet: float) -> Decision:
+        """Whether a trial whose logs have been still for `quiet` seconds is "hung" or "working", read from its log by
+        the worker agent, with what it was doing in the rationale."""
+        ...
 
     # tier D: typed decisions with a probability
     @abstractmethod
@@ -86,11 +110,20 @@ class Backend(ABC):
         tier answers. Given its unsure answer as `first`, the worker tier reads the task and answers."""
         ...
     @abstractmethod
+    async def diagnose(self, task: Task, defect: str, why: str) -> Decision:
+        """What would make a selected task valid, from the decision tier, before a repair is paid for: write_solution,
+        repair_solution, repair_verifier, repair_environment or drop. An empty value when it declined to say."""
+        ...
+    @abstractmethod
     async def audit(self, task: Task, round_no: int) -> Decision: ...
     @abstractmethod
     async def second_opinion(self, task: Task, round_no: int) -> Decision: ...
     @abstractmethod
-    async def repair(self, task: Task, defect: str, round_no: int, tier: str) -> dict: ...
+    async def repair(self, task: Task, defect: str, round_no: int, tier: str, why: str = "") -> dict:
+        """{"fixed", "what", "cost"}, and "path" when the repair made a new copy of the task: the version that goes on."""
+        ...
+    @abstractmethod
+    async def final_audit(self, task: Task) -> Decision: ...
     @abstractmethod
     async def write_report(self, task: Task, blackboard: dict) -> dict: ...
     @abstractmethod

@@ -14,7 +14,7 @@ MU, SE = "#7c7b75", "#aaa89f"
 PU, TE, AM, RD = "#a59ef0", "#5dcaa5", "#efa63a", "#f08a8a"
 BORDER = "#3a3a46"
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-KIND_COLOR = {"kept": TE, "dropped": RD, "to fix": AM, "stopped": AM, "budget": AM, "verdict": PU, "checked": TE, "error": RD, "claimed": AM, "rejected": AM, "config": RD}
+KIND_COLOR = {"kept": TE, "dropped": RD, "to fix": AM, "stopped": AM, "verdict": PU, "checked": TE, "error": RD, "claimed": AM, "rejected": AM, "config": RD}
 
 
 def t(*parts) -> Text:

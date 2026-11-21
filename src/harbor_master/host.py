@@ -1,11 +1,11 @@
-"""A run that outlives the terminal it was started from (DESIGN.md Section 11).
+"""A run that outlives the terminal it was started from (DESIGN.md Section 10).
 
 The run and its screen live in a background process, attached to a pseudo-terminal that a
 small relay owns. What a person has in their terminal is a view of that screen: closing the
-window closes the view, and `hm open INDEX` opens another on the same run. There is one run per
+window closes the view, and `hm curate` opens another on the same run. There is one run per
 index. `/add NAME` on its screen adds a benchmark to the one that is going.
 
-    terminal  <-->  view (hm open)  <-- socket -->  relay  <-- pseudo-terminal -->  the run and its screen
+    terminal  <-->  view (hm curate)  <-- socket -->  relay  <-- pseudo-terminal -->  the run and its screen
 """
 from __future__ import annotations
 
@@ -39,6 +39,19 @@ LEAVE = (b"\x1b[=0;1u\x1b[<u"                                                   
          b"\x1b[?2004l\x1b[?1004l\x1b[?2048l\x1b[?2026l"                             # paste, focus, resize and sync reports
          b"\x1b[?1016l\x1b[?1006l\x1b[?1015l\x1b[?1003l\x1b[?1002l\x1b[?1000l"       # the mouse
          b"\x1b[0m\x1b[?25h\x1b[?1049l")                                             # colors, the cursor, the screen
+OTHER, BACK = b"\x1b[?1049h", b"\x1b[?1049l"
+
+
+def back_already(back: bool, tail: bytes, shown: bytes) -> tuple[bool, bytes]:
+    """Whether the run's own screen has put the terminal back on its first screen, given what was known before (`back`,
+    and the last few bytes seen, in case a mark is split between two reads) and what was just shown. A screen that ends
+    does, and then prints its summary there: leaving the other screen a second time would move the cursor back up over
+    that summary, so the view must not. Returns the new `back`, and the bytes to keep for next time."""
+    seen = tail + shown
+    on, off = seen.rfind(OTHER), seen.rfind(BACK)
+    if on != off:           # both -1 when neither is in it: nothing changed
+        back = off > on
+    return back, seen[-(len(BACK) - 1):]
 
 
 def _alive(pid: int) -> bool:
@@ -209,7 +222,7 @@ def start(ws: Path, argv: list[str], command: str, simulate: bool, verb: str = "
     raise RuntimeError(f"The run did not start. See {log}")
 
 
-# ----- the view: what `hm open INDEX` shows when a run is going -----
+# ----- the view: what `hm curate` shows when a run is going -----
 
 def _frame(kind: str, body: bytes) -> bytes:
     return kind.encode() + len(body).to_bytes(4, "big") + body
@@ -241,6 +254,7 @@ def attach(ws: Path) -> str:
     sel = selectors.DefaultSelector()
     sel.register(stdin, selectors.EVENT_READ, "keys")
     sel.register(link, selectors.EVENT_READ, "screen")
+    back, tail = False, b""
     try:
         tty.setraw(stdin)
         os.write(stdout, ENTER)
@@ -258,14 +272,15 @@ def attach(ws: Path) -> str:
                     shown = link.recv(65536)
                     if not shown:
                         return "going" if active(ws) else "ended"
+                    back, tail = back_already(back, tail, shown)
                     os.write(stdout, shown)
     except OSError:
         return "going" if active(ws) else "ended"
     finally:
         signal.signal(signal.SIGWINCH, previous)
         try:
-            os.write(stdout, LEAVE)
-            time.sleep(0.05)                                # what the terminal still had to say arrives
+            os.write(stdout, LEAVE.removesuffix(BACK) if back else LEAVE)
+            time.sleep(0.05)                               # what the terminal still had to say arrives
             termios.tcflush(stdin, termios.TCIFLUSH)        # and is dropped, so that it is not typed into the shell
         except (OSError, termios.error):
             pass

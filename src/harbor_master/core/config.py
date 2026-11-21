@@ -1,5 +1,5 @@
-"""Configuration, in two files (DESIGN.md Section 10): protocol.toml, in the index repository,
-is the locked protocol. .hm/hm.toml is this machine's own settings."""
+"""Configuration, in two files (DESIGN.md Section 9): protocol.toml, in the index repository,
+is the protocol. .hm/hm.toml is this machine's own settings."""
 from __future__ import annotations
 
 import hashlib
@@ -8,13 +8,13 @@ import tomllib
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 LOCAL = ".hm"                      # this machine's own files inside the clone of an index. Git ignores the folder
-CONFIG_NAME = "hm.toml"            # in .hm: parallelism and budget. The user's to change
+CONFIG_NAME = "hm.toml"            # in .hm: parallelism and claims. The user's to change
 PROTOCOL_NAME = "protocol.toml"    # the protocol: everything that can change a result. Locked
 ABOUT_NAME = "about.toml"          # what the index is: its name and description. Not locked
-PROTOCOL_SECTIONS = ("tiers", "escalation", "triage", "adapt", "select", "verify", "difficulty", "eval", "fix")
+PROTOCOL_SECTIONS = ("tiers", "escalation", "triage", "adapt", "select", "difficulty", "fix")
 
 
 class Tier(BaseModel):
@@ -34,23 +34,23 @@ class Escalation(BaseModel):
     # A gate that a later stage checks for free can accept a less sure answer.
     # The verify stage measures the verifier's real time, so a wrong "cheap" costs nothing.
     gate_min_confidence: dict[str, float] = {"verifier_cost": 0.6}
-    frontier_sample: float = 0.05
 
 
 class Triage(BaseModel):
     released_after: str = "2025-06-01"
-    require_reference_solution: bool = True
+    require_reference_solution: bool = True   # a selected task with none gets one written in its work cell; off, it is dropped
     exclude_formats: list[str] = ["multiple_choice", "question_answering", "short_answer"]
     allow_llm_judge_verifier: bool = False
-    max_verifier_seconds: int = 300
-    max_reported_pass_rate: float = 0.5   # a task that a model is already reported to solve more often than this is dropped
+    max_verifier_seconds: int = 300   # a verifier that takes longer fails, and its task is dropped
+    max_build_seconds: int = 300      # building a task's environment: one that takes longer fails, and its task is dropped
+    max_reported_pass_rate: float = 0.4   # a task that a model is already reported to solve more often than this is dropped
 
 
 class Adapt(BaseModel):
     """Building the adapter for a benchmark that is not in Harbor format."""
-    max_rounds: int = 3               # how many times a model may write it before a person is asked
+    max_rounds: int = 3               # rounds of writing it in all: the worker's, then the frontier model's
     frontier_after_round: int = 2     # the worker tier writes rounds up to this one, the frontier tier the rest
-    oracle_tasks: int = 2             # generated tasks whose reference solution is run through Harbor as a check
+    oracle_tasks: int = 3             # generated tasks whose reference solution is run through Harbor as a check
     require_review: bool = False      # if true, a person confirms an adapter that passes before it is used
 
 
@@ -60,14 +60,8 @@ class Select(BaseModel):
     comparisons_per_task: int = 12
     pool_factor: int = 3              # compare in pairs only the best pool_factor x cap tasks by score
     stratify: bool = True
-    backfill: bool = False
     require_brief: bool = True
     require_signoff: bool = True      # the lead approves the selection before any trial is spent
-
-
-class Verify(BaseModel):
-    parity: str = "sampled"  # "off" | "sampled" | "full"
-    parity_tasks: int = 5      # parity runs with the worker tier's model
 
 
 @lru_cache(maxsize=None)
@@ -76,15 +70,24 @@ def presets() -> dict[str, dict]:
     return tomllib.loads((Path(__file__).parent / "presets.toml").read_text()).get("preset", {})
 
 
+AGENTS = ("claude-code", "codex")      # the agents a trial runs: Claude models, and OpenAI models
+
+
 class SuiteEntry(BaseModel):
-    """One agent configuration: a Harbor agent and a model. `use = "NAME"` takes a preset's fields,
+    """One agent configuration: Claude Code or Codex, and a model. `use = "NAME"` takes a preset's fields,
     and any field written beside it replaces the preset's."""
     agent: str
     model: str
     reasoning_effort: str = ""
     version: str = ""          # the agent's own version. Pin it: a different build is a different request
-    key: str = ""              # the variable in secrets.env it needs
     env: dict[str, str] = {}   # settings passed to the agent. Never a key
+
+    @field_validator("agent")
+    @classmethod
+    def _agent(cls, value: str) -> str:
+        if value not in AGENTS:
+            raise ValueError(f"{value!r} is not an agent Harbor-Master runs: {' or '.join(AGENTS)}")
+        return value
 
     @model_validator(mode="before")
     @classmethod
@@ -94,27 +97,7 @@ class SuiteEntry(BaseModel):
         known = presets()
         if data["use"] not in known:
             raise ValueError(f"no preset is named {data['use']!r}. The presets: {', '.join(known)}.")
-        out = {**known[data["use"]], **{k: v for k, v in data.items() if k != "use"}}
-        if "name" in cls.model_fields:
-            out.setdefault("name", data["use"])     # on a roster, the preset's name is the configuration's name
-        return out
-
-
-class RosterEntry(SuiteEntry):
-    """One agent configuration to benchmark on the index: roster.toml in the index repository."""
-    name: str
-
-
-def roster(workspace: Path) -> list[RosterEntry]:
-    path = workspace / "roster.toml"
-    listed = tomllib.loads(path.read_text()).get("config", []) if path.exists() else []
-    return [RosterEntry.model_validate(c) for c in listed]
-
-
-def demo_roster(cfg) -> list[RosterEntry]:
-    """For a simulated evaluation in an index whose roster is still empty: the difficulty suite, and one more agent."""
-    return [*(RosterEntry(name=e.model, **e.model_dump()) for e in cfg.difficulty.suite),
-            RosterEntry(name="demo-agent", agent="demo-agent", model="demo-model", version="1.0")]
+        return {**known[data["use"]], **{k: v for k, v in data.items() if k != "use"}}
 
 
 class Difficulty(BaseModel):
@@ -122,7 +105,8 @@ class Difficulty(BaseModel):
         SuiteEntry(agent="claude-code", model="claude-fable-5-1", reasoning_effort="max", version="2.1.292"),
         SuiteEntry(agent="codex", model="gpt-6-astra", reasoning_effort="max", version="0.162.1"),
     ]
-    max_pass_rate: float = 0.40
+    max_pass_rate: float = 0.50       # kept when at most this share of the frontier trials pass: 3 of 6
+    trials: int = 3                    # tries per task by each agent of the suite
     max_agent_hours: float = 4.0       # the most one agent trial may run. A task's own limit applies when it is shorter
     early_stop: bool = True
     cheap_solve: bool = True           # the worker tier's model tries first. A task it solves every time never reaches the suite
@@ -132,19 +116,17 @@ class Difficulty(BaseModel):
 
 
 class Fix(BaseModel):
-    max_rounds: int = 3
-    frontier_after_round: int = 2
+    max_rounds: int = 2               # repair rounds for a task: the worker model's, then the frontier model's
+    frontier_after_round: int = 1
 
 
 class Run(BaseModel):
     cells: int = 4
     max_containers: int = 16
     sandbox: str = "docker"
-    budget_usd: float = 200.0
-    budget_usd_per_task: float = 50.0
-    max_tokens_per_agent_session: int = 400_000
-    on_incomplete: str = "resume"  # "resume" | "restart" | "skip"
-    claim_hours: float = 12.0      # how long a claim on tasks holds if the run never releases it
+    claim_hours: float = 12.0      # how long a claim on a benchmark holds. A run that goes on renews it
+    watch_minutes: float = 3.0     # how often a running trial's logs are looked at
+    quiet_minutes: float = 9.0     # a trial whose logs have not moved for this long is read by the worker agent: hung, or working
 
 
 class Requires(BaseModel):
@@ -160,14 +142,7 @@ class About(BaseModel):
     license: str = ""
     tasks: str = ""                # where accepted tasks are kept: a Hugging Face dataset repository, or a folder
     canary: str = ""               # marks the repository as an index: CANARY and a GUID of its own
-
-
-class Eval(BaseModel):
-    """Trials of an agent configuration on a task: the difficulty run of stage 1, and the evaluation of stage 2."""
-    trials: int = 3                # trials per task per agent configuration, in both stages
-    claim_hours: float = 4.0       # how long a claim on a task and a configuration holds
-    max_claim: int = 20            # the most that one person may hold at once
-    retries: int = 2               # how often a trial that failed for an infrastructure reason is tried again
+    version: str = "0.1.0"         # the index's version: its owner sets it
 
 
 class Config(BaseModel):
@@ -176,9 +151,7 @@ class Config(BaseModel):
     triage: Triage = Field(default_factory=Triage)
     adapt: Adapt = Field(default_factory=Adapt)
     select: Select = Field(default_factory=Select)
-    verify: Verify = Field(default_factory=Verify)
     difficulty: Difficulty = Field(default_factory=Difficulty)
-    eval: Eval = Field(default_factory=Eval)
     fix: Fix = Field(default_factory=Fix)
     run: Run = Field(default_factory=Run)
     requires: Requires = Field(default_factory=Requires)
@@ -225,9 +198,9 @@ def load(workspace: Path) -> Config:
     read = lambda p: tomllib.loads(p.read_text()) if p.exists() else {}  # noqa: E731
     mine, shared = read(local(workspace) / CONFIG_NAME), read(workspace / PROTOCOL_NAME)
     skills.use(workspace / "skills")        # an index may word a skill its own way
-    old = shared.get("difficulty", {}).pop("trials_per_config", None)       # where the number of trials used to be set
+    old = shared.get("difficulty", {}).pop("trials_per_config", None) or shared.pop("eval", {}).get("trials")   # where it used to be
     if old is not None:
-        shared.setdefault("eval", {}).setdefault("trials", old)
+        shared.setdefault("difficulty", {}).setdefault("trials", old)
     return Config.model_validate({"run": mine.get("run", {}), "about": read(workspace / ABOUT_NAME),
                                   **{k: v for k, v in shared.items() if k in (*PROTOCOL_SECTIONS, "requires")}})
 

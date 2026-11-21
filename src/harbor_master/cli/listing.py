@@ -31,14 +31,13 @@ def indexes(name: str = typer.Argument(None, help="Only this index."),
     entries = read_list(list_)
     wrong = listing.problems(entries)
     shown = [e for e in entries if all(e.get(k) for k in listing.REQUIRED) and name in (None, e["name"])]
-    if name and not shown:
+    if name and not shown and name != "demo-index":
         fail(f"{name} is not on the list of indexes. See: hm indexes")
-    if not entries:
-        console.print(f"No index is listed yet in {listing.source(list_)}.")
-        return
     tb = Table(header_style=theme.MU, border_style=theme.BORDER)
     for col in ("name", "owner", "listed", "address") if not check else ("name", "title", "owner", "benchmarks", "accepted tasks", "check"):
         tb.add_column(col)
+    if not check and name in (None, "demo-index"):        # made from the tool's own files, so it is on no list
+        tb.add_row("demo-index", "-", "-", f"[{theme.MU}]comes with Harbor-Master: a made-up index to try it on, simulated[/]")
     for e in shown:
         if not check:
             tb.add_row(e["name"], ", ".join("@" + o.split()[0] for o in listing.owners(e)), str(e.get("listed", "")), e["url"])
@@ -54,4 +53,4 @@ def indexes(name: str = typer.Argument(None, help="Only this index."),
         console.print(f"[{theme.RD}]x[/] {p}")
     if wrong:
         fail(f"{len(wrong)} problem{'s' if len(wrong) != 1 else ''} in the list of indexes.")
-    console.print(f"[{theme.MU}]Listed in {listing.source(list_)}. Get one with: hm open NAME. To list yours: hm entry, inside its folder[/]")
+    console.print(f"[{theme.MU}]Listed in {listing.source(list_)}. Get one with: hm clone NAME. To list yours: hm publish, inside its folder[/]")

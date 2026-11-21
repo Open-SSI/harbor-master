@@ -1,0 +1,10 @@
+# Whether a benchmark can be made into Harbor tasks at all, asked of the decision model after the worker
+# model's adapter has failed its checks. Its answer decides what happens next: the frontier model tries,
+# or a person is asked whether to drop the benchmark. Which answer does what is a rule, in engine/prepare.py.
+
+[adaptable]
+question = "The worker model wrote an adapter that should turn this benchmark into Harbor tasks, and it failed the checks listed under 'failures'. Can this benchmark be made into Harbor tasks at all, by a stronger model or a corrected adapter? Judge the benchmark, not this attempt: a version that merely does not pass yet is still adaptable."
+
+[adaptable.criteria]
+can_be_adapted = "Every task has an instruction, an environment it can run in, and a check a program can run on the answer, using files in the repository. The failures are mistakes in this adapter: a stronger model or a corrected version could fix them."
+cannot_be_adapted = "No adapter could work: grading needs a person, a GUI, a live service or data that is not in the repository, or the tasks have no instruction or no check a program can run."

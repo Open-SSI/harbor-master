@@ -29,7 +29,7 @@ class Spec:
     group: str                     # view | control | answer | confirm
     usage: str
     effect: str = ""               # the consequence shown in a confirmation; "{0}" is the first argument
-    run: Handler | None = None     # None: planned, not built yet
+    run: Handler | None = None
 
 
 COMMANDS: dict[str, Spec] = {}
@@ -40,11 +40,6 @@ def command(name: str, group: str, usage: str, effect: str = "") -> Callable[[Ha
         COMMANDS[name] = Spec(name, group, usage, effect, fn)
         return fn
     return register
-
-
-def planned(name: str, group: str, usage: str) -> None:
-    """A command the design names that is not built yet. It answers so, and changes nothing."""
-    COMMANDS[name] = Spec(name, group, usage)
 
 
 def parse(text: str) -> Command:
@@ -69,8 +64,6 @@ def execute(session: "Session", cmd: Command) -> str:
     spec = COMMANDS.get(cmd.name)
     if spec is None:
         return f"There is no /{cmd.name} command. See /help."
-    if spec.run is None:
-        return f"/{cmd.name} is not built yet."
     return spec.run(session, cmd.args)
 
 

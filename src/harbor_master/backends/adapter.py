@@ -31,8 +31,23 @@ def layout(source_dir: Path, limit: int = 120) -> str:
     return "\n".join(files[:limit]) + (f"\n... and {len(files) - limit} more files" if len(files) > limit else "")
 
 
+def harbor_guide(limit: int = 12000) -> str:
+    """The parts of Harbor's own adapter tutorial that are about making the tasks (its sections 1 to 3), read from the
+    installed Harbor, so that they are the version this machine runs. "" when Harbor does not ship it."""
+    try:
+        from harbor.cli.adapter_review import _REVIEW_CHECKLIST as tutorial
+    except Exception:           # another version of Harbor, or none: the skill's own rules stand alone
+        return ""
+    start, end = tutorial.find("### 1. Understand the Original Benchmark"), tutorial.find("### 4.")
+    if start < 0 or end <= start:
+        return ""
+    return ("HARBOR'S OWN ADAPTER GUIDE, the parts about making the tasks. Skip what is about pull requests, parity runs, "
+            "Harbor's own repository and its datasets: those are not yours to do. Where it says to run the oracle, the "
+            "checks do that after you answer.\n\n" + tutorial[start:end].strip()[:limit])
+
+
 def about(entry: dict) -> str:
-    keep = ("id", "name", "version", "released", "github", "license", "task_count", "format", "tasks")
+    keep = ("id", "name", "version", "released", "github", "license", "task_count", "format", "tasks", "environments")
     return "\n".join(f"{k}: {entry[k]}" for k in keep if entry.get(k) not in (None, "", []))
 
 
@@ -57,6 +72,24 @@ async def write_adapter(cfg: Config, entry: dict, source_dir: Path, feedback: st
     skill = skills.load(SKILL)
     again = ("A first version of the adapter did not pass these checks. Return every file again, corrected:\n" + feedback) if feedback else ""
     reply = await sessions.ask(cfg.tier(tier), skill.system,
-                             skill.fill(benchmark=about(entry), layout=layout(source_dir), feedback=again),
+                             skill.fill(benchmark=about(entry), layout=layout(source_dir), guide=harbor_guide(), feedback=again),
                              SCHEMA, cwd=source_dir, max_turns=40)
     return reply.data, reply.cost, reply.tokens, skill.tag
+
+
+JUDGE = "adapt/judge"
+
+
+async def judge(cfg: Config, entry: dict, source_dir: Path, problems: list[str], notes: str) -> tuple[str, float, float, int, str]:
+    """Ask the decision model, Jev, whether the benchmark can be adapted at all, as a typed choice with its probability.
+    Returns the choice ("" when it declined), the probability, the cost, the tokens and the skill's tag."""
+    from . import jev
+    skill = skills.load(JUDGE)
+    asked = {g: jev.choice(v["question"], v["criteria"]) for g, v in skill.data.items()}
+    state = {"benchmark": about(entry), "files": layout(source_dir, 80), "failures": "\n".join(problems[:12]),
+             "worker_notes": notes[:4000]}
+    answers, cost, tokens = await jev.decisions(cfg.tiers.decision.model, state, asked)
+    answer = answers.get("adaptable") or {}
+    choice = answer.get("choice", "") if answer.get("type") == "choice" else ""
+    prob = float((answer.get("probabilities") or {}).get(choice, answer.get("confidence") or 0.0)) if choice else 0.0
+    return choice, prob, cost, tokens, skill.tag

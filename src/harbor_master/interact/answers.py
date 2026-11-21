@@ -49,10 +49,9 @@ def how_to_answer(r) -> str:
             "selection": f"Approve the top K with /approve {short} K. See the whole list with /selection {short}. "
                          f"To rank differently, give a new brief: /brief {r.target} <text>",
             "verdict": "Nothing enters the index until you sign. Start with /review",
-            "adapter": f"Fix the files and check them again with /recheck {short} (with no fix, the frontier model tries once more). "
-                       f"Or give the benchmark up with /abandon {short}",
-            "lock": f"Lock it with /lock {short}",
-            "budget": "Answer with: /budget N, or /quit"}.get(r.kind, "")
+            "rejected": "The workflow rejected it: a box says why, and you confirm",
+            "hung": "A trial hung and was stopped: a box says why, and you retry it or drop the task",
+            "lock": f"Lock it with /lock {short}"}.get(r.kind, "")
 
 
 def ready_to_type(r) -> str:
@@ -62,16 +61,14 @@ def ready_to_type(r) -> str:
     return {"brief": f"/brief {r.target} <what matters most in this benchmark, in a sentence or two>",
             "selection": f"/approve {short} <how many of the top tasks>   or   /brief {r.target} <a new brief, to rank again>",
             "verdict": "/review   to read each report and accept or reject it",
-            "adapter": f"/recheck {short}   or   /abandon {short}",
-            "lock": f"/lock {short}",
-            "budget": "/budget <dollars>   or   /quit"}.get(r.kind, "")
+            "lock": f"/lock {short}"}.get(r.kind, "")
 
 
 def waiting(session: Session) -> str:
     """What the run needs from the user now, and how to give it."""
     lines = [f"{r.text}\n  {how_to_answer(r)}"
              for r in sorted(session.requests, key=lambda q: (not q.blocking, q.kind == "verdict"))]
-    if session.paused and not any(r.kind == "budget" for r in session.requests):
+    if session.paused:
         lines.append("The run is paused. Continue it with /resume.")
     if lines:
         return ("The run is finished. " if session.finished else "") + "Waiting on you:\n" + "\n".join(lines)
@@ -109,7 +106,7 @@ def bench_line(b) -> str:
 
 def progress(session: Session) -> str:
     return "\n".join([bench_line(b) for b in session.benches.values()]
-                     + [f"Spent ${session.spent:.2f} of ${session.budget:.0f}."])
+                     + [f"Spent ${session.spent:.2f}."])
 
 
 def timing(session: Session) -> str:
@@ -126,7 +123,7 @@ def timing(session: Session) -> str:
 
 def terms(session: Session) -> dict[str, str]:
     """Short explanations of the words the screen uses, keyed by the word a question would contain."""
-    sel, cfg = session.cfg.select, session.cfg
+    sel = session.cfg.select
     return {
         "brief": "A brief is a few sentences, from any contributor, on what makes a task important in this benchmark. "
                  "Ranking orders the tasks by it. Give one with /brief BENCHMARK text.",
@@ -138,7 +135,7 @@ def terms(session: Session) -> dict[str, str]:
                 "a program can verify it quickly, it is not multiple choice, its license allows use, and it is recent.",
         "cell": "A working cell carries one task through verify, probe, difficulty (once), audit and report. Cells run in parallel.",
         "verdict": "A verdict is a reviewer's signed decision on a finished task. /review shows each report, and under it "
-                   "you type accept or reject <why>.",
+                   "you type accept, or reject <why>.",
         "simulat": "A simulated run invents every result and spends nothing. No model is called, so answers here are "
                    "put together from the run's records by the words in your question.",
     }
@@ -147,7 +144,7 @@ def terms(session: Session) -> dict[str, str]:
 TOPICS = (      # which records a question is about, by its words
     ("waiting", r"next|now what|what now|what (should|do|can|must) i|to ?do\b|wait|stuck|block|need|my turn|proceed|continue|nothing happen"),
     ("time", r"how long|\bwhen\b|\beta\b|finish|time left|remaining|\btake\b|how soon"),
-    ("cost", r"cost|spen[dt]|budget|money|\$|price|token"),
+    ("cost", r"cost|spen[dt]|money|\$|price|token"),
     ("progress", r"progress|status|going|state\b|doing|happen|kept|dropped|how many|where (is|are) (it|we|things)"),
     ("help", r"help|command|how (do|can) i|what can (i|you)"),
 )
@@ -232,7 +229,7 @@ def review_briefing(session: Session, benchmark: str = "") -> str:
     lines += ["  " + report_brief(session, t) for t in ready[:8]]
     if len(ready) > 8:
         lines.append(f"  and {len(ready) - 8} more.")
-    lines.append("/review opens them one after the other. Under each report you type accept [why] or reject <why>.")
+    lines.append("/review opens them one after the other. Under each report you type accept, or reject <why>.")
     return "\n".join(lines)
 
 

@@ -74,7 +74,7 @@ class HuggingFace:
             import huggingface_hub
         except ImportError as err:
             raise StoreError("The task store needs the huggingface_hub package. Install Harbor-Master again: "
-                             "uv tool install --editable .") from err
+                             "uv tool install --reinstall git+https://github.com/Open-SSI/harbor-master") from err
         token = keys.get("HF_TOKEN") or None
         if write and not token:
             raise StoreError(f"The task store is {self.where}, and putting a task there needs your own Hugging Face token, "
@@ -103,6 +103,23 @@ class HuggingFace:
             return ""
         except Exception as err:        # no access, a read-only token, no network
             return f"Your token cannot write to {self.where}: {type(err).__name__}. It needs read and write access to it."
+
+    def creatable(self) -> str:
+        """Why this token cannot create the repository, or "" when it can: it must be allowed to write, and the repository's
+        namespace must be its account or one of its organizations. Asked before anything is made."""
+        try:
+            me = self.api.whoami()
+        except Exception as err:        # a token Hugging Face does not know, or no network
+            return f"Hugging Face did not accept your HF_TOKEN: {type(err).__name__}: {str(err)[:120]}"
+        role = ((me.get("auth") or {}).get("accessToken") or {}).get("role", "")
+        if role == "read":
+            return "Your HF_TOKEN can only read. Make one with write access on huggingface.co/settings/tokens."
+        owner = self.repo.split("/")[0]
+        mine = {me.get("name", ""), *(o.get("name", "") for o in me.get("orgs") or [])}
+        if owner not in mine:
+            return (f"Your HF_TOKEN belongs to {me.get('name', '?')}, which cannot create datasets under {owner}. "
+                    f"Use a namespace it can: {', '.join(sorted(n for n in mine if n))}.")
+        return ""
 
     def create(self) -> None:
         """Make the repository, private. Its owner opens it to others, or to everyone, on Hugging Face."""
@@ -155,11 +172,11 @@ def not_ready(cfg) -> str:
     store, so a real run asks this before it starts."""
     if not (cfg.about.tasks or "").strip():
         return ("this index names no store for its accepted tasks. Its owner names one in about.toml, as tasks = \"ORG/NAME\", "
-                "and hm lock creates it")
+                "and the owner's next hm command creates it")
     try:
         there = remote(cfg)
         if not there.exists():
-            return f"the task store {there.where} does not exist, or your token cannot see it. Its owner creates it with hm lock"
+            return f"the task store {there.where} does not exist, or your token cannot see it. The owner's next hm command creates it"
     except StoreError as err:
         return str(err)
     return ""
@@ -195,7 +212,7 @@ UNKEPT = "unkept.txt"       # in .hm: accepted tasks this machine could not put 
 
 
 def remember(ws: Path, benchmark: str, name: str, digest: str) -> None:
-    """Note an accepted task that did not reach the store, so that the next hm sync puts it there."""
+    """Note an accepted task that did not reach the store, so that the next hm command puts it there."""
     path = config_mod.local(ws) / UNKEPT
     path.parent.mkdir(exist_ok=True)
     with path.open("a") as f:

@@ -1,20 +1,20 @@
 # The list of indexes: every index curated with Harbor-Master that asked to be listed.
 #
 # This file holds addresses and nothing else. What an index is (its title, description,
-# owner, benchmarks, accepted tasks and leaderboard) is read from the index's own
+# owner, benchmarks and accepted tasks) is read from the index's own
 # repository, so nothing here can fall behind it.
 #
-# `hm indexes` and `hm join NAME` read this file from the main branch, so an entry is
+# `hm indexes` and `hm clone NAME` read this file from the main branch, so an entry is
 # visible to everyone as soon as it is merged.
 #
-# To list an index: run `hm index entry` in it, and add what it prints here in a pull
-# request. The check on the pull request clones the address and makes sure it is a sound
+# To list an index: run `hm publish` in it. It checks the index, then opens a pull
+# request that adds its entry here. The check on the pull request clones the address and makes sure it is a sound
 # index, that its name is free, and that its owner is the one on the entry. The
 # repository must be readable by anyone.
 #
 #   name     the index's short name, as in its about.toml. Unique
 #   url      its git repository
-#   owner    the owner's GitHub handle and signing key on the day it was listed. `hm join NAME`
+#   owner    the owner's GitHub handle and signing key on the day it was listed. `hm clone NAME`
 #            refuses a repository that names another owner
 #   listed   the date
 #

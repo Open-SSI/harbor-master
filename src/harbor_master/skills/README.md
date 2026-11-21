@@ -7,8 +7,8 @@ The curation skills (`adapt/`, `triage/`, `rank/`, `probe/`, `audit/`) decide wh
 Each index has its own copies under `skills/` in its repository: `hm new` writes them,
 and they are locked with the index's protocol. The files here are the templates those copies
 start from. An index may change any wording. It may not change what the code reads: the keys
-of a TOML skill, and the `$placeholders` and the two sections of a prompt. `hm lock` copies in
-the template of any skill an index has no copy of.
+of a TOML skill, and the `$placeholders` and the two sections of a prompt. A run refuses an index
+that lacks a copy of any of them.
 
 The session skills (`session/`) read what is typed on the run screen. They change no result,
 so they are the same for every index and are not part of any protocol.
@@ -23,7 +23,9 @@ so they are the same for every index and are not part of any protocol.
 | `adapt/write-adapter.md` | worker tier | The adapter that turns a benchmark in another format into Harbor tasks |
 | `probe/write-mutants.md` | worker tier | Variants of the reference solution that test the verifier |
 | `probe/coverage.toml` | decision tier, then worker tier when unsure | Whether the instruction states everything the tests check |
-| `audit/rubric.md` | worker tier | The task-quality rubric. Not used yet |
+| `audit/rubric.md` | worker tier, then frontier tier when unsure | The task-quality rubric, applied to the worker agent's trials before any frontier trial |
+| `audit/final.md` | worker tier | After the difficulty run: whether the frontier agents failed because the task is hard or broken |
+| `audit/repair.md` | worker tier, then frontier tier | Repairing a defect by editing a copy of the task |
 | `session/interpret.toml` | decision tier | Reading a plain-text message as a command |
 | `session/answer.md` | chat tier | Answering a question from the records |
 

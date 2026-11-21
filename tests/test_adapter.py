@@ -4,9 +4,10 @@ import json
 from pathlib import Path
 
 import pytest
+import typer
 from typer.testing import CliRunner
 
-from harbor_master import interact, ledger, tasks
+from harbor_master import ledger, tasks
 from harbor_master.backends import adapter as writer
 from conftest import call
 from harbor_master.cli import app
@@ -14,7 +15,6 @@ from harbor_master.cli.setup import index_new
 from harbor_master.core import config as config_mod
 from harbor_master.core import identity
 from harbor_master.engine import Session, prepare
-from harbor_master.interact import Command, guide
 from harbor_master.tasks import adapter
 
 runner = CliRunner()
@@ -70,18 +70,10 @@ def hm(*args: object) -> str:
     return f"{result.exit_code} {' '.join(result.output.split())}"
 
 
-def write_good(folder: Path, code: str = GOOD) -> Path:
-    """A finished adapter for the toy benchmark, written by hand."""
-    package = adapter.scaffold(folder, {"id": "toy", "name": "Toy Arithmetic"})
-    (package / "adapter.py").write_text(code)
-    for name, text in TEMPLATE.items():
-        (package / "task-template" / name).write_text(text)
-    return folder
-
-
-def models(monkeypatch, fixes: bool = True) -> tuple[list[str], list[str]]:
+def models(monkeypatch, fixes: bool = True, worker_thinks: bool = True) -> tuple[list[str], list[str]]:
     """Stand-ins for the models that write an adapter: the tiers asked, and what each was told had failed.
-    The worker tier never gets it right. The frontier tier does, unless `fixes` is off."""
+    The worker tier never gets it right. The decision model judges it can be adapted unless `worker_thinks` is off.
+    The frontier tier gets it right, unless `fixes` is off."""
     asked, told = [], []
 
     async def write_adapter(cfg, entry, source_dir, feedback="", tier="worker"):
@@ -90,9 +82,14 @@ def models(monkeypatch, fixes: bool = True) -> tuple[list[str], list[str]]:
         files = [{"path": "adapter.py", "content": GOOD if fixes and tier == "frontier" else BROKEN},
                  *({"path": f"task-template/{n}", "content": t} for n, t in TEMPLATE.items()),
                  {"path": "../escape.py", "content": "x"}, {"path": "main.py", "content": "print('not the model\\'s to write')"}]
-        return {"files": files, "task_count": 3, "notes": "Carried over as it is."}, 0.25, 1000, "adapt/write-adapter@test"
+        return {"files": files, "task_count": 3, "notes": "Carried over as it is. Its grading needs a person."}, 0.25, 1000, "adapt/write-adapter@test"
+
+    async def judge(cfg, entry, source_dir, problems, notes):       # Jev's typed choice, with its probability
+        asked.append("decision")
+        return ("can_be_adapted", 0.8, 0.001, 500, "adapt/judge@test") if worker_thinks else ("cannot_be_adapted", 0.9, 0.001, 500, "adapt/judge@test")
 
     monkeypatch.setattr(writer, "write_adapter", write_adapter)
+    monkeypatch.setattr(writer, "judge", judge)
     return asked, told
 
 
@@ -140,164 +137,68 @@ def toy(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def locked(toy):
-    """The toy index, locked, with nothing asked of the lead during a run."""
+def quiet(toy):
+    """The toy index, with nothing asked of the lead during a run."""
     protocol = toy[0] / "protocol.toml"
     protocol.write_text(protocol.read_text().replace("require_brief = true ", "require_brief = false").replace("require_signoff = true ", "require_signoff = false"))
-    assert "Locked protocol" in hm("lock", "-w", toy[0])
     return toy
 
 
-async def test_a_person_brings_an_adapter_and_everyone_gets_the_same_tasks(locked, monkeypatch):
-    ws, source, tmp = locked
-    asked, _ = models(monkeypatch)
-    state = guide.look(ws)
-    assert state.to_adapt == ["toy"] and state.real == ["toy"]
-    code = write_good(pkg(ws)) / "src" / "toy" / "adapter.py"                   # written by hand: the run checks it, and asks no model
-    s = await ran(ws, "r1")
-    assert s.benches["toy"].phase == "ready" and asked == []
-    record = next(e for e in ledger.Ledger(ws).events if e.get("stage") == "adapt")
-    assert record["outcome"] == "pass" and record["digest"] == adapter.digest(pkg(ws)) and guide.look(ws).to_adapt == []
-    assert passes(ws) and len(ledger.protocol.locks(ledger.Ledger(ws).events)) == 1       # the signed check vouches for it: no new lock
-    info = tasks.read_registry(ws)["toy"]
-    found = tasks.load_benchmark(Path(info["path"]), "toy")
-    assert [t.name for t in found] == ["q1", "q2", "q3"] and info["adapter"] == adapter.digest(pkg(ws))
-    assert found[0].instruction.startswith("What is 1 + 1?") and all(t.has_solution and t.has_tests for t in found)
-    first = adapter.digests(Path(info["path"]))
-    await ran(ws, "r2")
-    assert adapter.digests(Path(tasks.read_registry(ws)["toy"]["path"])) == first   # the same tasks, whoever runs it and whenever
-    code.write_text(code.read_text().replace('sorted(rows, key=lambda r: r["id"])', "rows"))      # a changed adapter is one nobody vouched for:
-    assert not passes(ws)                                                                          # the next run checks it again
-
-
-def test_an_adapter_that_cannot_be_trusted_is_reported(toy):
-    ws, source, tmp = toy
-    check = lambda folder, n=3: adapter.check(folder, source, tmp / "work", n, sandbox=False)[0]  # noqa: E731
-    assert check(write_good(tmp / "a")) == []
-    assert "the benchmark list says 5" in check(tmp / "a", 5)[0]
-    stamped = GOOD.replace('fill(name))', 'fill(name) + f"# {__import__(\'time\').time_ns()}\\n")')
-    assert "a second run did not write the same tasks" in check(write_good(tmp / "b", stamped))[0]
-    assert "imports requests: an adapter may use the standard library only" in " ".join(check(write_good(tmp / "c", "import requests\n" + GOOD)))
-    assert "it failed when run" in check(write_good(tmp / "d", GOOD.replace("questions.jsonl", "missing.jsonl")))[0]
-    assert "no tests/test.sh" in check(write_good(tmp / "e", BROKEN))[0]
-    assert check(adapter.scaffold(tmp / "f", {"id": "toy"}).parents[1])[0].startswith("it failed when run")      # the stub
-    (tmp / "a" / "src" / "toy" / "main.py").write_text("print('mine')\n")
-    assert "main.py does not take --source-dir" in check(tmp / "a")
-    assert adapter.structure(tmp / "nothing") == ["no src/<package>/adapter.py"]
-
-
-async def test_a_run_fetches_adapts_and_locks_with_no_one_asked(locked, monkeypatch):
-    ws, source, tmp = locked
+async def test_a_run_fetches_adapts_and_locks_with_no_one_asked(quiet, monkeypatch):
+    ws, source, tmp = quiet
     asked, told = models(monkeypatch)
     s = await ran(ws, "r1")                                                    # nothing was fetched or adapted before this
     bench = s.benches["toy"]
-    assert bench.phase == "ready" and len(bench.tasks) == 3 and asked == ["worker", "worker", "frontier"]   # two tries, then the stronger model
+    assert bench.phase == "ready" and len(bench.tasks) == 3 and asked == ["worker", "worker", "decision", "frontier"]   # two tries, then the stronger model
     assert told[0] == "" and "no tests/test.sh" in told[1] and "no tests/test.sh" in told[2]     # each told what failed
     assert not (pkg(ws) / "src" / "escape.py").exists() and "--source-dir" in (pkg(ws) / "src" / "toy" / "main.py").read_text()
     assert not any(r.blocking for r in s.requests)                             # nobody was asked anything on the way
     assert s.cost_by_tier["worker"] >= 0.5 and s.cost_by_tier["frontier"] >= 0.25           # the models' work is in the run's cost
-    assert passes(ws) and len(ledger.protocol.locks(ledger.Ledger(ws).events)) == 1        # vouched for by its record, with no new lock
+    assert passes(ws) and not any(e["type"] == "protocol" for e in ledger.Ledger(ws).events)        # vouched for by its record
     assert ledger.verify(ws) == []
-    done = next(e for e in s.ledger.events if e.get("stage") == "adapt")
+    done = next(e for e in s.ledger.events if e.get("stage") == "adapt" and e.get("gate") == "adapter")
     assert (done["outcome"], done["tier"], done["rounds"], done["skill"]) == ("pass", "frontier", 3, "adapt/write-adapter@test")
     prompt = writer.about({"id": "toy", "name": "Toy", "format": "jsonl", "email": "x"}) + writer.layout(source)
     assert "format: jsonl" in prompt and "questions.jsonl" in prompt and "email" not in prompt
     assert tasks.read_registry(ws)["toy"]["adapter"] == adapter.digest(pkg(ws))
     again = await ran(ws, "r2")                                                # the next run uses the locked adapter as it is
-    assert again.benches["toy"].phase == "ready" and len(asked) == 3
+    assert again.benches["toy"].phase == "ready" and len(asked) == 4
     tried = await ran(ws, "r3", as_real=False)                                 # and so does a simulated one
-    assert tried.benches["toy"].phase == "ready" and len(asked) == 3
+    assert tried.benches["toy"].phase == "ready" and len(asked) == 4
 
 
-async def test_a_person_is_asked_only_when_the_models_cannot(locked, monkeypatch):
-    ws, source, tmp = locked
-    asked, _ = models(monkeypatch, fixes=False)
-    trying = await ran(ws, "s0", as_real=False)                                # a simulated run builds nothing, and says why
-    assert trying.benches["toy"].phase == "skipped" and "has no adapter yet" in trying.benches["toy"].detail and not asked
-
+async def test_a_benchmark_no_model_can_adapt_is_dropped_for_good_and_cannot_be_added_again(quiet, monkeypatch):
+    ws, source, tmp = quiet
+    asked, _ = models(monkeypatch, worker_thinks=False)
     s = run_of(ws, "r1")
     run = await start(s)
-    ask = s.requests[0]
-    assert ask.kind == "adapter" and ask.blocking and "does not pass after 3 rounds" in ask.text and "no tests/test.sh" in ask.text
-    assert asked == ["worker", "worker", "frontier"] and s.benches["toy"].phase == "review"
-    assert guide.session_tip(s) == "" and "/abandon toy" in interact.how_to_answer(ask)       # asked in its box
-
-    assert "again" in interact.execute(s, Command("recheck", ["toy"]))           # no fix was made: the frontier model tries once more
-    await wait(lambda: len(asked) == 4 and s.requests)
-    assert asked[-1] == "frontier" and "after 4 rounds" in s.requests[0].text
-    write_good(pkg(ws))                                                        # the person fixes it by hand
-    interact.execute(s, Command("recheck", ["toy"]))
+    assert s.requests[0].kind == "rejected" and s.requests[0].choices == ["ok"]   # the decision model is sure: the person only confirms
+    s.answer_request(s.requests[0], "ok")
     await asyncio.wait_for(run, 10)
-    assert s.benches["toy"].phase == "ready" and len(asked) == 4               # checked as it is: no model was asked again
-    assert passes(ws)
-
-
-async def test_an_abandoned_benchmark_is_refused_to_everyone_until_it_is_added_again(locked, monkeypatch):
-    ws, source, tmp = locked
-    asked, _ = models(monkeypatch, fixes=False)
-    unattended = await ran(ws, "r0", no_input=True)                            # with nothing to ask, a failing adapter waits for a person
-    assert unattended.benches["toy"].phase == "skipped" and "nothing could ask you" in unattended.benches["toy"].detail
-    assert ledger.abandoned(ledger.Ledger(ws).events) == {}                    # and that is not giving it up
-
-    s = run_of(ws, "r1")                                                       # the adapter is there now: it is checked, not rewritten
-    run = await start(s)
-    assert len(asked) == 3 and "does not pass" in s.requests[0].text
-    assert "abandoned" in interact.execute(s, Command("abandon", ["toy"]))
-    await asyncio.wait_for(run, 10)
-    assert s.benches["toy"].phase == "skipped" and "adding it again reopens it" in s.benches["toy"].detail
+    assert s.benches["toy"].phase == "skipped" and "judges it cannot be adapted" in s.benches["toy"].detail and asked == ["worker", "worker", "decision"]
     dropped = ledger.abandoned(ledger.Ledger(ws).events)["toy"]
-    assert (dropped["outcome"], dropped["value"], dropped["tier"]) == ("drop", "abandoned", "human")
-    assert not passes(ws)
+    assert (dropped["outcome"], dropped["value"]) == ("drop", "abandoned") and "judged not adaptable (90%)" in dropped["reason"]
 
-    (pkg(ws) / "README.md").write_text("touched\n")                            # a changed file does not reopen it
-    monkeypatch.setattr(tasks.supported, "fetch", lambda entry, sources: pytest.fail("an abandoned benchmark is not even fetched"))
-    for again in (run_of(ws, "r2"), run_of(ws, "r3", as_real=False)):          # the owner's next run, and a simulated one
+    monkeypatch.setattr(tasks.supported, "fetch", lambda entry, sources: pytest.fail("a dropped benchmark is not even fetched"))
+    for again in (run_of(ws, "r2"), run_of(ws, "r3", as_real=False)):          # the next run, and a simulated one
         await again.run()
-        assert again.benches["toy"].phase == "skipped" and "abandoned by @ada" in again.benches["toy"].detail
-        assert "hm benchmarks remove toy" in again.benches["toy"].detail and "no tests/test.sh" in again.benches["toy"].detail
-    monkeypatch.setenv("HM_CONFIG_DIR", str(tmp / "config-bob"))               # and anyone else's
-    bob = identity.create("Bob", "Other University", "bob@example.org", "bob")
-    with (ws / "contributors.toml").open("a") as f:
-        f.write(f'\n[[contributor]]\nname = "Bob"\ngithub = "bob"\nkey = "{bob.public_key}"\n')
-    other = await ran(ws, "r4", who=bob)
-    assert other.benches["toy"].phase == "skipped" and "abandoned by @ada" in other.benches["toy"].detail and len(asked) == 3
-
+        assert again.benches["toy"].phase == "skipped" and "dropped by @ada" in again.benches["toy"].detail
+        assert "cannot be added again" in again.benches["toy"].detail
     named = hm("curate", "toy", "--simulate", "--plain", "-w", ws)                # asked for by name, it is refused outright
-    assert named.startswith("1 Refused: toy was abandoned by @ada") and "toy was abandoned by @ada" in hm("benchmarks", "-w", ws)
-    state = guide.look(ws)
-    assert state.abandoned == ["toy"] and state.real == []
-
-    monkeypatch.setenv("HM_CONFIG_DIR", str(tmp / "config"))                   # the owner takes it off the list and adds it again
-    monkeypatch.setattr(tasks.supported, "fetch", lambda entry, sources: source)
-    assert hm("benchmarks", "remove", "toy", "-w", ws).startswith("0 Took toy off")
-    ledger.benchmarks.add(ws, identity.load(), config_mod.load(ws).protocol, ENTRY)
-    assert ledger.abandoned(ledger.Ledger(ws).events) == {}
-    write_good(pkg(ws))                                                        # with an adapter that passes, by hand
-    back = await ran(ws, "r5")
-    assert back.benches["toy"].phase == "ready" and len(asked) == 3            # checked, locked and used: no model was asked
-    assert passes(ws)
+    assert named.startswith("1 Refused: toy was dropped by @ada") and "dropped" in hm("benchmarks", "-w", ws)
+    assert "stays on the list as dropped" in hm("benchmarks", "remove", "toy", "-w", ws)       # it stays on the list
+    assert tasks.supported.find(ws, "toy") is not None
+    import tomli_w
+    ws.joinpath("benchmarks.toml").write_text(tomli_w.dumps({"benchmark": []}))  # and even off the list, it is never added again
+    from harbor_master.cli import curate as curate_cli
+    with pytest.raises(typer.Exit):
+        curate_cli._clash(ws, "toy-again", ENTRY["github"] + ".git")
+    assert list(ledger.abandoned(ledger.Ledger(ws).events)) == ["toy"]
 
 
-async def test_a_run_fetches_a_listed_benchmark_that_is_in_harbor_format(locked, monkeypatch):
-    from conftest import make_benchmark
-    ws, source, tmp = locked
-    made = make_benchmark(tmp / "fake", "plain", 6)
-    monkeypatch.setattr(tasks.supported, "fetch", lambda entry, sources: made)
-    entry = {**tasks.supported.find(ws, "toy"), "id": "plain", "format": "harbor", "task_count": 6}
-    s = Session(ws, config_mod.load(ws), identity.load(), {"plain": {"path": "", "supported": "plain", "entry": entry}},
-                simulate=True, as_real=True, speed=0, run_id="r1")
-    await s.run()
-    assert s.benches["plain"].phase == "ready" and len(s.benches["plain"].tasks) == 6
-    assert tasks.read_registry(ws)["plain"]["path"] == str(made.resolve())     # registered, so the next run does not fetch
-
-
-def test_plain_hm_run_takes_what_the_index_lists(locked):
-    ws, source, tmp = locked
-    settings = ws / ".hm" / "hm.toml"
-    settings.write_text(settings.read_text().replace('sandbox = "docker"', 'sandbox = "none"  '))      # no container in a test
-    out = hm("curate", "--simulate", "--plain", "--speed", 0, "-w", ws)           # nothing was submitted first
-    assert "toy" in out and "has no adapter yet" in out
-    assert hm("curate", "nothing", "--simulate", "--plain", "-w", ws).startswith("1 nothing is not on this index's list of benchmarks")
-    write_good(pkg(ws))
-    out = hm("curate", "--simulate", "--plain", "--speed", 0, "--no-input", "-w", ws)        # with an adapter there, a simulated run uses it
-    assert out.startswith("0 ") and "3" in out and tasks.read_registry(ws)["toy"]["path"].endswith(".hm/adapted/toy/tasks")
+async def test_a_listed_benchmark_its_checks_reject_costs_no_adapter(quiet, monkeypatch):
+    ws, source, tmp = quiet
+    asked, _ = models(monkeypatch)
+    ledger.benchmarks.add(ws, identity.load(), config_mod.load(ws).protocol, {**ENTRY, "released": "2023-03-01"})
+    s = await ran(ws, "r1", no_input=True)                  # nobody to confirm: left out of this run, and no model asked
+    assert s.benches["toy"].skip == "checks_failed" and asked == []

@@ -4,7 +4,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from textual.app import ComposeResult
+from rich.console import Group
 from rich.markdown import Markdown
+from rich.padding import Padding
 from rich.text import Text
 from textual.containers import Vertical, VerticalScroll
 from textual.css.query import NoMatches
@@ -51,7 +53,7 @@ class ReviewScreen(ModalScreen[str]):
     BINDINGS = [("escape", "stay", "Back"), ("pageup", "scroll(-1, True)", "Up"), ("pagedown", "scroll(1, True)", "Down"),
                 ("up", "scroll(-1, False)", "Up"), ("down", "scroll(1, False)", "Down"),
                 ("ctrl+l", "app.leave", "Leave"), ("ctrl+q", "end", "Quit"), ("ctrl+t", "app.theme", "Light or dark")]
-    NEEDED = "Each report needs your verdict before anything else: accept [why] or reject <why>."
+    NEEDED = "Each report needs your verdict before anything else: accept, or reject <why>."
     DEFAULT_CSS = f"""
     ReviewScreen {{ align: center middle; background: {BG} 70%; }}
     ReviewScreen > Vertical {{ width: 92%; height: 90%; border: round {PU}; background: {BG}; }}
@@ -59,7 +61,6 @@ class ReviewScreen(ModalScreen[str]):
     ReviewScreen #report {{ padding: 0 0 1 0; }}
     ReviewScreen #said {{ height: auto; padding: 0 2; color: {AM}; }}
     ReviewScreen Input {{ border: round {PU}; background: {BG}; height: 3; margin: 0 1; }}
-    ReviewScreen #how {{ height: 1; padding: 0 2; color: {MU}; }}
     """
 
     def __init__(self, session, tasks: list):
@@ -68,8 +69,7 @@ class ReviewScreen(ModalScreen[str]):
 
     def compose(self) -> ComposeResult:
         yield Vertical(VerticalScroll(Static(id="report")), Static(id="said"),
-                       Input(placeholder="accept [why]     reject <why>", id="verdict"),
-                       Static("up, down, page up and page down scroll the report     ctrl+l leaves the screen, and the run goes on", id="how"))
+                       Input(placeholder="accept [why]     reject <why>", id="verdict"))
 
     def on_mount(self) -> None:
         self.call_after_refresh(self.start)     # once the page's own parts are there to fill
@@ -85,7 +85,6 @@ class ReviewScreen(ModalScreen[str]):
         task = self.tasks[self.at]
         box = self.query_one(Vertical)
         box.border_title = f"review {self.at + 1} of {len(self.tasks)}   {task.task_id}"
-        box.border_subtitle = interact.answers.report_brief(self.session, task)[:110]
         self.query_one("#report", Static).update(Markdown(interact.answers.report_text(self.session, task)))
         self.query_one(VerticalScroll).scroll_home(animate=False)
 
@@ -140,7 +139,6 @@ class SelectionScreen(ModalScreen[str]):
     SelectionScreen VerticalScroll {{ height: 1fr; padding: 1 2 0 2; }}
     SelectionScreen #said {{ height: auto; padding: 0 2; color: {AM}; }}
     SelectionScreen Input {{ border: round {PU}; background: {BG}; height: 3; margin: 0 1; }}
-    SelectionScreen #how {{ height: auto; padding: 0 2; color: {MU}; }}
     """
 
     def __init__(self, session, request):
@@ -151,7 +149,7 @@ class SelectionScreen(ModalScreen[str]):
         self.k = sum(1 for r in self.rows if r[2])
 
     def compose(self) -> ComposeResult:
-        yield Vertical(VerticalScroll(Static(id="tasks")), Static(id="said"), Input(id="choice"), Static(id="how"))
+        yield Vertical(VerticalScroll(Static(id="tasks")), Static(id="said"), Input(id="choice"))
 
     def on_mount(self) -> None:
         self.call_after_refresh(self.start)
@@ -160,9 +158,6 @@ class SelectionScreen(ModalScreen[str]):
         try:
             box = self.query_one(Vertical)
             box.border_title = f"selection   {self.bench.id}   {len(self.rows)} tasks passed the gates and are ranked"
-            self.query_one("#how", Static).update(
-                f"enter approves the top {self.k}     a number from 1 to {self.most} approves that many     "
-                "brief <what matters> ranks again     up and down scroll")
             line = self.query_one("#choice", Input)
             line.placeholder = f"{self.k}     or another number from 1 to {self.most}     or: brief <what matters most, to rank again>"
             line.focus()
@@ -172,16 +167,18 @@ class SelectionScreen(ModalScreen[str]):
 
     def draw(self, k: int) -> None:
         """The list, with the first k rows marked as the ones that go on."""
-        out = Text()
+        rows = []
         for i, (task_id, rating, _) in enumerate(self.rows, 1):
             task = self.session.find_task(task_id)
             on = i <= k
-            out.append(f"{'●' if on else '○'} {i:>3}  ", style=f"bold {TE}" if on else MU)
+            head = Text(f"{'●' if on else '○'} {i:>3}  ", style=f"bold {TE}" if on else MU)
             title = str((task.meta.get("task") or {}).get("title") or "") if task else ""
-            out.append(task_id.split("/")[-1] + (f"   {title}" if title else ""), style="bold" if on else MU)
-            out.append(f"   {task.subarea if task else ''}   rating {rating:+.2f}\n", style=MU)
-            out.append(f"       {interact.answers.task_line(task) if task else ''}\n\n", style=SE if on else MU)
-        self.query_one("#tasks", Static).update(out)
+            head.append(task_id.split("/")[-1] + (f"   {title}" if title else ""), style="bold" if on else MU)
+            head.append(f"   {task.subarea if task else ''}   rating {rating:+.2f}", style=MU)
+            # the description wraps under itself, not back to the left edge
+            line = Text(interact.answers.task_line(task) if task else "", style=SE if on else MU)
+            rows += [head, Padding(line, (0, 0, 1, 7))]
+        self.query_one("#tasks", Static).update(Group(*rows))
         self.query_one(Vertical).border_subtitle = f"the top {k} go on to the costly stages, {len(self.rows) - k} are left out"
 
     def action_scroll(self, way: int, page: bool) -> None:
@@ -222,7 +219,7 @@ class SelectionScreen(ModalScreen[str]):
 
 
 class AskScreen(ModalScreen[str]):
-    """Something the run cannot go on without: a brief, a budget, a decision on an adapter.
+    """Something the run cannot go on without: a brief, or a go-ahead for an adapter.
 
     Whatever the run asks of a person is asked here, in a box of its own that opens by itself. Nothing else
     can be done on the screen until it is answered. The run's other work goes on behind it, and the screen
@@ -237,16 +234,11 @@ class AskScreen(ModalScreen[str]):
     AskScreen VerticalScroll {{ height: auto; max-height: 100%; padding: 1 2 0 2; }}
     AskScreen #said {{ height: auto; padding: 0 2; color: {AM}; }}
     AskScreen Input {{ border: round {PU}; background: {BG}; height: 3; margin: 1 1 0 1; }}
-    AskScreen #how {{ height: auto; padding: 0 2; color: {MU}; }}
     """
     # kind -> (title, what the empty line shows, the keys line)
     KINDS = {
-        "brief": ("a brief is needed", "what matters most in this benchmark, in a sentence or two",
-                  "enter sends your brief, and the tasks are ranked by it"),
-        "budget": ("the budget is spent", "a new budget in dollars, such as 300", "enter sets the budget, and the run goes on"),
-        "adapter": ("an adapter does not pass", "recheck     or     abandon",
-                    "recheck tries again, with your fix if you made one     abandon gives the benchmark up for this index"),
-        "lock": ("an adapter is ready", "lock", "enter lets the adapter be used, and its tasks start"),
+        "brief": ("a brief is needed", "what matters most in this benchmark, in a sentence or two"),
+        "lock": ("an adapter is ready", "lock"),
     }
 
     def __init__(self, session, request):
@@ -254,19 +246,18 @@ class AskScreen(ModalScreen[str]):
         self.session, self.request = session, request
 
     def compose(self) -> ComposeResult:
-        yield Vertical(VerticalScroll(Static(id="asked")), Static(id="said"), Input(id="reply"), Static(id="how"))
+        yield Vertical(VerticalScroll(Static(id="asked")), Static(id="said"), Input(id="reply"))
 
     def on_mount(self) -> None:
         self.call_after_refresh(self.start)
 
     def start(self) -> None:
         try:
-            title, shown, keys = self.KINDS[self.request.kind]
+            title, shown = self.KINDS[self.request.kind]
             box = self.query_one(Vertical)
             box.border_title = f"{title}   {self.request.target}".rstrip()
             head, _, rest = self.request.text.partition("\n")
             self.query_one("#asked", Static).update(Text.assemble((head, "bold"), "\n" + rest if rest else ""))
-            self.query_one("#how", Static).update(keys + "     ctrl+l leaves the screen, and the run waits")
             line = self.query_one("#reply", Input)
             line.placeholder = shown
             line.focus()
@@ -288,17 +279,11 @@ class AskScreen(ModalScreen[str]):
         """The command that what was typed stands for, or what to say when it is not an answer."""
         kind, target = self.request.kind, self.request.target
         words = typed.split()
-        if words and words[0].lstrip("/") in ("brief", "budget", "recheck", "abandon", "lock") and len(words) > 1 and words[1] == target:
+        if words and words[0].lstrip("/") in ("brief", "lock") and len(words) > 1 and words[1] == target:
             words = [words[0].lstrip("/"), *words[2:]]      # typed as the whole command: the name and the benchmark are not the answer
         if kind == "brief":
             said = words[1:] if words[:1] == ["brief"] else words
             return Command("brief", [target, *said]) if len(said) >= 2 else "Say it in a few words at least: what makes a task here matter?"
-        if kind == "budget":
-            amount = (words[1:] if words[:1] == ["budget"] else words)[:1]
-            ok = bool(amount) and amount[0].lstrip("$").replace(".", "", 1).isdigit()
-            return Command("budget", [amount[0].lstrip("$")]) if ok else "Type an amount in dollars, such as 300."
-        if kind == "adapter":
-            return Command(words[0], [target]) if words[:1] in (["recheck"], ["abandon"]) else "Type recheck or abandon."
         return Command("lock", [target]) if words[:1] in ([], ["lock"]) else "Press enter, or type lock."
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -311,7 +296,5 @@ class AskScreen(ModalScreen[str]):
         reply = interact.execute(self.session, found)
         if self.request in self.session.requests and self.request.answer is not None and not self.request.answer.done():
             self.query_one("#said", Static).update(reply)       # it was not taken: the request still waits
-        elif self.request.kind == "budget" and self.request in self.session.requests:
-            self.query_one("#said", Static).update(reply)       # still under what is spent
         else:
             self.dismiss(reply)

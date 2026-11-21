@@ -5,7 +5,7 @@
 # copy differs in any way is refused, and every record carries the checksum it was made
 # under. To change a setting, the owner edits this file and locks the new version.
 #
-# Settings for your own machine (parallelism, budget) are in .hm/hm.toml, and are yours to
+# Settings for your own machine (parallelism, claims) are in .hm/hm.toml, and are yours to
 # change. No key or token belongs in either file.
 
 [requires]
@@ -14,7 +14,7 @@ harbor_master = "0.1.0"         # the oldest Harbor-Master that may run this ind
 # ----- who decides: the three model tiers -----
 # "provider" picks the backend, "model" the model it calls.
 # The worker and frontier tiers run on "claude-agent-sdk" (Claude models) or on "codex" (OpenAI models,
-# through Codex and its sign-in to a ChatGPT subscription), for example:
+# through Codex). Each takes an API key or a subscription's sign-in, whichever you have. For example:
 #   provider = "codex"
 #   model = "gpt-5.6-terra"
 # `hm curate --demo` ignores these and spends nothing.
@@ -35,7 +35,6 @@ model = "claude-opus-5-5"
 
 [escalation]
 min_confidence = 0.85           # below this, a decision-tier answer goes to the worker tier
-frontier_sample = 0.05          # share of settled audits re-judged by the frontier tier
 
 [escalation.gate_min_confidence]
 verifier_cost = 0.6             # the verify stage measures the real time, so a wrong "cheap" costs nothing
@@ -43,18 +42,19 @@ verifier_cost = 0.6             # the verify stage measures the real time, so a 
 # ----- admission: which tasks are considered at all -----
 [triage]
 released_after = "2025-06-01"
-require_reference_solution = true
+require_reference_solution = true   # a selected task with none gets one written in its work cell; off, it is dropped
 exclude_formats = ["multiple_choice", "question_answering", "short_answer"]
 allow_llm_judge_verifier = false
-max_verifier_seconds = 300      # CPU only, no paid API
-max_reported_pass_rate = 0.5    # an agent reads the benchmark's own published results. A task that a model already
+max_verifier_seconds = 300      # CPU only, no paid API. A verifier that takes longer fails, and its task is dropped
+max_build_seconds = 300         # building a task's environment. One that takes longer fails, and its task is dropped
+max_reported_pass_rate = 0.4    # an agent reads the benchmark's own published results. A task that a model already
                                 # solves more often than this is dropped. A task with no reported result passes. 1.0 turns this off
 
 # ----- adapters: for a benchmark that is not in Harbor format -----
 [adapt]
-max_rounds = 3                  # how many times a model may write the adapter before a person is asked
+max_rounds = 3                  # rounds of writing the adapter in all: the worker's, then the frontier model's
 frontier_after_round = 2        # the worker tier writes rounds 1 and 2, the frontier tier the rest
-oracle_tasks = 2                # generated tasks whose reference solution is run through Harbor as a check
+oracle_tasks = 3                # generated tasks whose reference solution is run through Harbor as a check
 require_review = false          # if true, a person confirms an adapter that passes before it is used
 
 # ----- selection: which tasks of a benchmark go through the costly stages -----
@@ -64,27 +64,14 @@ max_fraction = 0.25             # of the benchmark's tasks; the smaller of the t
 comparisons_per_task = 12       # pairwise comparisons per task, among the tasks near the top
 pool_factor = 3                 # every task is scored once; only the best 3 x cap are compared in pairs
 stratify = true                 # round-robin over sub-areas
-backfill = false                # if true, replace a dropped task with the next ranked one
 require_brief = true            # the lead says what is important before ranking
 require_signoff = true          # the lead approves the selection before any trial is spent
-
-[verify]
-parity = "sampled"              # "off" | "sampled" | "full"
-parity_tasks = 5                # run with the worker tier's model: no separate setting
-
-# ----- trials: an agent configuration's attempts at a task, in both stages -----
-# The difficulty run of curation and the evaluation of the released index fill the same slots, so a
-# difficulty trial is not run again when the index is evaluated.
-[eval]
-trials = 3                      # per task, per agent configuration
-claim_hours = 4.0               # how long a claim on a task and a configuration holds, in hm eval
-max_claim = 20                  # the most that one person may hold at once
-retries = 2                     # how often a trial that failed for an infrastructure reason is tried again
 
 # ----- difficulty: a task is kept only if frontier agents mostly fail it -----
 # Run once per task, after every cheap check has passed. A later repair does not run it again.
 [difficulty]
-max_pass_rate = 0.4
+max_pass_rate = 0.5             # kept when at most half the frontier trials pass: 0 to 3 of 6
+trials = 3                      # tries per task by each agent of the suite
 max_agent_hours = 4.0           # the most one agent trial may run. A task's own limit applies when shorter
 early_stop = true
 cheap_solve = true              # the worker tier's model tries first. A task it solves every time is dropped with no frontier trial
@@ -105,5 +92,5 @@ reasoning_effort = "max"
 version = "0.162.1"
 
 [fix]
-max_rounds = 3
-frontier_after_round = 2
+max_rounds = 2                  # round 1 by the worker model, round 2 by the frontier model
+frontier_after_round = 1

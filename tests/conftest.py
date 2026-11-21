@@ -37,8 +37,10 @@ def make_benchmark(root: Path, name: str, count: int, seed: int = 0) -> Path:
 
 
 def write_index(ws: Path, cfg: config_mod.Config, people: list[dict]) -> None:
-    """A small index in `ws`: its protocol and its contributor list."""
+    """A small index in `ws`: its protocol, its skills and its contributor list."""
+    from harbor_master import skills
     ws.mkdir(parents=True, exist_ok=True)
+    skills.adopt(ws / "skills", skills.names())
     (ws / config_mod.PROTOCOL_NAME).write_text(tomli_w.dumps({k: getattr(cfg, k).model_dump() for k in config_mod.PROTOCOL_SECTIONS}))
     (ws / ledger.CONTRIBUTORS).write_text(tomli_w.dumps({"contributor": people}))
     (ws / ".gitignore").write_text(".hm/\n")

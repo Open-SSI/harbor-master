@@ -13,6 +13,8 @@ from ..core import keys
 from .base import NotImplementedBackend
 
 READ_ONLY = ["Read", "Glob", "Grep"]
+WEB = ["WebSearch", "WebFetch"]           # to find something on the web: search, and read the pages found
+EDIT = [*READ_ONLY, "Write", "Edit"]      # a repair: it changes files in its own copy of a task, and runs nothing
 
 
 @dataclass
@@ -36,14 +38,16 @@ def _env() -> dict[str, str]:
 
 
 async def ask(model: str, system: str, prompt: str, schema: dict, cwd: Path | None = None,
-              max_turns: int = 6, effort: str | None = None, attempts: int = 2) -> Reply:
-    """One session. With `cwd`, the model may read files there. Raises RuntimeError when no typed result comes back."""
+              max_turns: int = 6, effort: str | None = None, attempts: int = 2, write: bool = False, web: bool = False) -> Reply:
+    """One session. With `cwd`, the model may read files there, and with `write` also change them. With `web`, it may
+    search the web and read pages. Raises RuntimeError when no typed result comes back."""
     from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query     # here, so that hm starts without loading it
+    tools = (EDIT if write else READ_ONLY) if cwd else []      # with no directory and no web, the model has no tools at all
+    tools = [*tools, *WEB] if web else tools
     options = ClaudeAgentOptions(
         model=model, system_prompt=system, max_turns=max_turns, setting_sources=[],
-        tools=READ_ONLY if cwd else [],      # with no directory, the model has no tools at all
-        allowed_tools=READ_ONLY if cwd else [], cwd=str(cwd) if cwd else None,
-        permission_mode="dontAsk" if cwd else None, effort=effort,
+        tools=tools, allowed_tools=tools, cwd=str(cwd) if cwd else None,
+        permission_mode="dontAsk" if tools else None, effort=effort,
         output_format={"type": "json_schema", "schema": schema}, env=_env())
     problem = "no result"
     for _ in range(attempts):

@@ -1,4 +1,4 @@
-"""Rich renderables for each region of the session screen (DESIGN.md Section 11)."""
+"""Rich renderables for each region of the session screen (DESIGN.md Section 10)."""
 from __future__ import annotations
 
 import time
@@ -30,8 +30,8 @@ def summary(s: Session, now: float, width: int = 120) -> Table:
     sep = " of " if wide else "/"
     items = [
         t(("cells  ", MU), str(busy), (f"{sep}{s.active_cells}", MU)),
-        t(("containers  " if wide else "boxes  ", MU), str(s.containers_used), (f"{sep}{s.cfg.run.max_containers}", MU)),
-        t(("spent  ", MU), f"${s.spent:.2f}", (f"{sep}${s.budget:.0f}", MU)),
+        t(("containers  " if wide else "boxes  ", MU), str(s.containers_used), (f"{sep}{s.max_containers}", MU)),
+        t(("spent  ", MU), f"${s.spent:.2f}"),
         t(("elapsed  " if wide else "", MU), clock(now - s.started)),
         t(("calls  " if wide else "", MU), ("D ", TE), k(s.calls["decision"]), (" W ", PU), k(s.calls["worker"]),
           (" F ", AM), k(s.calls["frontier"])),
@@ -92,7 +92,7 @@ def cells(s: Session, now: float) -> Table:
             tb.add_row(t(("·", MU)), t((str(c.n), MU)), t((idle, MU)), "", "", "")
             continue
         color = AM if c.attention else PU
-        name = STAGES[c.stage] if c.stage != 7 else "fix"
+        name = STAGES[c.stage]
         now_text = t((f"{name:<{NAME_WIDTH}}", f"bold {color}"), ("  " + c.detail, SE))     # one color, and details in a column
         tb.add_row(t((spinner(now), color)), t((str(c.n), MU)), c.task.task_id.split("/", 1)[-1][-28:],
                    stage_marks(c.stage, color, now), now_text, t((clock(now - c.started), SE)))
@@ -118,6 +118,20 @@ def recent(s: Session, n: int = 3) -> Table:
     for ts, kind, task_id, text in list(s.recent)[:n]:
         g.add_row(t((time.strftime("%H:%M", time.localtime(ts)), MU)), t((kind, KIND_COLOR.get(kind, SE))),
                   task_id.split("/", 1)[-1], t((text, SE)))
+    return g
+
+
+def log_row(entry: tuple[float, str, str, str]) -> Table:
+    """One event in the curate screen's log: when, what kind, which task, and what happened, in full. A long line wraps
+    under its own words, not under the time."""
+    ts, kind, task_id, text = entry
+    g = Table.grid(expand=True, padding=(0, 2, 0, 0), pad_edge=False)
+    g.add_column(no_wrap=True)
+    g.add_column(width=8, no_wrap=True)
+    g.add_column(width=12, no_wrap=True, overflow="ellipsis")
+    g.add_column(ratio=1)
+    g.add_row(t((time.strftime("%H:%M:%S", time.localtime(ts)), MU)), t((kind, KIND_COLOR.get(kind, SE))),
+              task_id.split("/", 1)[-1], t((text, SE)))
     return g
 
 

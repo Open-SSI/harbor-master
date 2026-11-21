@@ -6,6 +6,9 @@ secrets.env
 # The paper is an Overleaf clone with its own history.
 paper/
 
+# tutorial
+tutorial/
+
 # Python
 .venv/
 __pycache__/
@@ -19,10 +22,8 @@ dist/
 .coverage
 htmlcov/
 
-# What `hm` makes while it is tried from this folder: an index is a repository of its own.
-/workspace/
-/hm-demo/
-/fake/
+# What `hm` makes while it is tried from this folder (hm clone demo-index): an index is a repository of its own.
+/demo-index/
 .hm/
 
 # Editors and operating systems

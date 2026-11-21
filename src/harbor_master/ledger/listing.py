@@ -1,4 +1,4 @@
-"""The list of indexes: where each index's repository is (DESIGN.md Section 10).
+"""The list of indexes: where each index's repository is (DESIGN.md Section 9).
 
 The list is `indexes.toml` at the top of the Harbor-Master repository, read from its main
 branch, so a new entry is visible as soon as it is merged. It holds addresses and nothing
@@ -13,13 +13,13 @@ import urllib.request
 from pathlib import Path
 
 from ..core import config as config_mod
-from . import protocol
 from .fold import index_entries
 from .store import Ledger
 from .sync import Sync, SyncError
 from .verify import active, load_contributors, owner_keys, verify
 
-DEFAULT = "https://raw.githubusercontent.com/Open-SSI/harbor-master/main/indexes.toml"
+REPO = "Open-SSI/harbor-master"
+DEFAULT = f"https://raw.githubusercontent.com/{REPO}/main/indexes.toml"
 NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
 REQUIRED = ("name", "url", "owner")
 
@@ -114,9 +114,8 @@ def inspect(entry: dict, directory: Path) -> tuple[dict, list[str]]:
     found += [f"it has no copy of skills/{n}" for n in skills.missing(directory / "skills")]
     found += verify(directory)
     events = Ledger(directory).events
-    lock = protocol.current(events)
     info = {"title": cfg.about.title or cfg.about.name, "description": cfg.about.description,
             "owner": ", ".join(f"{c.get('name', '?')} (@{c['github']})" for c in people if c.get("role") == "owner" and c.get("github")),
             "contributors": len(active(people)), "benchmarks": [b["id"] for b in benchmarks],
-            "accepted": len(index_entries(events)), "locked": bool(lock and lock["protocol"] == cfg.protocol)}
+            "accepted": len(index_entries(events)), "version": cfg.about.version}
     return info, found

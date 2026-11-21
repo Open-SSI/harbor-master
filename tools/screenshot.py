@@ -107,7 +107,6 @@ async def main(out: Path, font_dir: Path | None, cols: int, rows: int, scene: st
             f'[[contributor]]\nname = "{ident.name}"\ngithub = "{ident.github}"\nkey = "{ident.public_key}"\n')
         cfg = config_mod.Config()
         cfg.select.require_signoff = scene == "signoff"
-        cfg.run.budget_usd = 1000        # the pictures should not stop on the budget
         sizes = {"main": (120, 60, 40), "signoff": (120, 60, 0), "review": (40, 24, 0)}[scene]
         registry = {}
         for (name, field), n in zip((("smdd-bench", "chemistry"), ("terrabench", "earth"), ("autopdebench", "physics")), sizes):
@@ -119,6 +118,7 @@ async def main(out: Path, font_dir: Path | None, cols: int, rows: int, scene: st
                 "brief", text="Tasks that need real computation.", examples=[], version=1, simulated=True)
         s = Session(ws, cfg, ident, registry, simulate=True, speed=0.02 if scene == "review" else 0.6,
                     command="hm run " + " ".join(b.split("/")[-1] for b in registry) + " --simulate")
+        s.asked_cells = True             # the picture is of the run, not of the box that asks for the work cells
         app = SessionApp(s)
         async with app.run_test(size=(cols, rows)) as pilot:
             if scene == "main":

@@ -15,10 +15,9 @@ from pathlib import Path
 
 
 from . import benchmarks
-from .evals import EVAL
 from .store import REPORTS, SHARDS
 
-DEFINITION = ("about.toml", "protocol.toml", "roster.toml", "contributors.toml", "skills", "adapters",
+DEFINITION = ("about.toml", "protocol.toml", "contributors.toml", "skills", "adapters",
               ".gitignore", "README.md")
 
 
@@ -88,7 +87,7 @@ class Sync:
     def _commit(self, message: str) -> bool:
         """Commit this machine's new records and the reports that go with them, and nothing else."""
         benchmarks.write_list(self.dir)
-        found = [name for name in (SHARDS, REPORTS, EVAL, benchmarks.FILE) if (self.dir / name).exists()]
+        found = [name for name in (SHARDS, REPORTS, benchmarks.FILE) if (self.dir / name).exists()]
         if found:
             self._git("add", "-A", "--", *found)
         if self._git("diff", "--cached", "--quiet", check=False).returncode == 0:
