@@ -98,3 +98,17 @@ async def test_an_unstated_check_is_the_worker_agents_to_confirm_never_the_small
     assert await stages.coverage(session, CellState(1), task) == ("ok", "") and len(asked) == 2
     said = [e for e in session.ledger.events if e.get("gate") == "coverage"]
     assert [(e["tier"], e["outcome"]) for e in said] == [("decision", "escalate"), ("worker", "pass")]
+
+
+async def test_a_correct_variant_whose_own_script_fails_counts_for_nothing(workspace, session, monkeypatch):
+    """A probe answer that crashes says nothing about the verifier: it is left out, not counted as a right answer rejected."""
+    from harbor_master.engine import stages
+    from harbor_master.engine.state import CellState
+    task = tasks.load_benchmark(Path(tasks.read_registry(workspace)["demo-bench"]["path"]), "demo-bench")[0]
+
+    async def run_mutant(task, mutant, stage="probe"):
+        return None if mutant["kind"] == "equivalent" else False      # every right one crashed, every wrong one was refused
+    monkeypatch.setattr(session.backend, "run_mutant", run_mutant)
+    assert await stages.mutants(session, CellState(1), task) == ("ok", "")
+    said = next(e for e in session.ledger.events if e.get("gate") == "verifier")
+    assert said["outcome"] == "pass" and said["broken"] and not said.get("right_rejected")

@@ -262,13 +262,16 @@ async def mutants(s: Session, cell: CellState, task: Task):
         return ("ok", "") if prior["outcome"] == "pass" else ("fix", "verifier")
     t0 = enter(cell, STAGE_NO["probe"], "writing mutants")
     written = await s.backend.write_mutants(task)
-    mutants, wrong_accepted, right_rejected, detail = written["mutants"], [], [], []
+    mutants, wrong_accepted, right_rejected, detail, broken = written["mutants"], [], [], [], []
     for i in range(0, len(mutants), 4):
         batch = mutants[i:i + 4]
         accepted = await asyncio.gather(*(s.container(s.backend.run_mutant(task, m)) for m in batch))
         for m, a in zip(batch, accepted):
             detail.append({"id": m["id"], "kind": m["kind"], "what": m.get("what", ""), "verifier_accepted": bool(a),
-                           "error": m.get("error", "")})
+                           "error": m.get("error", ""), **({"broken": m["broken"]} if m.get("broken") else {})})
+            if a is None:               # the variant itself did not run: it counts for nothing
+                broken.append(m["id"])
+                continue
             if m["kind"] == "wrong" and a:
                 wrong_accepted.append(m["id"])
             if m["kind"] == "equivalent" and not a:
@@ -278,9 +281,9 @@ async def mutants(s: Session, cell: CellState, task: Task):
     s.record(task.benchmark, "decision", task, stage="probe", gate="verifier", tier="worker",
                 model=s.cfg.tiers.worker.model, value=f"{len(mutants)} mutants", cost=written["cost"],
              skill=written.get("skill", ""),
-                outcome="pass" if ok else "fix", wrong_accepted=wrong_accepted, right_rejected=right_rejected)
-    s.stage_done(task, STAGE_NO["probe"], t0, mutants=len(mutants), wrong_accepted=wrong_accepted,
-                 right_rejected=right_rejected, detail=detail)
+                outcome="pass" if ok else "fix", wrong_accepted=wrong_accepted, right_rejected=right_rejected, broken=broken)
+    s.stage_done(task, STAGE_NO["probe"], t0, mutants=len(mutants) - len(broken), wrong_accepted=wrong_accepted,
+                 right_rejected=right_rejected, broken=broken, detail=detail)
     if ok:
         return "ok", ""
     s.board(task)["why"] = "verifier accepted a wrong mutant" if wrong_accepted else "verifier rejected a correct variant"
@@ -516,8 +519,9 @@ def progress(stage: str, r: dict) -> str:
                 f"{n('trivial_accepted')} of {r['trivial_tried']} trivial answers are accepted")
     if stage == "probe" and "mutants" in r:
         wrong, right = n("wrong_accepted"), n("right_rejected")
-        return (f"the verifier tells right from wrong on all {r['mutants']} probe answers" if not (wrong or right) else
-                f"of {r['mutants']} probe answers, {wrong} wrong accepted and {right} right rejected")
+        left_out = f" ({n('broken')} whose own script failed left out)" if n("broken") else ""
+        return (f"the verifier tells right from wrong on all {r['mutants']} probe answers{left_out}" if not (wrong or right) else
+                f"of {r['mutants']} probe answers, {wrong} wrong accepted and {right} right rejected{left_out}")
     if stage == "probe" and "coverage" in r:
         return "the instruction states everything the tests check" if r["coverage"] == "covered" else \
             "the tests check something the instruction does not state"

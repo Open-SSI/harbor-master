@@ -408,7 +408,7 @@ class RealBackend(Backend):
         r = await harbor.run(task.path, self.jobs, "nop", **self.limits(task, "the no-op run"))
         return self._settle(r, keep=r.passed or bool(r.error), label=f"{task.name}.noop.{uuid.uuid4().hex[:6]}")
 
-    async def run_mutant(self, task: Task, mutant: dict, stage: str = "probe") -> bool:
+    async def run_mutant(self, task: Task, mutant: dict, stage: str = "probe") -> bool | None:
         if stage in self.assumed:
             return await self.sim.run_mutant(task, mutant, stage)
         copy = harbor.with_solution(task.path, mutant["files"], self.scratch)
@@ -417,6 +417,12 @@ class RealBackend(Backend):
         finally:
             shutil.rmtree(copy.parent, ignore_errors=True)
         mutant["reward"], mutant["error"] = result.reward, result.error
+        if result.exit_code not in (None, 0) and not result.passed:
+            # The variant's own script failed: its output says nothing about the verifier, either way. A "correct"
+            # variant that crashes is not a right answer the verifier rejected.
+            mutant["broken"] = f"its script exited with {result.exit_code}"
+            self._settle(result, keep=True, label=f"{task.name}.mutant-{mutant['id']}")
+            return None
         finding = (mutant["kind"] == "wrong") == result.passed      # a wrong one accepted, or a right one rejected
         self._settle(result, keep=finding or bool(result.error), label=f"{task.name}.mutant-{mutant['id']}")
         return result.passed

@@ -40,6 +40,7 @@ class TrialResult:
     artifact: str = ""         # where the trial's files are
     error: str = ""            # an infrastructure failure, as opposed to a wrong answer
     job: str = ""              # Harbor's working folder for this run. Not recorded: it is packed or removed
+    exit_code: int | None = None   # how the solution script or agent itself ended, as Harbor wrote it; None when unknown
 
 
 Usage = Callable[[str, float, int], None]  # (tier, cost, tokens)

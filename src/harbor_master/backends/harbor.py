@@ -245,6 +245,11 @@ async def _run_once(task_dir, jobs_dir, agent, model, agent_kwargs, with_keys, t
         return TrialResult(False, 0.0, 0, 0, 0.0, 0.0, error=f"Harbor produced no trial result. {tail}", artifact=str(job),
                            job=str(job))
     r = json.loads(results[0].read_text())
+    said = results[0].parent / "agent" / "exit-code.txt"
+    try:
+        exit_code = int(said.read_text().strip()) if said.is_file() else None
+    except ValueError:
+        exit_code = None
     reward = float(((r.get("verifier_result") or {}).get("rewards") or {}).get("reward") or 0.0)
     usage = r.get("agent_result") or {}
     err = r.get("exception_info")
@@ -259,7 +264,7 @@ async def _run_once(task_dir, jobs_dir, agent, model, agent_kwargs, with_keys, t
         cost=cost, seconds=_seconds(r.get("agent_execution")),
         agent_version=str((r.get("agent_info") or {}).get("version") or ""),
         verifier_seconds=_seconds(r.get("verifier")), checksum=str(r.get("task_checksum") or ""),
-        artifact=str(results[0].parent), error=explain(err), job=str(job))
+        artifact=str(results[0].parent), error=explain(err), job=str(job), exit_code=exit_code)
 
 
 def with_solution(task_dir: Path, files: dict[str, str], scratch: Path) -> Path:
