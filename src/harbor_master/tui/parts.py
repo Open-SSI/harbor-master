@@ -30,7 +30,43 @@ SCROLLBARS = f"""
 QUIT_KEYS = "ctrl+l leave   ctrl+z quit"       # on the bottom border of every box: the run can always be left or ended
 
 
-class ChoiceBox(ModalScreen[str]):
+class Fits:
+    """For a box whose middle part scrolls: on opening, on every resize and as its contents change, the part FLEX (or
+    SCROLL inside it) is capped to the room the box's other parts leave, so that its line to type in and its buttons
+    are always on the screen, however short the terminal. The box is the screen's first Vertical, at most SHARE of the
+    screen tall; CAP, when set, is the most the scrolling part grows to on a tall screen."""
+    FLEX, SCROLL, SHARE, CAP = "VerticalScroll", "", 0.92, 0
+
+    def on_mount(self) -> None:
+        self.call_after_refresh(self.fit)
+        self.set_interval(0.5, self.fit)            # what is shown changes: a correction, a check, a message
+
+    def on_resize(self, event) -> None:
+        self.call_after_refresh(self.fit)
+
+    def fit(self) -> None:
+        from textual.css.query import NoMatches
+        try:
+            box = self.query_one(Vertical)
+            flex = self.query_one(self.FLEX)
+            scroll = self.query_one(self.SCROLL) if self.SCROLL else flex
+        except NoMatches:
+            return
+        outer = lambda w: w.outer_size.height + w.styles.margin.top + w.styles.margin.bottom  # noqa: E731
+        others = sum(outer(c) for c in box.children if c is not flex and c.display)
+        chrome = box.outer_size.height - box.content_size.height                   # its border and padding
+        inside = flex.outer_size.height - scroll.outer_size.height if scroll is not flex else 0     # a frame around it
+        room = int(self.size.height * self.SHARE) - box.styles.margin.bottom - chrome - others - inside \
+            - flex.styles.margin.top - flex.styles.margin.bottom
+        room = max(1, min(room, self.CAP) if self.CAP else room)
+        if scroll.styles.max_height is None or scroll.styles.max_height.value != room:
+            scroll.styles.max_height = room
+        if box.max_scroll_y and self.focused is not None and self.focused is not getattr(self, "_shown", None):
+            self._shown = self.focused              # a terminal too short even so: the box scrolls to what has the keyboard
+            self.focused.scroll_visible(animate=False)
+
+
+class ChoiceBox(Fits, ModalScreen[str]):
     """A decision, in a box: what it is about, and one button for each thing that can be done. It opens by
     itself and nothing else can be done on the screen until one is pressed. With `cancel`, esc closes it
     and gives "". Up and down walk the buttons, enter presses the one the keyboard is on.
@@ -41,8 +77,8 @@ class ChoiceBox(ModalScreen[str]):
     DEFAULT_CSS = f"""
     ChoiceBox {{ align: center middle; background: {BG} 70%; }}
     ChoiceBox > Vertical {{ width: 84; max-width: 94%; height: auto; max-height: 90%; border: round {AM}; border-title-color: {AM};
-                            padding: 1 2; background: {BG}; }}
-    ChoiceBox VerticalScroll {{ height: auto; max-height: 16; margin: 0 0 1 0; }}
+                            padding: 1 2; background: {BG}; overflow-y: auto; scrollbar-size: 0 0; }}
+    ChoiceBox VerticalScroll {{ height: auto; margin: 0 0 1 0; }}
     ChoiceBox #text {{ height: auto; color: {FG}; }}
     ChoiceBox Button, ChoiceBox Button.-style-default {{ width: 100%; height: 3; border: round {BORDER}; background: {BG}; color: {FG}; }}
     ChoiceBox Button:focus {{ border: round {TE}; color: {TE}; text-style: bold; background-tint: {BG} 0%; }}
@@ -63,6 +99,8 @@ class ChoiceBox(ModalScreen[str]):
         if not self._cancel:                # the box that asks whether to end the run has esc to go back instead
             box.border_subtitle = QUIT_KEYS
         yield box
+
+    CAP, SHARE = 16, 0.88           # its box is at most 90% of the screen
 
     def on_mount(self) -> None:
         # With a line to type in, the keyboard starts on it: typing goes there, and enter sends it with its option.
@@ -95,4 +133,4 @@ class ChoiceBox(ModalScreen[str]):
                 self.dismiss("")
 
 
-__all__ = ["BORDER", "QUIT_KEYS", "SCROLLBARS", "ChoiceBox"]
+__all__ = ["BORDER", "QUIT_KEYS", "SCROLLBARS", "ChoiceBox", "Fits"]

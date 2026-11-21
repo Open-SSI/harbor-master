@@ -19,14 +19,14 @@ from textual.widgets import Button, Input, Static
 from .. import ledger as ledger_mod
 from .. import tasks as tasks_mod
 from ..engine.state import MAX_CELLS
-from .parts import QUIT_KEYS
+from .parts import QUIT_KEYS, Fits
 from .theme import AM, BG, BORDER, FG, MU, PU, RD, SE, TE, t
 
 CSS = f"""
 {{name}} {{{{ align: center bottom; background: {BG} 25%; }}}}
-{{name}} > Vertical {{{{ width: 92; max-width: 96%; height: auto; max-height: 70%; border: round {PU}; border-title-color: {PU};
-                     padding: 1 2; background: {BG}; margin: 0 0 1 0; }}}}
-{{name}} VerticalScroll {{{{ height: auto; max-height: 18; margin: 0 0 1 0; }}}}
+{{name}} > Vertical {{{{ width: 92; max-width: 96%; height: auto; max-height: 94%; border: round {PU}; border-title-color: {PU};
+                     padding: 1 2; background: {BG}; margin: 0 0 1 0; overflow-y: auto; scrollbar-size: 0 0; }}}}
+{{name}} VerticalScroll {{{{ height: auto; margin: 0 0 1 0; }}}}
 {{name}} #text {{{{ height: auto; color: {FG}; margin: 0 0 1 0; }}}}
 {{name}} Button, {{name}} Button.-style-default {{{{ width: 100%; height: 3; border: round {BORDER}; background: {BG}; color: {FG}; }}}}
 {{name}} Button:focus {{{{ border: round {TE}; color: {TE}; text-style: bold; background-tint: {BG} 0%; }}}}
@@ -82,7 +82,7 @@ def cannot_take(st: dict, why: str = "") -> str:
             "curated": " cannot be taken: it is curated, and nothing is left to curate in it."}[st["status"]]
 
 
-class PickScreen(ModalScreen[str]):
+class PickScreen(Fits, ModalScreen[str]):
     """Which benchmark to curate. Every benchmark on the list is shown, in a list that scrolls, with where it stands.
     Below it, one line takes what is typed: the name of a listed one (nobody holds it and it is not finished) curates
     it, and a repository link adds a new one. Typing a name narrows the list, and tab completes it. A name that is not
@@ -99,6 +99,7 @@ class PickScreen(ModalScreen[str]):
     PickScreen #rows {{ padding: 0 1 0 0; }}
     PickScreen #head {{ padding: 0 2 0 0; }}
     """
+    FLEX, SCROLL, CAP = "#list", "#scroll", 18
     BINDINGS = [("ctrl+z", "app.quit_run", "End"), ("ctrl+l", "app.leave", "Leave"), ("ctrl+t", "app.theme", "Light or dark"),
                 Binding("tab", "complete", "Complete", priority=True, show=False),
                 ("up", "scroll(-1)", "Scroll"), ("down", "scroll(1)", "Scroll"),
@@ -287,7 +288,7 @@ async def find_draft(s, link: str, say=lambda said: None) -> tuple[dict, list[st
     return entry, list(found.get("sources") or [])
 
 
-class DraftScreen(ModalScreen[str]):
+class DraftScreen(Fits, ModalScreen[str]):
     """A new benchmark's draft, as it was found (find_draft), for the person to check once: enter adds it, signed, and
     the run goes on to curate it. A correction is typed below it, as `field: value` or in words for the agent, which
     looks again while the draft stays on the box."""
@@ -295,13 +296,14 @@ class DraftScreen(ModalScreen[str]):
     DraftScreen #from {{ height: auto; color: {MU}; margin: 0 0 1 0; }}
     """
     BINDINGS = [("ctrl+z", "app.quit_run", "End"), ("ctrl+l", "app.leave", "Leave"), ("escape", "back", "Back")]
+    FLEX = "#info"
 
     def __init__(self, s, entry: dict, sources: list[str]):
         super().__init__()
         self.s, self.entry, self.sources = s, entry, sources
 
     def compose(self) -> ComposeResult:
-        box = Vertical(Static(id="text"), Static(id="from"),
+        box = Vertical(VerticalScroll(Static(id="text"), Static(id="from"), id="info", can_focus=False),
                        Input(placeholder="a correction: paper: https://..., or in words", id="line"),
                        Static(id="said"),
                        Button("Add it, and curate it", id="add"), Button("Back to the list", id="back"))
@@ -389,14 +391,14 @@ def record_checks(s, entry: dict, checked: list, outcome: str) -> None:
              outcome=outcome, checks={c.key: [c.status, c.detail[:240]] for c in checked}, digest_override=checks_mod.key(entry))
 
 
-class ChecksScreen(ModalScreen[str]):
+class ChecksScreen(Fits, ModalScreen[str]):
     """The benchmark-level checks of a benchmark being added (tasks/checks.py), asked one by one in a list that scrolls
     inside the box, each with what it found. Passed, the person continues: it is added and curated. Failed, the box says
     why it is rejected, and the person confirms: it is not added. Either way, back goes to the draft."""
     DEFAULT_CSS = CSS.format(name="ChecksScreen") + f"""
     ChecksScreen > Vertical {{ max-height: 94%; }}
     ChecksScreen #list {{ height: auto; border: round {BORDER}; border-title-color: {MU}; padding: 0 0 0 1; margin: 0 0 1 0; }}
-    ChecksScreen #list VerticalScroll {{ height: auto; max-height: 14; margin: 0; overflow-x: hidden; scrollbar-size: 0 1;
+    ChecksScreen #list VerticalScroll {{ height: auto; margin: 0; overflow-x: hidden; scrollbar-size: 0 1;
                                          overflow-y: scroll; }}
     ChecksScreen #rows {{ height: auto; padding: 0 1 0 0; }}
     ChecksScreen #verdict {{ height: auto; margin: 0 0 1 0; }}
@@ -404,6 +406,7 @@ class ChecksScreen(ModalScreen[str]):
     BINDINGS = [("ctrl+z", "app.quit_run", "End"), ("ctrl+l", "app.leave", "Leave"), ("escape", "back", "Back to the draft"),
                 ("up", "scroll(-1)", "Scroll"), ("down", "scroll(1)", "Scroll")]
     LOOK = {"pass": ("✓", TE), "warn": ("!", AM), "fail": ("✗", RD), "unknown": ("?", MU)}
+    FLEX, SCROLL, CAP = "#list", "#scroll", 14
 
     def __init__(self, s, entry: dict, sources: list[str] | None = None):
         from ..tasks import checks as checks_mod

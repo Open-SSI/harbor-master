@@ -15,7 +15,7 @@ from textual.widgets import Input, Static
 
 from .. import interact
 from ..interact import Command
-from .parts import QUIT_KEYS
+from .parts import QUIT_KEYS, Fits
 from .theme import AM, BG, MU, PU, SE, TE
 
 if TYPE_CHECKING:
@@ -220,7 +220,7 @@ class SelectionScreen(ModalScreen[str]):
             said.update(f"Type a number from 1 to {self.most} to approve that many, or brief <what matters> to rank again.")
 
 
-class AskScreen(ModalScreen[str]):
+class AskScreen(Fits, ModalScreen[str]):
     """Something the run cannot go on without: a brief, or a go-ahead for an adapter.
 
     Whatever the run asks of a person is asked here, in a box of its own that opens by itself. Nothing else
@@ -232,12 +232,14 @@ class AskScreen(ModalScreen[str]):
                 ("ctrl+l", "app.leave", "Leave"), ("ctrl+z", "end", "Quit"), ("ctrl+t", "app.theme", "Light or dark")]
     DEFAULT_CSS = f"""
     AskScreen {{ align: center middle; background: {BG} 70%; }}
-    AskScreen > Vertical {{ width: 86%; height: auto; max-height: 90%; border: round {AM}; border-title-color: {AM}; background: {BG}; }}
-    AskScreen VerticalScroll {{ height: auto; max-height: 100%; padding: 1 2 0 2; }}
+    AskScreen > Vertical {{ width: 86%; height: auto; max-height: 90%; border: round {AM}; border-title-color: {AM}; background: {BG};
+                            overflow-y: auto; scrollbar-size: 0 0; }}
+    AskScreen VerticalScroll {{ height: auto; padding: 1 2 0 2; }}
     AskScreen #said {{ height: auto; padding: 0 2; color: {AM}; }}
     AskScreen Input {{ border: round {PU}; background: {BG}; height: 3; margin: 1 1 0 1; }}
     """
     # kind -> (title, what the empty line shows, the keys line)
+    SHARE = 0.88                    # its box is at most 90% of the screen
     KINDS = {
         "brief": ("a brief is needed", "what matters most in this benchmark, in a sentence or two"),
         "lock": ("an adapter is ready", "lock"),
