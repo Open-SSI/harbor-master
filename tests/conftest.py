@@ -13,6 +13,7 @@ from harbor_master.core import identity
 def own_config(tmp_path, monkeypatch):
     """No test reads or writes the real user's configuration folder, where the indexes on a machine are noted."""
     monkeypatch.setenv("HM_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("HM_SECRETS", str(tmp_path / "config" / "secrets.env"))     # nor the keys of any index on it
     monkeypatch.delenv("HM_WORKSPACE", raising=False)
 
 

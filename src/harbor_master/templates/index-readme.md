@@ -4,21 +4,31 @@ An index of hard, verified tasks, curated with [Harbor-Master](https://github.co
 
 ## Take part
 
-Install Harbor-Master and say who you are:
+1. Install Harbor-Master and say who you are:
 
-```bash
-uv tool install git+https://github.com/Open-SSI/harbor-master
-hm init
-```
+   ```bash
+   uv tool install git+https://github.com/Open-SSI/harbor-master
+   hm init
+   ```
 
-Send the owner the line `hm init` prints, so they can add you. Then clone this index, put your keys in its `secrets.env`, and curate:
+2. Send the owner the line `hm init` prints. They add you to the contributor list, and give your accounts write access to
+   this repository on GitHub and to $store.
 
-```bash
-hm clone $clone && cd $name
-hm curate
-```
+3. Clone this index:
 
-Your clone has its own `secrets.env` (your keys) and `hm.toml` (how your machine runs it), made from `secrets.env.example` and `hm.example.toml`. Git ignores both.
+   ```bash
+   hm clone $clone && cd $folder
+   ```
+
+4. Put your keys in the clone's `secrets.env`. Git ignores it, and the file says what each key is for:
+   - Claude: an API key, or a subscription token from `claude setup-token`
+   - OpenAI: an API key, or a ChatGPT subscription signed in once with `codex login`
+   - OpenRouter: an API key, for the decision model
+   - Hugging Face: your own `HF_TOKEN`, with write access to $store
+
+5. Curate: `hm curate`. It checks every key before anything is spent, and says what is missing.
+
+How your machine runs it (work cells, containers) is in the clone's `hm.toml`, which git ignores too.
 
 ## What is here
 

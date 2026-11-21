@@ -132,9 +132,10 @@ class Sync:
                 return
         raise SyncError("could not push the ledger: others kept pushing first")
 
-    def connect(self, url: str) -> str:
+    def connect(self, url: str, fresh: bool = False) -> str:
         """Share this index through a repository. Where the repository already has the index, its files
-        that define the index win over the local copies."""
+        that define the index win over the local copies. With `fresh`, for an index just made, a repository that has
+        anything in it is refused, and nothing is pushed to it: a new index never takes on another's history."""
         if not (self.dir / ".git").exists():
             self._git("init", "--quiet", "-b", "main")
         if "origin" in self._git("remote", check=False).stdout.split():
@@ -142,6 +143,10 @@ class Sync:
         else:
             self._git("remote", "add", "origin", url)
         self._git("fetch", "--quiet", "origin")
+        if fresh and self._git("ls-remote", "--heads", "origin", check=False).stdout.strip():
+            self._git("remote", "remove", "origin", check=False)
+            raise SyncError(f"{url} is not empty, so this new index was not connected to it, and nothing was pushed. "
+                            "A new index starts in an empty repository")
         if self._remote_has_branch():
             self._git("reset", "--quiet", "origin/main")                    # keep local files, adopt the shared history
             for name in DEFINITION:

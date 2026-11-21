@@ -40,12 +40,10 @@ def use(index_dir: Path) -> None:
 
 def secrets_path() -> Path | None:
     """Where the keys file is: $HM_SECRETS, else the secrets.env of the index a command works on (named with -w, or the
-    one this folder is in). Outside an index there is none, and keys come from the environment only. With HM_CONFIG_DIR
-    set (tests), it stays in that folder."""
+    one this folder is in). Outside an index there is none, and keys come from the environment only. Who you are
+    (HM_CONFIG_DIR) has no bearing on it: a second person on one machine has their keys in their own clone."""
     if os.environ.get("HM_SECRETS"):
         return Path(os.environ["HM_SECRETS"])
-    if os.environ.get("HM_CONFIG_DIR"):
-        return config_dir() / SECRETS
     from .config import find_workspace
     found = _index or find_workspace()
     return found / SECRETS if found else None

@@ -156,7 +156,10 @@ def index_new(name: str, directory: Path | None = None, title: str = "", descrip
     ws.mkdir(parents=True, exist_ok=True)
     import uuid
     web = re.sub(r"^(?:git@github\.com:|https://github\.com/)(.+?)(?:\.git)?$", r"https://github.com/\1", url)    # what anyone can clone
-    fill = lambda text: Template(text).substitute(name=name, title=title or name, canary=uuid.uuid4(), clone=web or name)  # noqa: E731
+    folder = re.split(r"[/:]", (web or name).rstrip("/").removesuffix(".git"))[-1]      # the folder hm clone makes of it
+    store_at = f"the dataset `{tasks}` on Hugging Face" if tasks and not tasks.startswith(("/", "~", ".")) else "the task store"
+    fill = lambda text: Template(text).substitute(name=name, title=title or name, canary=uuid.uuid4(), clone=web or name,  # noqa: E731
+                                                  folder=folder, store=store_at)
     (ws / "protocol.toml").write_text(templates.read("protocol.toml"))
     about = fill(templates.read("about.toml"))
     for key, value in (("description", description), ("tasks", tasks)):
@@ -184,7 +187,7 @@ def index_new(name: str, directory: Path | None = None, title: str = "", descrip
         make_store(config_mod.load(ws))
     if url:
         try:
-            state = ledger_mod.Sync(ws, ident.name, ident.github).connect(url)
+            state = ledger_mod.Sync(ws, ident.name, ident.github).connect(url, fresh=True)
             console.print(f"[{theme.TE}]It {state}[/] at {url}. Others get it with: hm clone {url}", highlight=False)
         except ledger_mod.SyncError as err:
             console.print(f"[{theme.AM}]It is not shared yet:[/] {err}\nThe index itself is fine. Once the repository exists and is "
