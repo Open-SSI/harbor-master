@@ -5,7 +5,7 @@
 # copy differs in any way is refused, and every record carries the checksum it was made
 # under. To change a setting, the owner edits this file and locks the new version.
 #
-# Settings for your own machine (parallelism, claims) are in .hm/hm.toml, and are yours to
+# Settings for your own machine (parallelism, claims) are in hm.toml, beside this file, and are yours to
 # change. No key or token belongs in either file.
 
 [requires]

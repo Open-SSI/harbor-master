@@ -57,22 +57,22 @@ def abandoned_text(benchmark: str, record: dict) -> str:
     why = ("no adapter could be made to pass, by the worker model or the frontier model" if record.get("stage") == "adapt"
            else record.get("value") or "a person confirmed it")
     return (f"dropped by @{record['runner']} on {when}: {why}"
-            + (f" ({record['reason'][:160]})" if record.get("reason") else "") + ". It stays on the list as dropped, and cannot be added again")
+            + (f" ({record['reason'][:160]})" if record.get("reason") else "") + ". Anyone may curate it again")
 
 
-PERMANENT = ("environment", "adapter", "no_task_passed", "not_harbor_format")     # what rejects a benchmark for good
+PERMANENT = ("environment", "adapter", "no_task_passed", "not_harbor_format")     # what drops a benchmark, until someone tries it again
 
 
 async def confirm_drop(s: Session, bench: BenchState, why: str, gate: str, record: bool = True) -> str:
     """A benchmark is rejected before curating. The workflow decides what follows from what rejected it: a lasting reason
-    (no public image, no adapter any model could write, no task that passes the gates) drops it for good, and a passing
-    one (a fetch or a model that failed) leaves it out of this run, listed for the next. A box says so, and the person
-    only confirms. With nobody there, nothing is dropped for good. Returns "drop" or "keep"."""
+    (no public image, no adapter any model could write, no task that passes the gates) drops it, and a passing one (a fetch
+    or a model that failed) leaves it out of this run, listed for the next. A box says so, and the person only confirms.
+    A dropped benchmark may be curated again by anyone. With nobody there, nothing is dropped. Returns "drop" or "keep"."""
     if s.no_input:
         return "keep"
     lasting = gate in PERMANENT
     bench.phase, bench.detail, bench.confirmed = "review", "a box asks you to confirm", "asked"
-    what = ("dropped for good: it stays on the index's list as dropped, and nobody curates it" if lasting else
+    what = ("dropped: it stays on the index's list as dropped, and anyone may curate it again" if lasting else
             "left out of this run: it stays listed, and the next run tries it again")
     answer = await s.ask("rejected", f"{bench.id} is rejected. {why.rstrip('.')}.\n\nConfirm, and it is {what}.", bench.id, ["ok"])
     if answer is None:
@@ -258,9 +258,6 @@ async def ready(s: Session, bench: BenchState) -> bool:
     if entry is None or (not foreign(entry) and bench.path != Path() and bench.path.exists()):
         return True
     real = ledger_mod.Ledger(ws).events             # the index's own ledger, whatever kind of run this is
-    gone = ledger_mod.abandoned(real).get(bench.id)
-    if gone is not None:                            # dropped: nobody's run touches it again
-        return _skip(bench, abandoned_text(bench.id, gone), "abandoned")
     bench.phase, bench.detail = "fetch", "fetching it at its pinned release"
     STAGE.set("adapt")
     try:
@@ -277,7 +274,7 @@ async def ready(s: Session, bench: BenchState) -> bool:
         why = environments.verdict(found)
         if why:
             if await confirm_drop(s, bench, why, "environment") == "drop":
-                return _skip(bench, "dropped: its tasks run in images that are not public", "abandoned")
+                return _skip(bench, "dropped: its tasks run in images that are not public", "environment_private")
             return _skip(bench, "its tasks run in images that are not public: left out of this run", "environment_private")
         partly = environments.partly(found)
         if partly:

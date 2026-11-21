@@ -167,33 +167,21 @@ async def test_a_run_fetches_adapts_and_locks_with_no_one_asked(quiet, monkeypat
     assert tried.benches["toy"].phase == "ready" and len(asked) == 4
 
 
-async def test_a_benchmark_no_model_can_adapt_is_dropped_for_good_and_cannot_be_added_again(quiet, monkeypatch):
+async def test_a_benchmark_no_model_can_adapt_is_dropped_and_may_be_tried_again(quiet, monkeypatch):
     ws, source, tmp = quiet
     asked, _ = models(monkeypatch, worker_thinks=False)
-    s = run_of(ws, "r1")
-    run = await start(s)
-    assert s.requests[0].kind == "rejected" and s.requests[0].choices == ["ok"]   # the decision model is sure: the person only confirms
-    s.answer_request(s.requests[0], "ok")
-    await asyncio.wait_for(run, 10)
-    assert s.benches["toy"].phase == "skipped" and "judges it cannot be adapted" in s.benches["toy"].detail and asked == ["worker", "worker", "decision"]
+    for n in (1, 2):                    # dropped; the next run takes it again from the start, and drops it again
+        s = run_of(ws, f"r{n}")
+        run = await start(s)
+        assert s.requests[0].kind == "rejected" and s.requests[0].choices == ["ok"]   # the decision model is sure: the person only confirms
+        assert "anyone may curate it again" in s.requests[0].text
+        s.answer_request(s.requests[0], "ok")
+        await asyncio.wait_for(run, 10)
+        assert s.benches["toy"].phase == "skipped" and "judges it cannot be adapted" in s.benches["toy"].detail
+        assert ledger.benchmarks.statuses(ledger.Ledger(ws).events, ["toy"])["toy"]["status"] == "dropped"
+    assert asked == ["worker", "worker", "decision"] * 2
     dropped = ledger.abandoned(ledger.Ledger(ws).events)["toy"]
     assert (dropped["outcome"], dropped["value"]) == ("drop", "abandoned") and "judged not adaptable (90%)" in dropped["reason"]
-
-    monkeypatch.setattr(tasks.supported, "fetch", lambda entry, sources: pytest.fail("a dropped benchmark is not even fetched"))
-    for again in (run_of(ws, "r2"), run_of(ws, "r3", as_real=False)):          # the next run, and a simulated one
-        await again.run()
-        assert again.benches["toy"].phase == "skipped" and "dropped by @ada" in again.benches["toy"].detail
-        assert "cannot be added again" in again.benches["toy"].detail
-    named = hm("curate", "toy", "--simulate", "--plain", "-w", ws)                # asked for by name, it is refused outright
-    assert named.startswith("1 Refused: toy was dropped by @ada") and "dropped" in hm("benchmarks", "-w", ws)
-    assert "stays on the list as dropped" in hm("benchmarks", "remove", "toy", "-w", ws)       # it stays on the list
-    assert tasks.supported.find(ws, "toy") is not None
-    import tomli_w
-    ws.joinpath("benchmarks.toml").write_text(tomli_w.dumps({"benchmark": []}))  # and even off the list, it is never added again
-    from harbor_master.cli import curate as curate_cli
-    with pytest.raises(typer.Exit):
-        curate_cli._clash(ws, "toy-again", ENTRY["github"] + ".git")
-    assert list(ledger.abandoned(ledger.Ledger(ws).events)) == ["toy"]
 
 
 async def test_a_listed_benchmark_its_checks_reject_costs_no_adapter(quiet, monkeypatch):

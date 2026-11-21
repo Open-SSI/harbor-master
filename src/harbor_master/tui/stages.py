@@ -117,7 +117,8 @@ def bench_stage(s: Session, b: BenchState) -> tuple[int, str]:
     if phase == "skipped":
         at = {"claimed": FETCH, "claim_failed": FETCH, "fetch_failed": FETCH, "checks_failed": CHECK, "environment_private": CHECK,
               "abandoned": ADAPT, "adapter_needs_person": ADAPT, "no_adapter": ADAPT, "adapter_failed": ADAPT, "adapter_not_locked": ADAPT,
-              "model_error": ADAPT, "not_harbor_format": ADAPT, "no_task_passed": SCREEN, "no_brief": RANK, "selection_not_approved": SELECT}
+              "model_error": ADAPT, "not_harbor_format": ADAPT, "no_task_passed": SCREEN, "no_brief": RANK, "selection_not_approved": SELECT,
+              "none_accepted": REVIEW}
         return at.get(b.skip, _REACHED.get((id(s), b.id), FETCH)), "fail"
     if phase == "ready":
         working = b.queued or any(c.task is not None and c.task.benchmark == b.id for c in s.cells)

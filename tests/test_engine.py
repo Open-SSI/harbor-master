@@ -65,3 +65,18 @@ async def test_a_selected_task_with_no_reference_solution_has_one_written(worksp
     assert diagnosis["tier"] == "decision" and diagnosis["value"] in ("write_solution", "drop")
     if diagnosis["value"] == "write_solution":
         assert any(e["type"] == "repair" for e in events)                                  # written, as a repair
+
+
+async def test_a_benchmark_of_which_no_task_is_accepted_is_dropped(workspace, ident):
+    """Once a run is over, the verdict that leaves no task accepted drops the benchmark. Anyone may take it again."""
+    from harbor_master import interact
+    task_dir = sorted((workspace.parent / "fake" / "demo-bench").iterdir())[-1]
+    s = Session(workspace, config_mod.load(workspace), ident, tasks.read_registry(workspace), simulate=True, speed=0,
+                no_input=True, run_id="r-none", only=[task_dir.name])
+    await s.run()
+    status = lambda: ledger.benchmarks.statuses(s.ledger.events, ["demo-bench"])["demo-bench"]["status"]  # noqa: E731
+    for task in list(s.ready):
+        assert status() != "dropped"                            # a report still waits: nothing is decided yet
+        assert "Rejected" in interact.decide(s, task, "reject the verifier is too loose")
+    assert s.benches["demo-bench"].kept + s.benches["demo-bench"].dropped == 1
+    assert status() == "dropped" and "no task was accepted" in s.benches["demo-bench"].detail

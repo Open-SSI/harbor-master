@@ -2,8 +2,8 @@
 
 Two kinds. The definition of an index (about.toml, protocol.toml, contributors.toml) starts from
 the blank files here, and from then on lives in the index's own repository, which only its owner
-changes. The rest (hm.toml, secrets.env.example) are examples
-that every user copies and edits.
+changes. The rest (hm.toml, secrets.env.example) are examples: an index commits them as hm.example.toml
+and secrets.env.example, and each clone gets its own hm.toml and secrets.env made from them.
 """
 from __future__ import annotations
 

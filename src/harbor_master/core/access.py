@@ -153,7 +153,7 @@ def problems(cfg, ws: Path) -> list[str]:
     out = []
     for name, why in said.items():
         if why:
-            out.append(why if name in ("store", "repository", "docker") else f"{name} in {keys.secrets_path().name}: {why}")
+            out.append(why if name in ("store", "repository", "docker") else f"{name} in secrets.env: {why}")
     return out
 
 

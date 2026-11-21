@@ -41,7 +41,8 @@ BOXES = (AskScreen, SelectionScreen, ReviewScreen, ChoiceBox, PickScreen, DraftS
 def decision(session, request) -> ChoiceBox | None:
     """The box for a request that is a choice between a few things, or None when it is asked another way."""
     if request.kind == "rejected":         # the workflow decided: the person only confirms
-        return ChoiceBox("a benchmark is rejected", request.text, [("ok", "Confirm")])
+        title = "a benchmark is dropped" if " is dropped." in request.text.split("\n")[0] else "a benchmark is rejected"
+        return ChoiceBox(title, request.text, [("ok", "Confirm")])
     if request.kind == "hung":             # a trial was stopped: run it again, or drop its task
         return ChoiceBox(f"a trial is stuck   {request.target}", request.text, [("retry", "Retry it"), ("drop", "Drop the task")])
     return None

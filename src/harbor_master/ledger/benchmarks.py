@@ -50,7 +50,7 @@ CLAIM = "__benchmark__"     # what a curation claims: the whole benchmark (engin
 
 
 def statuses(events: Iterable[dict], names: Iterable[str], now: float | None = None) -> dict[str, dict]:
-    """Where each benchmark stands, from the records: dropped (no adapter could be made), curating (someone holds it
+    """Where each benchmark stands, from the records: dropped (rejected, or no task accepted, and not taken since), curating (someone holds it
     now: who, and until when), curated (a run finished every task it selected), or listed (nobody holds it, and it is
     not finished: never started, or let go, by hand or after 12 hours with no progress)."""
     from .fold import abandoned

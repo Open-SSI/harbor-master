@@ -97,14 +97,20 @@ def submitted(events: Iterable[dict]) -> dict[str, dict]:
 
 
 def abandoned(events: Iterable[dict]) -> dict[str, dict]:
-    """The benchmarks dropped before curating: no adapter could be made to pass, or a person confirmed another reason, such
-    as tasks whose environments are not public. benchmark -> the record that says so. A dropped benchmark stays dropped:
-    it cannot be added to the index again."""
-    out: dict[str, dict] = {}
+    """The benchmarks that stand dropped: no adapter could be made to pass, a person confirmed another reason (tasks whose
+    environments are not public, none that passed the gates), or no task of it was accepted. benchmark -> the latest record
+    that says so. A dropped benchmark may be curated again, by anyone: once someone claims it after it was dropped, it is
+    no longer dropped, and if that run drops it too, it is dropped again."""
+    events = list(events)
+    drops: dict[str, dict] = {}
     for e in sorted((e for e in events if e["type"] == "decision" and e.get("stage") in ("adapt", "benchmark") and e.get("outcome") == "drop"),
                     key=lambda e: e["time"]):
-        out.setdefault(e["benchmark"], e)
-    return out
+        drops[e["benchmark"]] = e
+    taken: dict[str, float] = {}            # when each was last claimed for a run, not let go
+    for e in events:
+        if e["type"] == "claim" and "__benchmark__" in e.get("tasks", []) and not e.get("released"):
+            taken[e["benchmark"]] = max(taken.get(e["benchmark"], 0.0), float(e["time"]))
+    return {b: e for b, e in drops.items() if float(e["time"]) > taken.get(b, 0.0)}
 
 
 def credits(events: Iterable[dict]) -> dict[str, dict]:

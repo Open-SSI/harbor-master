@@ -1,4 +1,4 @@
-"""API keys: environment first, then secrets.env in the repository folder, git-ignored (DESIGN.md Section 8)."""
+"""API keys: environment first, then the index's own secrets.env, git-ignored (DESIGN.md Section 8)."""
 from __future__ import annotations
 
 import os
@@ -30,30 +30,25 @@ KEY_PATTERN = re.compile(r"(sk-[A-Za-z0-9_\-]{20,}|hf_[A-Za-z0-9]{20,}|ghp_[A-Za
 SECRETS = "secrets.env"
 
 
-def project_root() -> Path | None:
-    """The Harbor-Master repository folder: the nearest folder upward that has secrets.env.example,
-    or the checkout this code runs from."""
-    here = Path.cwd().resolve()
-    for d in (here, *here.parents):
-        if (d / "secrets.env.example").exists():
-            return d
-    source = Path(__file__).resolve().parents[3]
-    return source if (source / "secrets.env.example").exists() else None
+_index: Path | None = None       # the index a command works on, as it named it: set by need_workspace
 
 
-def secrets_path() -> Path:
-    """Where the keys file is. In order: $HM_SECRETS, a secrets.env found from here upward, the
-    repository folder. The file is git-ignored there. With HM_CONFIG_DIR set (tests), it stays in that folder."""
+def use(index_dir: Path) -> None:
+    global _index
+    _index = index_dir
+
+
+def secrets_path() -> Path | None:
+    """Where the keys file is: $HM_SECRETS, else the secrets.env of the index a command works on (named with -w, or the
+    one this folder is in). Outside an index there is none, and keys come from the environment only. With HM_CONFIG_DIR
+    set (tests), it stays in that folder."""
     if os.environ.get("HM_SECRETS"):
         return Path(os.environ["HM_SECRETS"])
     if os.environ.get("HM_CONFIG_DIR"):
         return config_dir() / SECRETS
-    here = Path.cwd().resolve()
-    for d in (here, *here.parents):
-        if (d / SECRETS).exists():
-            return d / SECRETS
-    root = project_root()
-    return (root or config_dir()) / SECRETS
+    from .config import find_workspace
+    found = _index or find_workspace()
+    return found / SECRETS if found else None
 
 
 def ensure_ignored(path: Path) -> None:
@@ -67,7 +62,7 @@ def ensure_ignored(path: Path) -> None:
 def _file_values() -> dict[str, str]:
     path = secrets_path()
     out: dict[str, str] = {}
-    if path.exists():
+    if path is not None and path.exists():
         for line in path.read_text().splitlines():
             if "=" in line and not line.lstrip().startswith("#"):
                 k, v = line.split("=", 1)
@@ -123,6 +118,8 @@ def agent_env(agent: str = "") -> dict[str, str]:
 
 def set_key(name: str, value: str) -> None:
     path = secrets_path()
+    if path is None:
+        raise ValueError("Keys are kept in an index's secrets.env: this folder is not inside an index.")
     path.parent.mkdir(parents=True, exist_ok=True)
     ensure_ignored(path)
     values = _file_values()

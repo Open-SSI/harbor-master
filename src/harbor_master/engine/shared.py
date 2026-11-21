@@ -56,11 +56,11 @@ ASK_FIRST = ("fetch_failed", "adapter_failed", "model_error", "not_harbor_format
 
 async def rejected(s: Session, bench: BenchState) -> None:
     """A benchmark turned away before curating: unless a person already decided, a box asks them to confirm, and whether
-    to drop it for good or keep it listed for another run."""
+    that it is dropped (anyone may curate it again) or left out of this run."""
     if bench.skip in ASK_FIRST and not bench.confirmed:
         why, code = bench.detail, bench.skip
         if await prepare.confirm_drop(s, bench, why[:1].upper() + why[1:], code) == "drop":
-            bench.skip, why = "abandoned", f"dropped: {why}"
+            why = f"dropped: {why}"              # the code stays what rejected it, so that it is shown at that stage
         bench.phase, bench.detail = "skipped", why
     s.note_recent("rejected", bench.id, bench.detail)
 
@@ -112,6 +112,21 @@ async def _run_shared(s: Session, bench: BenchState) -> None:
         bench.detail = f"none of its {len(bench.tasks)} tasks passed the admission gates"
         await rejected(s, bench)
         return
+    if any(e["type"] == "decision" and e.get("stage") in ("adapt", "benchmark") and e.get("outcome") == "drop"
+           and e["benchmark"] == bench.id for e in s.ledger.events):
+        # Tried again after it was dropped: what already has an outcome is not chosen again, so the rest is ranked, and
+        # the selection is asked again. With nothing left, it stays dropped.
+        done = claims.completed(s, bench.id)
+        kept = [t for t in kept if t.task_id not in done]
+        if not kept:
+            why = "every task that passed the gates already has an outcome"
+            s.record(bench.id, "decision", stage="benchmark", gate="nothing_left", tier="code", value=why, outcome="drop",
+                     reason=f"nothing is left to curate: {why}")
+            bench.phase, bench.detail, bench.skip = "skipped", f"dropped: nothing is left to curate, as {why}", "none_accepted"
+            s.note_recent("dropped", bench.id, f"nothing is left to curate: {why}")
+            s.tell("rejected", f"{bench.id} is dropped. Nothing is left to curate in it: {why}.\n\nConfirm. It stays on "
+                   "the index's list as dropped.", bench.id)
+            return
 
     brief = s.ledger.brief(bench.id)
     if brief is None and s.cfg.select.require_brief and kept:

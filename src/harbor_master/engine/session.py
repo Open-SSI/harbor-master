@@ -17,7 +17,7 @@ from ..core.config import LOCAL, Config
 from ..core.config import simulated as simulated_dir
 from ..core import identity as identity_mod
 from ..core.identity import Identity
-from ..ledger import REPORTS, Ledger, Shard, Sync, active, load_contributors, write_index
+from ..ledger import REPORTS, Ledger, Shard, Sync, active, fold, load_contributors, write_index
 from ..tasks import Task
 from . import claims, shared, stages
 from .state import BENCH, MAX_CELLS, STAGE, STAGES, BenchState, CellState, Request
@@ -294,6 +294,9 @@ class Session:
             self._pushing.append(asyncio.get_running_loop().create_task(self.publish(f"verdict on {task.name}")))
         if value == "accept" and not self.sandbox:
             self.keep(task, digest or task.digest)
+        bench = self.benches.get(task.benchmark)
+        if self.finished and bench is not None:        # the run is over: the last verdict may leave nothing accepted
+            self.none_accepted(bench)
         return event
 
     def keep(self, task: Task, digest: str) -> None:
@@ -353,8 +356,9 @@ class Session:
 
     def add_benchmark(self, benchmark: str, info: dict) -> str:
         """Take one more benchmark into this run, while it is going or after it has finished."""
-        if benchmark in self.benches:
+        if benchmark in self.benches and self.benches[benchmark].phase != "skipped":
             return f"{benchmark} is already in this run."
+        self.benches.pop(benchmark, None)       # one this run dropped, or left out, is taken again from the start
         if self.quitting:
             return "This run is ending, so it takes nothing more."
         self.benches[benchmark] = BenchState(benchmark, Path(info["path"]) if info.get("path") else Path(),
@@ -386,6 +390,9 @@ class Session:
         for job in self._pushing:                         # verdicts that are still on their way out
             with contextlib.suppress(Exception):
                 await job
+        for benchmark in list(self.claimed):              # a benchmark of which no task was accepted is dropped
+            if self.curated(benchmark) and not self.quitting:
+                self.none_accepted(self.benches[benchmark])
         for benchmark in list(self.claimed):              # let go of the benchmarks this run curated: curated, or listed again
             self.release(benchmark, list(self.claimed[benchmark]), curated=self.curated(benchmark))
         self.flush_usage()
@@ -397,6 +404,45 @@ class Session:
                 (self.run_dir / leftover).rmdir()
         (self.run_dir / "run.json").write_text(json.dumps(self.summary(), indent=2) + "\n")
         self.write_requests()
+
+    def none_accepted(self, bench: BenchState) -> None:
+        """A benchmark curated to the end of which no task was accepted: the workflow kept none, or every kept one was
+        rejected. It is dropped, and a box says so for the person to confirm. Anyone may curate it again later. While a
+        kept task still waits for a verdict, nothing is decided: the last verdict decides it."""
+        if bench.phase != "ready":
+            return
+        states = fold(e for e in self.ledger.events if e.get("benchmark") == bench.id)
+        mine = [states[t] for t in bench.chosen if t in states]
+        if not mine or any(st.status in ("accepted", "report_ready", "contested") for st in mine):
+            return
+        rejected = sum(st.status == "rejected" for st in mine)
+        why = (f"every one of its {rejected} kept task{'s was' if rejected != 1 else ' was'} rejected" if rejected else
+               f"the workflow kept none of its {len(mine)} chosen task{'s' if len(mine) != 1 else ''}")
+        self.record(bench.id, "decision", stage="benchmark", gate="none_accepted", tier="code", value=why, outcome="drop",
+                    reason=f"no task was accepted: {why}")
+        bench.phase, bench.detail, bench.skip = "skipped", f"dropped: no task was accepted, as {why}", "none_accepted"
+        self.note_recent("dropped", bench.id, f"no task was accepted: {why}")
+        self.tell("rejected", f"{bench.id} is dropped. No task of it was accepted: {why}.\n\nConfirm. It stays on the "
+                  "index's list as dropped, and anyone may curate it again.", bench.id)
+
+    def tell(self, kind: str, text: str, target: str = "") -> None:
+        """A box that only confirms what was decided, raised at once from code that does not wait for it."""
+        if self.no_input:
+            return
+        try:
+            future = asyncio.get_running_loop().create_future()
+        except RuntimeError:            # no loop: nothing can show a box
+            return
+        self._request_ids += 1
+        req = Request(self._request_ids, kind, text, target, ["ok"], future)
+        self.requests.append(req)
+        self.write_requests()
+
+        def gone(_) -> None:
+            with contextlib.suppress(ValueError):
+                self.requests.remove(req)
+            self.write_requests()
+        future.add_done_callback(gone)
 
     def curated(self, benchmark: str) -> bool:
         """Whether every task this run selected of a benchmark has an outcome, so that it is curated."""

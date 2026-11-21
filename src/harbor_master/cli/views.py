@@ -25,7 +25,8 @@ def _table(*columns: tuple[str, str]) -> Table:
 
 def _records(ws: Path, simulated: bool) -> Path:
     if simulated:
-        console.print(f"[{theme.AM}]Simulated.[/] These are the records of simulated runs on this machine. None of it is in the index.")
+        console.print(f"[{theme.AM}]Simulated.[/] These are the records of simulated runs on this machine. None of it is in the index.",
+                      highlight=False)
     return config_mod.simulated(ws) if simulated else ws
 
 
@@ -61,9 +62,18 @@ def credits(ws: Path, simulated: bool = False) -> None:
 def tasks(ws: Path, simulated: bool = False) -> None:
     """Each accepted task, and whether the store keeps its accepted version."""
     cfg = config_mod.load(ws)
-    entries = ledger_mod.index_entries(ledger_mod.Ledger(ws).events)
+    where = _records(ws, simulated)
+    events = ledger_mod.Ledger(where, simulated=simulated).events
+    entries = ledger_mod.index_entries(events)
     if not entries:
         console.print("No task has been accepted yet.")
+        return
+    if simulated:       # made-up tasks are never put in a store
+        tb = _table(("task", "left"), ("accepted version", "left"))
+        for e in entries:
+            tb.add_row(e["task"], e["digest"][:12])
+        console.print(tb)
+        console.print(f"{len(entries)} accepted in simulated runs.", highlight=False)
         return
     try:
         there, why = store.remote(cfg), "none named in about.toml"
@@ -87,20 +97,37 @@ def tasks(ws: Path, simulated: bool = False) -> None:
 def benchmarks(ws: Path, simulated: bool = False) -> None:
     """The benchmarks this index may curate, from the signed records that added them."""
     from ..engine import prepare
-    events = ledger_mod.Ledger(ws).events
+    where = _records(ws, simulated)
+    events = ledger_mod.Ledger(where, simulated=simulated).events
     gone = ledger_mod.abandoned(events)
     listed = tasks_mod.supported.supported(ws)
+    if simulated:       # the demo's benchmarks are on this machine only, with no signed entry: what is known of them
+        known = {e["id"] for e in listed}
+        for name, info in tasks_mod.read_registry(ws).items():
+            if name not in known:
+                path = Path(info.get("path", ""))
+                count = sum(1 for d in path.iterdir() if (d / "task.toml").exists()) if path.is_dir() else ""
+                listed.append({"id": name, "name": name, "version": info.get("version", ""), "released": info.get("released", ""),
+                               "task_count": count, "license": info.get("license", ""), "github": info.get("github", ""),
+                               "added_by": "made up"})
     told = ledger_mod.benchmarks.statuses(events, [e["id"] for e in listed])
     color = {"listed": theme.SE, "curating": theme.PU, "curated": theme.TE, "dropped": theme.RD}
-    tb = _table(*((c, "left") for c in ("id", "status", "name", "version", "released", "tasks", "license", "source", "added by")))
+    rows = []
     for e in listed:
         st = told[e["id"]]
-        state = f"[{color[st['status']]}]{st['status']}[/]" + (f" by @{st['by']} until {st['until']}" if st["status"] == "curating" else "")
-        tb.add_row(e["id"], state, e["name"], e["version"], e["released"], str(e.get("task_count", "")), e.get("license", ""),
-                   e["github"].replace("https://", ""), "@" + e.get("added_by", "?"))
+        state = f"[{color[st['status']]}]{st['status']}[/]" + (f" @{st['by']} until {st['until'][5:]}" if st["status"] == "curating" else "")
+        by = e.get("added_by", "?")
+        rows.append({"id": e["id"], "status": state, "name": e["name"] if e["name"] != e["id"] else "", "version": e["version"],
+                     "released": e["released"], "tasks": str(e.get("task_count", "")), "license": e.get("license", ""),
+                     "source": e["github"].replace("https://", "").replace("github.com/", ""), "added by": by if " " in by else "@" + by})
+    shown = [c for c in ("id", "status", "name", "version", "released", "tasks", "license", "source", "added by")
+             if c in ("id", "status") or any(r[c] for r in rows)]       # a column empty in every row is left out
+    tb = _table(*((c, "right" if c == "tasks" else "left") for c in shown))
+    for r in rows:
+        tb.add_row(*(r[c] for c in shown))
     console.print(tb)
     for b, record in gone.items():      # said in full under the table, where a narrow column cannot cut it
-        console.print(f"[{theme.RD}]{b}[/] was {prepare.abandoned_text(b, record)}", highlight=False)
+        console.print(f"[{theme.RD}]{b}[/] was {prepare.abandoned_text(b, record)}.", highlight=False)
 
 
 STATE = {"missing": (theme.RD, "not in the index: the tool's template is used"), "same": (theme.TE, "same as the template"),
@@ -120,7 +147,7 @@ def skills(ws: Path, simulated: bool = False) -> None:
 
 
 VIEWS = {"tasks": tasks, "status": status, "credits": credits, "benchmarks": benchmarks, "skills": skills}
-SIMULATED = ("status", "credits")     # these can show the records of simulated runs
+SIMULATED = ("status", "credits", "benchmarks", "tasks")     # these can show the records of simulated runs
 
 
 def capture(name: str, ws: Path, simulated: bool, width: int) -> Text:

@@ -11,7 +11,9 @@ from pathlib import Path
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 LOCAL = ".hm"                      # this machine's own files inside the clone of an index. Git ignores the folder
-CONFIG_NAME = "hm.toml"            # in .hm: parallelism and claims. The user's to change
+CONFIG_NAME = "hm.toml"            # at the top of the index folder, git-ignored: how this machine runs. The user's to change
+CONFIG_EXAMPLE = "hm.example.toml"     # committed beside it, what every clone's hm.toml is made from
+SECRETS_EXAMPLE = "secrets.env.example"   # committed: the keys an index needs, what every clone's secrets.env is made from
 PROTOCOL_NAME = "protocol.toml"    # the protocol: everything that can change a result. Locked
 ABOUT_NAME = "about.toml"          # what the index is: its name and description. Not locked
 PROTOCOL_SECTIONS = ("tiers", "escalation", "triage", "adapt", "select", "difficulty", "fix")
@@ -193,10 +195,11 @@ def simulated(workspace: Path) -> Path:
 
 def load(workspace: Path) -> Config:
     """The protocol and the index's description from the index repository, and this machine's
-    settings from .hm/hm.toml. A protocol setting written in hm.toml is ignored."""
+    settings from hm.toml beside them (before, .hm/hm.toml). A protocol setting written in hm.toml is ignored."""
     from .. import skills
     read = lambda p: tomllib.loads(p.read_text()) if p.exists() else {}  # noqa: E731
-    mine, shared = read(local(workspace) / CONFIG_NAME), read(workspace / PROTOCOL_NAME)
+    mine = read(workspace / CONFIG_NAME) or read(local(workspace) / CONFIG_NAME)
+    shared = read(workspace / PROTOCOL_NAME)
     skills.use(workspace / "skills")        # an index may word a skill its own way
     old = shared.get("difficulty", {}).pop("trials_per_config", None) or shared.pop("eval", {}).get("trials")   # where it used to be
     if old is not None:

@@ -18,7 +18,7 @@ from . import benchmarks
 from .store import REPORTS, SHARDS
 
 DEFINITION = ("about.toml", "protocol.toml", "contributors.toml", "skills", "adapters",
-              ".gitignore", "README.md")
+              ".gitignore", "README.md", "hm.example.toml", "secrets.env.example")
 
 
 class SyncError(RuntimeError):

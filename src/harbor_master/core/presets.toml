@@ -7,7 +7,7 @@
 #
 # Any field written beside `use` replaces the preset's. A configuration that is not here is written out in
 # full. The agent is Claude Code (Claude models) or Codex (OpenAI models): each takes an API key or a
-# subscription, whichever is set (see secrets.env.example).
+# subscription, whichever is set (see an index's secrets.env.example).
 #   version   the agent's own version, where it was pinned. Empty means the newest at run time,
 #             so an index that wants repeatable results sets it beside `use`
 #   env       settings passed to the agent. Never a key

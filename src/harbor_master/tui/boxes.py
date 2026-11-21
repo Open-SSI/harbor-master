@@ -47,7 +47,10 @@ def candidates(s) -> list[tuple[str, dict, str]]:
         about = ((str(e["task_count"]) if e.get("task_count") else "to adapt") if e else      # to adapt: not in Harbor format yet
                  str(len(tasks_mod.find_tasks(__import__('pathlib').Path(registry[name]['path'])))))
         out.append((name, told.get(name, {"status": "listed"}), about))
-    return sorted(out, key=lambda x: (x[1]["status"] != "listed", x[0] != "demo-bench", x[0]))
+    return sorted(out, key=lambda x: (x[1]["status"] not in OPEN, x[1]["status"] != "listed", x[0] != "demo-bench", x[0]))
+
+
+OPEN = ("listed", "dropped")        # what a run may take: nobody holds it, and it is not finished. A dropped one may be tried again
 
 
 def _until(when: str) -> str:
@@ -63,21 +66,19 @@ def taken_words(st: dict, why: str = "") -> str:
     return {"listed": "listed · nobody has started it",
             "curating": f"curating · @{st.get('by', '?')} until {_until(st.get('until', '?'))}",
             "curated": "curated · nothing is left to curate in it",
-            "dropped": "dropped" + (f" · {why}" if why else " · it cannot be added again")}[st["status"]]
+            "dropped": "dropped" + (f" · {why}" if why else "") + " · it may be curated again"}[st["status"]]
 
 
 def refusal(st: dict, why: str = "") -> str:
     """What follows "Refused: that is NAME" for a link to a benchmark that is on the list and cannot be taken."""
     return {"curating": f", on the list already. @{st.get('by', '?')} is curating it until {_until(st.get('until', '?'))}.",
-            "curated": ", on the list already, and curated: nothing is left to curate in it.",
-            "dropped": f", which was dropped{': ' + why if why else ''}. It cannot be added again."}[st["status"]]
+            "curated": ", on the list already, and curated: nothing is left to curate in it."}[st["status"]]
 
 
 def cannot_take(st: dict, why: str = "") -> str:
     """What follows "Refused: NAME" for a name typed of a benchmark that is not listed."""
     return {"curating": f" cannot be taken: @{st.get('by', '?')} is curating it until {_until(st.get('until', '?'))}.",
-            "curated": " cannot be taken: it is curated, and nothing is left to curate in it.",
-            "dropped": f" cannot be taken: it was dropped{' (' + why + ')' if why else ''}."}[st["status"]]
+            "curated": " cannot be taken: it is curated, and nothing is left to curate in it."}[st["status"]]
 
 
 class PickScreen(ModalScreen[str]):
@@ -111,15 +112,15 @@ class PickScreen(ModalScreen[str]):
         self.searching = ""         # the link the worker agent is searching for, while it does
 
     def compose(self) -> ComposeResult:
-        free = [n for n, st, _ in self.found if st["status"] == "listed"]
+        free = [n for n, st, _ in self.found if st["status"] in OPEN]
         text = t(("Which benchmark?", "bold"), "\n",
                  (self.note + "\n" if self.note else "", TE),
-                 ("Type the name of a listed one to curate it, or paste a link to add a new one: its repository, paper or page." if free else
-                  "None is listed: each is being curated, curated or dropped. Paste a link to add a new one: its repository, paper or page.", SE))
+                 ("Type the name of a listed or dropped one to curate it, or paste a link to add a new one: its repository, paper or page." if free else
+                  "None is free: each is being curated, or curated. Paste a link to add a new one: its repository, paper or page.", SE))
         box = Vertical(Static(text, id="text"),
                        *([Vertical(Static(id="head"), VerticalScroll(Static(id="rows"), id="scroll", can_focus=False), id="list")]
                          if self.found else []),
-                       Input(placeholder="a listed benchmark's name, or a link to a new one", id="line"),
+                       Input(placeholder="a benchmark's name, or a link to a new one", id="line"),
                        Static(id="said"))
         box.border_title = "curate a benchmark"
         yield box
@@ -157,15 +158,15 @@ class PickScreen(ModalScreen[str]):
             return tb
         tb = table(False)
         for name, st, about in rows:
-            free = st["status"] == "listed"
+            free = st["status"] in OPEN
             color = {"listed": TE, "curated": TE, "dropped": RD}.get(st["status"], AM)
             tb.add_row(t(("●" if free else "·", TE if free else MU)), t((name, f"bold {FG}" if free else MU)),
                        t((taken_words(st, self._why(name) if st["status"] == "dropped" else ""), color)), t((about, MU)))
-        listed = sum(1 for _, st, _ in self.found if st["status"] == "listed")
+        listed = sum(1 for _, st, _ in self.found if st["status"] in OPEN)
         box = self.query_one("#list", Vertical)
         self.query_one("#head", Static).update(table(True))
         box.border_title = (f"{len(rows)} of {len(self.found)} match" if rows is not self.found else
-                            f"{len(self.found)} on the list · {listed} listed")
+                            f"{len(self.found)} on the list · {listed} free to curate")
         self.query_one("#rows", Static).update(tb if rows else Text("None on the list is called that. A new one is added by its "
                                                                      "repository link.", style=MU))
 
@@ -180,7 +181,7 @@ class PickScreen(ModalScreen[str]):
         """Tab: the name of the first listed benchmark that matches what is typed, its start first."""
         line = self.query_one("#line", Input)
         typed = line.value.strip().lower()
-        free = [n for n, st, _ in self.found if st["status"] == "listed"]
+        free = [n for n, st, _ in self.found if st["status"] in OPEN]
         best = next((n for n in free if n.lower().startswith(typed)), None) or next((n for n in free if typed in n.lower()), None)
         if best and "/" not in typed:
             line.value, line.cursor_position = best, len(best)
@@ -196,7 +197,7 @@ class PickScreen(ModalScreen[str]):
         typed = event.value.strip()
         said = self.query_one("#said", Static)
         if not typed:
-            said.update("Type the name of a listed benchmark, or paste a repository link.")
+            said.update("Type the name of a listed or dropped benchmark, or paste a link to a new one.")
             return
         if "/" in typed:                    # a link: a new benchmark, unless it is one on the list already
             name = adding.on_the_list(self.s.ws, typed, made_up=self.s.simulate)
@@ -204,7 +205,7 @@ class PickScreen(ModalScreen[str]):
                 self._search(typed)
                 return
             st = self._status(name)
-            if st["status"] == "listed":
+            if st["status"] in OPEN:
                 line = self.query_one("#line", Input)
                 self.filled = name
                 line.value, line.cursor_position = name, len(name)
@@ -219,7 +220,7 @@ class PickScreen(ModalScreen[str]):
                           ("To add it, paste a link to it: its repository, its paper or its page.", AM)))
             return
         st = self._status(name)
-        if st["status"] == "listed":
+        if st["status"] in OPEN:
             self.dismiss(f"pick:{name}")
             return
         said.update(t((f"Refused: {name}", f"bold {RD}"), (cannot_take(st, self._why(name)), RD)))

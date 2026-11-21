@@ -52,6 +52,9 @@ def need_workspace(workspace: Optional[Path], say: bool = False) -> Path:
             fail("This folder is not inside an index. cd into an index's folder first. To get one: hm clone INDEX.")
     ws = ws.resolve()
     check_owner(ws)
+    set_up_local(ws)            # this machine's hm.toml and secrets.env, beside the index's files
+    from ..core import keys
+    keys.use(ws)                # its keys are this index's
     from .sharing import catch_up
     catch_up(ws)                # in step with the index's repository: there is no command for it
     if say:
@@ -61,15 +64,30 @@ def need_workspace(workspace: Optional[Path], say: bool = False) -> Path:
 
 
 def set_up_local(ws: Path) -> None:
-    """This machine's own folder in a clone: its settings, and a note to git never to share it."""
+    """This machine's own files in a clone, none of them shared: .hm/ for what runs leave, hm.toml for how it runs, and
+    secrets.env for its keys, readable only by you. The last two are made from the examples the index commits (or, in an
+    index that has none, from the tool's own), and a clone made before has its .hm/hm.toml moved up."""
+    from ..core import keys
     local = config_mod.local(ws)
     local.mkdir(exist_ok=True)
-    if not (local / config_mod.CONFIG_NAME).exists():
-        (local / config_mod.CONFIG_NAME).write_text(templates.read("hm.toml"))
-    exclude = ws / ".git" / "info" / "exclude"
-    if exclude.parent.exists() and f"{config_mod.LOCAL}/" not in (exclude.read_text() if exclude.exists() else ""):
-        with exclude.open("a") as f:
-            f.write(f"{config_mod.LOCAL}/\nsecrets.env\n")
+    exclude = ws / ".git" / "info" / "exclude"            # git never shares them, whatever the index's .gitignore says
+    if exclude.parent.exists():
+        had = exclude.read_text() if exclude.exists() else ""
+        missing = [n for n in (f"{config_mod.LOCAL}/", keys.SECRETS, config_mod.CONFIG_NAME) if n not in had.split()]
+        if missing:
+            with exclude.open("a") as f:
+                f.write("".join(f"{n}\n" for n in missing))
+    settings, old = ws / config_mod.CONFIG_NAME, local / config_mod.CONFIG_NAME
+    if old.exists() and not settings.exists():
+        old.rename(settings)
+    example = lambda name, template: (ws / name).read_text() if (ws / name).is_file() else templates.read(template)  # noqa: E731
+    if not settings.exists():
+        settings.write_text(example(config_mod.CONFIG_EXAMPLE, "hm.toml"))
+    secrets = ws / keys.SECRETS
+    if not secrets.exists():
+        keys.ensure_ignored(secrets)
+        secrets.touch(mode=0o600)
+        secrets.write_text(example(config_mod.SECRETS_EXAMPLE, "secrets.env.example"))
 
 
 def check_owner(ws: Path) -> None:

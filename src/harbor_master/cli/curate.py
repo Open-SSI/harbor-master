@@ -147,8 +147,6 @@ def benchmarks_remove(name: str, reason: str = typer.Option("", help="Why it is 
     entry = tasks_mod.supported.find(ws, name)
     if entry is None:
         fail(f"{name} is not on this index's list. See: hm benchmarks")
-    if entry["id"] in ledger_mod.abandoned(ledger_mod.Ledger(ws).events):
-        fail(f"{entry['id']} was dropped because no model could adapt it. It stays on the list as dropped, so that nobody adds it again.")
     if entry.get("added_by") != ident.github and not is_owner(ws, ident):
         fail(f"{entry['id']} was added by @{entry.get('added_by', '?')}. Only they, or the owner, can take it off.")
     sync = ledger_mod.Sync(ws, ident.name, ident.github)
@@ -223,18 +221,16 @@ def curate(benchmarks: list[str] = typer.Argument(None, help="Benchmarks to run.
         if info is None:
             fail(why)
         resolved[b] = info
-    gone = ledger_mod.abandoned(ledger_mod.Ledger(ws).events)
-    for b in benchmarks or []:          # asked for by name: refused outright. Otherwise the run leaves it out and says so
-        if b in gone:
-            from ..engine import prepare
-            fail(f"Refused: {b} was {prepare.abandoned_text(b, gone[b])}")
     if not resolved and not ask_first:
         fail("Nothing to run: this index lists no benchmark yet. Add one with hm benchmarks add URL, or try made-up tasks with hm curate --demo")
     check_index(cfg, ws)
     if not simulate:
         from .common import is_contributor
         if not is_contributor(ws, ident):
-            fail(f"@{ident.github} is not on this index's contributor list, so cannot curate in it. See: hm contributors")
+            console.print(f"[{theme.RD}]@{ident.github} is not on this index's contributor list, so cannot curate in it.[/] "
+                          "Send its owner this line. They paste it in a shell, inside the index's folder:", highlight=False)
+            console.print(ident.line(), markup=False, highlight=False, soft_wrap=True)
+            raise typer.Exit(1)
     if not simulate and not foreground:        # the keys first: nothing can be spent without them
         from .common import curate_keys, need_keys
         need_keys(lambda: curate_keys(cfg), "A real curation")

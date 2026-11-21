@@ -15,7 +15,7 @@ from ..core import config as config_mod
 from ..core import identity as identity_mod
 from ..tui import theme
 
-OWNED = ("about.toml", "README.md", ".gitignore", "protocol.toml", "skills")
+OWNED = ("about.toml", "README.md", ".gitignore", "protocol.toml", "skills", "hm.example.toml", "secrets.env.example")
 
 
 def catch_up(ws: Path) -> None:

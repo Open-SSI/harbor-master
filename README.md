@@ -35,7 +35,7 @@ hm clone INDEX && cd INDEX
 hm curate
 ```
 
-Send the owner the line `hm init` printed, so they can add you. The first real `hm curate` makes `secrets.env` here (git ignores it) and lists the keys it needs: a Claude and an OpenAI key or subscription (one is enough), and your own `HF_TOKEN`. Before anything is spent, it tries each key, the task store, a push to the index's repository, and Docker.
+Send the owner the line `hm init` printed, so they can add you. Your clone has its own `secrets.env` and `hm.toml` at its top, made from the examples the index commits; git ignores both, and you edit them with any editor. The first real `hm curate` lists the keys it still needs: a Claude and an OpenAI key or subscription (one is enough), and your own `HF_TOKEN`. Before anything is spent, it tries each key, the task store, a push to the index's repository, and Docker.
 
 **The curate screen.** Type a listed benchmark's name, or paste any link to a new one: an agent finds its repository and release, and you check the draft once. Cheap checks on the whole benchmark follow (recent, tasks for agents, graded by a program, public). Then the benchmark goes through its stages, and each work cell takes one chosen task through its own:
 
@@ -62,10 +62,10 @@ Keys: `1`–`8` a work cell, `enter` its task, `pgup`/`pgdn` the log, `ctrl+l` l
 
 ## Start your own index
 
-Create an empty GitHub repository, and put a Hugging Face token with write access in `secrets.env` as `HF_TOKEN`:
+Create an empty GitHub repository, and have a Hugging Face token with write access:
 
 ```bash
-hm new my-index --tasks my-lab/my-index-tasks --repo my-lab/my-index
+HF_TOKEN=hf_... hm new my-index --tasks my-lab/my-index-tasks --repo my-lab/my-index
 cd my-index
 ```
 
@@ -94,6 +94,8 @@ A fast **decision** model takes every gate, a **worker** model builds, audits an
 5. **Worker**: a task the worker model solves twice is too easy. An audit reads its failures; a broken task is repaired and checked again.
 6. **Difficulty**: two frontier agents try three times each; a task is kept if at most 3 of the 6 pass.
 7. **Report**: you accept or reject each kept task. A dropped task gets no report.
+
+A benchmark rejected before curating, or of which no task is accepted, is dropped after you confirm. A dropped benchmark stays on the list, and anyone may curate it again.
 
 ## An index
 

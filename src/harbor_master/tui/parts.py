@@ -11,12 +11,19 @@ from textual.widgets import Button, Input, Static
 from .theme import AM, BG, BORDER, FG, MU, PU, TE
 
 # Scrollbars, across and down, on everything that scrolls: one cell thin, a quiet thumb on the screen's own ground.
-# The toolkit's own are wide and bright blue. A line to type in gets the same quiet frame on every screen and in every box.
+# The toolkit's own are wide and bright blue. A line to type in gets the same quiet frame on every screen and in every box,
+# and a button is a frame and its words: green when it has the keyboard or the pointer, never a filled block.
 SCROLLBARS = f"""
     * {{ scrollbar-size: 1 1; scrollbar-color: {BORDER}; scrollbar-color-hover: {MU}; scrollbar-color-active: {PU};
          scrollbar-background: {BG}; scrollbar-background-hover: {BG}; scrollbar-background-active: {BG};
          scrollbar-corner-color: {BG}; }}
     Input, Input:focus {{ border: round {PU}; background: {BG}; background-tint: {BG} 0%; }}
+    Button, Button.-style-default, Button:hover, Button.-style-default:hover, Button:focus, Button.-style-default:focus,
+    Button.-active, Button.-style-default.-active {{ background: {BG}; background-tint: {BG} 0%; tint: {BG} 0%; text-style: bold; }}
+    Button, Button.-style-default {{ border: round {BORDER}; color: {FG}; }}
+    Button:hover, Button.-style-default:hover, Button:focus, Button.-style-default:focus,
+    Button.-active, Button.-style-default.-active {{ border: round {TE}; color: {TE}; }}
+    Button:disabled, Button.-style-default:disabled {{ border: round {BORDER}; color: {MU}; text-style: none; }}
 """
 
 
@@ -54,7 +61,7 @@ class ChoiceBox(ModalScreen[str]):
 
     def on_mount(self) -> None:
         # With a line to type in, the keyboard starts on it: typing goes there, and enter sends it with its option.
-        # It never starts on a button that cannot be undone, such as dropping a benchmark for good.
+        # It never starts on a button that drops something.
         (self.query_one("#line", Input) if self._line else self.query_one("#pick-0", Button)).focus()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:

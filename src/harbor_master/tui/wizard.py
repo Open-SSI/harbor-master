@@ -58,7 +58,7 @@ class WizardApp(App[Answers | None]):
     #row {{ height: auto; margin: 1 0 0 0; align-horizontal: right; }}
     #row Button {{ width: auto; min-width: 12; height: 3; margin: 0 0 0 1; border: round {BORDER}; background: {BG}; color: {FG}; }}
     #row #go {{ border: round {TE}; color: {TE}; text-style: bold; }}
-    #row Button:focus {{ background-tint: {BG} 0%; text-style: bold underline; }}
+    #row Button:focus, #row Button:hover {{ border: round {TE}; color: {TE}; background-tint: {BG} 0%; text-style: bold; }}
     """
 
     def __init__(self, name: str, steps: list[Step], answers: Answers | None = None):

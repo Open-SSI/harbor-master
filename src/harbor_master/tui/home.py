@@ -103,8 +103,7 @@ class IndexApp(App[None]):
     #views .group {{ width: 10; height: 1; color: {MU}; }}
     #views Button {{ height: 1; width: auto; min-width: 4; border: none; padding: 0 1; margin: 0 1 0 0; background: {BG}; color: {FG};
                      text-style: underline; }}
-    #views Button:focus {{ background: {TE}; color: {BG}; text-style: bold; }}
-    #views Button:hover {{ background: {BORDER}; color: {FG}; }}
+    #views Button:focus, #views Button:hover {{ background: {BG}; color: {TE}; text-style: bold underline; }}
     #keys {{ height: 1; padding: 0 2; }}
     """
 
@@ -248,7 +247,6 @@ class ViewScreen(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         box = VerticalScroll(Static(self._body))
         box.border_title = self._title
-        box.border_subtitle = "up and down scroll     esc closes"
         yield box
 
     def action_scroll(self, way: int, page: bool) -> None:

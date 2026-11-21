@@ -69,16 +69,8 @@ def may_add(ws: Path, ident) -> None:
 
 
 def clash(ws: Path, name: str, github: str) -> None:
-    """Refuse a benchmark that is on the list already, by its ID or by its repository, and one that was dropped
-    because no model could adapt it: that one can never be added again."""
-    events = ledger_mod.Ledger(ws).events
-    gone = ledger_mod.abandoned(events)
-    added = {e["entry"]["id"]: e["entry"].get("github", "") for e in events
-             if e["type"] == "benchmark" and e.get("value") == "add" and isinstance(e.get("entry"), dict)}
-    dropped = next((b for b in gone if b == name or _same(added.get(b, ""), github)), None)
-    if dropped:
-        from ..engine import prepare
-        raise AddError(f"Refused: {dropped} was {prepare.abandoned_text(dropped, gone[dropped])}.")
+    """Refuse a benchmark that is on the list already, by its repository, whatever it stands at: a dropped one is curated
+    again by its name, not added again."""
     found = next((e for e in supported.supported(ws) if _same(e["github"], github)), None)
     if found:
         raise AddError(f"That repository is on this index's list already, as {found['id']}, added by @{found.get('added_by', '?')} "

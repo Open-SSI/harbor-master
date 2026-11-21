@@ -55,6 +55,9 @@ def test_anyone_who_can_curate_adds_a_benchmark_with_no_step_by_the_owner(two, t
         subprocess.run(["git", *args], cwd=repo, check=True)
     bob = act_as("bob")
     call(clone, str(remote), bob_ws)
+    shared = subprocess.run(["git", "ls-files"], cwd=bob_ws, capture_output=True, text=True).stdout.split()
+    assert {"hm.example.toml", "secrets.env.example"} <= set(shared) and not {"hm.toml", "secrets.env"} & set(shared)
+    assert (bob_ws / "hm.toml").is_file() and (bob_ws / "secrets.env").stat().st_mode & 0o077 == 0     # the clone's own, private
     assert hm("benchmarks", "add", repo, "--no-agent", "-w", bob_ws).startswith("1 @bob is not on this index's contributor list")
     act_as("alice")
     assert hm("contributors", "add", "bob", bob.public_key, "-w", alice_ws).startswith("0 ")

@@ -97,7 +97,7 @@ def store_problem(tasks: str) -> str:
         return "" if os.access(existing, os.W_OK) else f"The task store {folder} cannot be written to here."
     if not keys.get("HF_TOKEN"):
         return (f"The task store is the Hugging Face dataset {where}, and making it needs your own HF_TOKEN, with write access. "
-                f"Add it to {keys.secrets_path()}.")
+                "Give it for this command: HF_TOKEN=hf_... hm new ...  Once the index is made, it goes in its secrets.env.")
     try:
         there = store.HuggingFace(where)
         return there.writable() if there.exists() else there.creatable()
@@ -164,6 +164,8 @@ def index_new(name: str, directory: Path | None = None, title: str = "", descrip
     (ws / config_mod.ABOUT_NAME).write_text(about)
     (ws / "README.md").write_text(fill(templates.read("index-readme.md")))
     (ws / ".gitignore").write_text(templates.read("gitignore"))
+    (ws / config_mod.CONFIG_EXAMPLE).write_text(templates.read("hm.toml"))             # what each clone's hm.toml and
+    (ws / config_mod.SECRETS_EXAMPLE).write_text(templates.read("secrets.env.example"))   # secrets.env are made from
     skills.adopt(ws / "skills", skills.names())         # what agents are told is the index's own, from the first commit
     (ws / ledger_mod.CONTRIBUTORS).write_text(templates.read("contributors.toml") + tomli_w.dumps({"contributor": [{
         "name": ident.name, "affiliation": ident.affiliation, "email": ident.email, "github": ident.github,
@@ -473,8 +475,10 @@ def contributors(ctx: typer.Context, workspace: Optional[Path] = Workspace):
 
 
 def keys_file() -> Path:
-    """The keys file, made from the example the first time: in the repository folder, readable only by you, ignored by git."""
+    """The keys file, made from the example the first time: in the index folder, readable only by you, ignored by git."""
     path = keys.secrets_path()
+    if path is None:
+        fail("Keys are kept in an index's secrets.env: cd into the index's folder first.")
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         keys.ensure_ignored(path)

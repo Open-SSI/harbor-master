@@ -1,9 +1,8 @@
-# Your settings for this workspace: how this machine runs.
-# Change these freely, at any time. They do not change a result, so they are not part
-# of the protocol, which is in protocol.toml. Git ignores this folder.
+# How this machine runs this index. Each person's own copy is hm.toml, beside this file: hm clone
+# makes it from hm.example.toml, and git ignores it. Change hm.toml freely, at any time. Nothing
+# in it changes a result, so it is not part of the protocol, which is in protocol.toml.
 #
-# No key or token belongs in this file. Keys are read from the environment, or from
-# secrets.env in the Harbor-Master repository folder, which git ignores.
+# No key or token belongs here. Keys go in secrets.env, beside this file, which git ignores too.
 
 [run]
 cells = 4                       # tasks in flight, one agent session each
