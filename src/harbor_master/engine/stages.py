@@ -148,29 +148,29 @@ async def trial(s: Session, task: Task, purpose: str, agent: str, model: str, in
 
 
 async def stage_verify(s: Session, cell: CellState, task: Task, rounds: int):
-    """The reference solution passes, twice. A no-op fails. The verifier is fast enough. A task with no reference
-    solution has one written first, as a repair."""
-    t0 = enter(cell, STAGE_NO["verify"], "oracle and no-op runs")
+    """In one batch, side by side: the reference solution must pass, a no-op must fail, and so must trivial answers
+    that did no work (output files left empty, filled with a placeholder, or copied from one already there). The
+    verifier must be fast enough. Each runs once: for a heavy task, the reference solution alone takes as long as the
+    work it does. A task with no reference solution has one written first, as a repair."""
+    t0 = enter(cell, STAGE_NO["verify"], "reference solution, no-op and trivial answers, side by side")
     if not task.has_solution:
         s.board(task)["why"] = "it has no reference solution"
         if not s.cfg.triage.require_reference_solution:
             return "drop", "no_reference_solution"
         return "fix", "solution"
-    oracle, noop = await asyncio.gather(
+    known = s.ledger.decision(task.digest, "verify", "trivial", s.protocol)
+    tries = [] if known is not None else trivial.submissions(task.path, task.instruction)
+    oracle, noop, *accepted = await asyncio.gather(
         trial(s, task, "oracle", "oracle", "", 0, lambda: s.backend.run_oracle(task)),
-        trial(s, task, "noop", "nop", "", 0, lambda: s.backend.run_noop(task)))
-    again = None
-    if oracle["passed"] and not s.simulate:      # a simulation has no second answer to give
-        cell.detail = "oracle again, for determinism"
-        again = await trial(s, task, "oracle", "oracle", "", 1, lambda: s.backend.run_oracle(task))
-    slowest = max(float(e.get("verifier_seconds") or 0) for e in (oracle, noop, again) if e)
+        trial(s, task, "noop", "nop", "", 0, lambda: s.backend.run_noop(task)),
+        *(s.container(s.backend.run_mutant(task, m, "verify")) for m in tries))
+    slowest = max(float(e.get("verifier_seconds") or 0) for e in (oracle, noop))
     limit = s.cfg.triage.max_verifier_seconds
     s.stage_done(task, STAGE_NO["verify"], t0, oracle_passed=oracle["passed"], noop_passed=noop["passed"],
-                 oracle_again=again["passed"] if again else None, verifier_seconds=slowest,
-                 errors=[e["error"] for e in (oracle, noop, again) if e and e.get("error")])
+                 verifier_seconds=slowest, errors=[e["error"] for e in (oracle, noop) if e.get("error")])
     board = s.board(task)
-    if any(e and e.get("error") for e in (oracle, noop, again)):
-        error = next(e["error"] for e in (oracle, noop, again) if e and e.get("error"))
+    if any(e.get("error") for e in (oracle, noop)):
+        error = next(e["error"] for e in (oracle, noop) if e.get("error"))
         from .prepare import SLOW, limits_of, slow_build, unpullable
         if SLOW.search(error):          # over the protocol's limit on building or verifying: dropped, not repaired
             reason = "verifier_too_slow" if "Verifier" in error else "environment_too_slow"
@@ -186,36 +186,24 @@ async def stage_verify(s: Session, cell: CellState, task: Task, rounds: int):
     if noop["passed"]:
         board["why"] = "a no-op run passes"
         return "fix", "oracle"
-    if again is not None and not again["passed"]:
-        board["why"] = "the reference solution passed once and failed once: the verifier is not deterministic"
-        return "fix", "oracle"
     if slowest > limit:
         board["why"] = f"the verifier took {slowest:.0f}s, over the {limit}s limit"
         s.record(task.benchmark, "decision", task, stage="verify", gate="verifier_time", tier="code",
                  value=round(slowest, 1), outcome="drop", reason="verifier_too_slow")
         return "drop", "verifier_too_slow"
-    return await trivial_submissions(s, cell, task)
-
-
-async def trivial_submissions(s: Session, cell: CellState, task: Task):
-    """The verifier rejects a submission that did no work: the task's output files left empty, filled
-    with a placeholder, or copied from a file that was already there. Written by code, no model."""
-    prior = s.ledger.decision(task.digest, "verify", "trivial", s.protocol)
-    if prior is not None:
-        return ("ok", "") if prior["outcome"] == "pass" else ("fix", "verifier")
-    tries = trivial.submissions(task.path, task.instruction)
-    if not tries:                   # the task names no output file that its tests also name
-        return "ok", ""
-    t0 = enter(cell, STAGE_NO["verify"], "trivial submissions")
-    accepted = await asyncio.gather(*(s.container(s.backend.run_mutant(task, m, "verify")) for m in tries))
-    passed = [m for m, a in zip(tries, accepted) if a]
-    s.record(task.benchmark, "decision", task, stage="verify", gate="trivial", tier="code", value=f"{len(tries)} tried",
-             outcome="fix" if passed else "pass", accepted=[m["id"] for m in passed])
-    s.stage_done(task, STAGE_NO["verify"], t0, trivial_tried=len(tries), trivial_accepted=[m["id"] for m in passed])
-    if not passed:
-        return "ok", ""
-    s.board(task)["why"] = f"the verifier accepts a submission that did no work: one that {passed[0]['what']}"
-    return "fix", "verifier"
+    if known is not None:
+        passed_ok = known["outcome"] == "pass"
+    elif tries:
+        passed = [m for m, a in zip(tries, accepted) if a]
+        s.record(task.benchmark, "decision", task, stage="verify", gate="trivial", tier="code", value=f"{len(tries)} tried",
+                 outcome="fix" if passed else "pass", accepted=[m["id"] for m in passed])
+        s.stage_done(task, STAGE_NO["verify"], t0, trivial_tried=len(tries), trivial_accepted=[m["id"] for m in passed])
+        passed_ok = not passed
+        if passed:
+            board["why"] = f"the verifier accepts a submission that did no work: one that {passed[0]['what']}"
+    else:
+        passed_ok = True                # the task names no output file that its tests also name
+    return ("ok", "") if passed_ok else ("fix", "verifier")
 
 
 async def stage_probe(s: Session, cell: CellState, task: Task, rounds: int):
