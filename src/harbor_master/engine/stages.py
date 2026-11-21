@@ -229,8 +229,11 @@ async def coverage(s: Session, cell: CellState, task: Task):
     """An unstated check is the commonest reason a task that looks hard is only unclear. Finding it here
     costs one request. Finding it at the audit costs the frontier trials that came before."""
     prior = s.ledger.decision(task.digest, "probe", "coverage", s.protocol)
-    if prior is not None:
-        return ("ok", "") if prior["outcome"] == "pass" else ("fix", "design")
+    if prior is not None and prior["outcome"] == "pass":
+        return "ok", ""
+    if prior is not None and prior["outcome"] == "fix" and prior.get("tier") != "decision" and prior.get("rationale"):
+        s.board(task)["why"] = prior["rationale"]           # confirmed before, with what is missing: the repair is told it
+        return "fix", "design"
     t0 = enter(cell, STAGE_NO["probe"], "instruction against the tests")
     d = await s.backend.covers(task)
     tiers = [d.tier]
