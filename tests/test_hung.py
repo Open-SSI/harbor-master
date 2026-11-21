@@ -61,3 +61,25 @@ def test_an_agents_program_is_downloaded_once_and_mounted_into_each_container(tm
     assert (tmp_path / "cache/claude-code/1.2.3/claude").stat().st_mode & 0o111        # it can be run
     monkeypatch.setattr(agents, "_fetch", lambda agent, version: 1 / 0)                 # no network: Harbor installs it
     assert agents.mounts("codex", "9.9.9") == [] and agents.mounts("oracle", "") == []
+
+
+async def test_a_long_trial_says_what_it_is_doing_every_few_minutes(tmp_path, monkeypatch):
+    fake = tmp_path / "harbor"                  # a harbor that runs for a while, and finishes with no trial
+    fake.write_text("#!/bin/sh\nsleep 2.5\n")
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setattr(harbor, "binary", lambda: str(fake))
+    monkeypatch.setattr(harbor, "inside", lambda job, lines=60: (0, "=== /logs/agent/oracle.txt 9\nTriangulating: 40%\rTriangulating: 92%"))
+    said = []
+
+    async def judge(log, quiet):
+        return "wait"
+    watch = harbor.Watch(every=0.2, quiet=60, judge=judge, say=lambda doing, ran: said.append(doing), say_every=0.5)
+    await harbor.run(tmp_path / "task", tmp_path / "jobs", "oracle", watch=watch)
+    assert len(said) >= 2 and said[0] == "Triangulating: 92%"          # a progress bar as it stands now
+
+
+def test_an_agents_latest_step_is_read_from_its_event_stream():
+    stream = "\n".join(['{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"python fit.py --all"}}]}}',
+                        '{"type":"system","subtype":"thinking_tokens","estimated_tokens":1400}'])
+    assert harbor.now_doing(stream) == "Bash: python fit.py --all"
+    assert harbor.now_doing('{"type":"system","subtype":"init"}') == "thinking"

@@ -393,7 +393,8 @@ class RealBackend(Backend):
         caps = {"max_build_seconds": self.cfg.triage.max_build_seconds, "max_verifier_seconds": self.cfg.triage.max_verifier_seconds}
         if task is not None:
             caps["watch"] = harbor.Watch(self.cfg.run.watch_minutes * 60, self.cfg.run.quiet_minutes * 60,
-                                         lambda log, quiet: self.stuck(task, what, log, quiet))
+                                         lambda log, quiet: self.stuck(task, what, log, quiet),
+                                         say=lambda doing, ran: self.on_progress and self.on_progress(task, what, doing, ran))
         return caps
 
     async def judge_stuck(self, what: str, log: str, quiet: float) -> Decision:

@@ -95,6 +95,72 @@ class Watch:
     every: float
     quiet: float
     judge: Callable[[str, float], Awaitable[str]]
+    say: Callable[[str, float], None] | None = None     # what the trial is doing, in a line, and how long it has run
+    say_every: float = 300.0
+
+
+def _container_of(job: Path) -> str:
+    """The running container of a job's trial: Harbor names each trial's Docker Compose project after the trial."""
+    import subprocess
+    try:
+        from harbor.environments.docker.docker import _sanitize_docker_compose_project_name as project
+    except ImportError:
+        project = str.lower
+    trials = [project(d.name) for d in job.iterdir() if d.is_dir()] if job.is_dir() else []
+    if not trials:
+        return ""
+    try:
+        listed = subprocess.run(["docker", "ps", "--format", '{{.ID}} {{.Label "com.docker.compose.project"}} {{.Label "com.docker.compose.service"}}'],
+                                capture_output=True, text=True, timeout=20).stdout.split("\n")
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    found = [p for p in (line.split() for line in listed) if len(p) >= 2 and p[1].startswith(tuple(trials))]
+    return next((p[0] for p in found if p[2:] == ["main"]), found[0][0] if found else "")
+
+
+def inside(job: Path, lines: int = 60) -> tuple[int, str]:
+    """What the solution or the agent has written so far inside the trial's container, which reaches this machine only
+    when the trial ends: its size in bytes, and its last lines. (0, "") when there is no container to read."""
+    import subprocess
+    cid = _container_of(job)
+    if not cid:
+        return 0, ""
+    script = ('for f in /logs/agent/*.txt /logs/agent/*.log; do [ -f "$f" ] || continue; '
+              f'echo "=== $f $(wc -c < "$f")"; tail -n {lines} "$f"; done')
+    try:
+        out = subprocess.run(["docker", "exec", cid, "sh", "-c", script], capture_output=True, text=True, timeout=20).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return 0, ""
+    size = sum(int(line.split()[-1]) for line in out.splitlines() if line.startswith("=== ") and line.split()[-1].isdigit())
+    return size, out
+
+
+ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+
+def now_doing(text: str) -> str:
+    """The trial's latest step, in one line: from an agent's event stream, its last tool call or message; from a
+    solution's output, its last line, a progress bar as it stands now."""
+    rows = [r for r in text.splitlines() if r.strip() and not r.startswith("=== ")]
+    for row in reversed(rows[-400:]):
+        if not row.lstrip().startswith("{"):
+            continue
+        try:
+            event = json.loads(row)
+        except ValueError:
+            continue
+        for item in reversed((event.get("message") or {}).get("content") or [] if event.get("type") == "assistant" else []):
+            if item.get("type") == "tool_use":
+                given = item.get("input") or {}
+                what = given.get("command") or given.get("file_path") or given.get("pattern") or given.get("description") or ""
+                return f"{item.get('name', 'tool')}: {' '.join(str(what).split())}"[:160]
+            if item.get("type") == "text" and item.get("text", "").strip():
+                return " ".join(item["text"].split())[:160]
+    plain = [r for r in rows if not r.lstrip().startswith("{")]
+    if not plain:
+        return "thinking" if rows else ""
+    last = ANSI.sub("", plain[-1]).split("\r")
+    return " ".join(next((p for p in reversed(last) if p.strip()), "").split())[:160]
 
 
 def _newest(job: Path) -> float:
@@ -205,24 +271,31 @@ async def _run_once(task_dir, jobs_dir, agent, model, agent_kwargs, with_keys, t
     reader = asyncio.create_task(pump())
     loop = asyncio.get_running_loop()
     deadline, moved, seen = loop.time() + timeout, loop.time(), None
+    started = said = loop.time()
     try:
         while True:
             left = deadline - loop.time()
             if left <= 0:
                 raise asyncio.TimeoutError
             try:
-                await asyncio.wait_for(asyncio.shield(proc.wait()), min(left, watch.every) if watch else left)
+                await asyncio.wait_for(asyncio.shield(proc.wait()), min(left, watch.every, 60) if watch else left)
                 break
             except asyncio.TimeoutError:
                 if watch is None or loop.time() >= deadline:
                     continue
-            now, state = loop.time(), (len(printed), _newest(job))
+            now = loop.time()
+            size, text = await asyncio.to_thread(inside, job)       # what it has written in its container so far
+            state = (len(printed), _newest(job), size)
+            if watch.say and now - said >= watch.say_every:
+                said = now
+                doing = now_doing(text)
+                watch.say(doing or "running, with nothing printed yet", now - started)
             if state != seen:
                 seen, moved = state, now
                 continue
             if now - moved < watch.quiet:
                 continue
-            verdict = await watch.judge(log_tail(job, bytes(printed)), now - moved)
+            verdict = await watch.judge((text[-6000:] + "\n\n" if text else "") + log_tail(job, bytes(printed)), now - moved)
             if verdict == "wait":           # it is working, only quietly: look again after another quiet spell
                 moved = loop.time()
                 continue

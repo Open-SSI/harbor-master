@@ -63,6 +63,8 @@ class Backend(ABC):
         self.cfg, self.usage = cfg, usage
         # Set by the session: a person is asked what to do with a hung trial, and answers "retry" or "drop".
         self.on_hung: Callable[[Task, str, Decision, float], Awaitable[str]] | None = None
+        # Set by the session: a long trial's latest step, every few minutes, for the log.
+        self.on_progress: Callable[[Task, str, str, float], None] | None = None
 
     async def stuck(self, task: Task, what: str, log: str, quiet: float) -> str:
         """A trial whose logs stopped moving: the worker agent reads them. "wait" when it judges the trial still working;

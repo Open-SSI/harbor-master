@@ -51,6 +51,8 @@ class Session:
         self.trial_cost = 0.0
         self.backend = make_backend(cfg, self._usage, simulate, speed, self.run_dir, assume_after)
         self.backend.on_hung = self.hung
+        self.backend.on_progress = lambda task, what, doing, ran: self.note_recent(
+            "running", task.task_id, f"{what}, {ran / 60:.0f} min in: {doing}")
         self.assumed: set[str] = getattr(self.backend, "assumed", set())    # stages whose results are assumed, not run
         self.ledger.accept_assumed = bool(self.assumed)     # a real run never reuses a made-up result
         self.sync = Sync(self.ledger_dir, ident.name, ident.github)
