@@ -31,8 +31,11 @@ from .core import config as config_mod
 
 ACTIVE = "run.active"           # in .hm: which run is going in this index
 DETACH = b"\x1b_hm-detach\x1b\\"        # written by the screen when the user leaves it: the relay closes every view
-# What a view sets up in the terminal it runs in, and puts back: the other screen, no cursor, the mouse, pasted text.
-ENTER = b"\x1b[?1049h\x1b[H\x1b[2J\x1b[?25l\x1b[?1000h\x1b[?1003h\x1b[?1015h\x1b[?1006h\x1b[?2004h"
+# What a view sets up in the terminal it runs in, and puts back: the other screen, no cursor, pasted text. Not the
+# mouse: the screen switches it on itself once it is drawn, and the relay repeats that to a view that comes later.
+# Switched on any earlier, every mouse movement before the screen starts would be echoed back as text.
+ENTER = b"\x1b[?1049h\x1b[H\x1b[2J\x1b[?25l\x1b[?2004h"
+MOUSE_ON, MOUSE_OFF = b"\x1b[?1000h\x1b[?1003h\x1b[?1015h\x1b[?1006h", b"\x1b[?1000l"
 # Everything the screen may have switched on in the terminal is switched off again on the way out. The screen
 # itself is still running behind the relay, so it never does this for a view that leaves. The keyboard
 # protocol matters most: left on, every key typed in the shell afterwards shows up as codes such as 4;;104u.
@@ -119,6 +122,8 @@ def relay(ws: Path, argv: list[str], command: str, simulate: bool, verb: str = "
     child, master = pty.fork()
     if child == 0:      # the run itself: the same command, told that it is the one behind the relay
         os.environ.update(HM_HOSTED="1", HM_CONTROL=control_path)
+        signal.signal(signal.SIGTSTP, signal.SIG_IGN)       # ctrl+z quits the run: it never pauses it, whatever the
+                                                            # terminal is doing at the moment it is pressed
         os.environ.setdefault("TERM", "xterm-256color")
         os.execv(sys.executable, [sys.executable, "-c", "from harbor_master.cli import app; app()", verb, *argv,
                                   "--foreground", "-w", str(ws)])
@@ -131,6 +136,7 @@ def relay(ws: Path, argv: list[str], command: str, simulate: bool, verb: str = "
     sel.register(master, selectors.EVENT_READ, "run")
     views: dict[socket.socket, bytearray] = {}
     tail, later = b"", None         # the end of the last output, in case the mark is split; and a size to set in a moment
+    mouse = False                   # whether the screen has switched the mouse on, for a view that opens later
 
     def drop(view: socket.socket) -> None:
         sel.unregister(view)
@@ -149,6 +155,9 @@ def relay(ws: Path, argv: list[str], command: str, simulate: bool, verb: str = "
                 if key.data == "server":
                     view, _ = server.accept()
                     views[view] = bytearray()
+                    if mouse:               # the screen is up: this view's terminal reports the mouse too
+                        with contextlib.suppress(OSError):
+                            view.sendall(MOUSE_ON)
                     sel.register(view, selectors.EVENT_READ, "view")
                 elif key.data == "run":
                     try:
@@ -158,6 +167,10 @@ def relay(ws: Path, argv: list[str], command: str, simulate: bool, verb: str = "
                     if not data:
                         raise EOFError
                     data, left = tail + data, False
+                    if b"\x1b[?1000h" in data or b"\x1b[?1003h" in data:
+                        mouse = True
+                    elif MOUSE_OFF in data:
+                        mouse = False
                     if DETACH in data:
                         data, left = data.replace(DETACH, b""), True
                     keep = next((n for n in range(min(len(DETACH) - 1, len(data)), 0, -1) if DETACH.startswith(data[-n:])), 0)

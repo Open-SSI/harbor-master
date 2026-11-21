@@ -241,8 +241,11 @@ class PickScreen(ModalScreen[str]):
 
         from .theme import spinner
         if self.searching:
+            from ..tasks import supported
+            step = getattr(self, "step", "")
+            got = supported.received["bytes"]
             what = ("a stand-in makes it up (simulated)" if self.s.simulate else
-                    getattr(self, "step", "") or "the worker agent searches the web for it")
+                    (step + (f" · {got / 1e6:,.0f} MB so far" if got else "")) if step else "the worker agent searches the web for it")
             self.query_one("#said", Static).update(t((spinner(time.time()) + " ", PU), (f"{what} ...", SE)))
 
     async def _found(self, link: str) -> None:
@@ -276,8 +279,10 @@ async def find_draft(s, link: str, say=lambda said: None) -> tuple[dict, list[st
         await asyncio.sleep(0.8)                # a stand-in for the agent's search
         return adding.made_up(s.ws, link), ["simulated: no web search was made"]
     found, _ = await adding.find(s.ws, s.ident, link)
-    say(f"reading {str(found.get('repository', 'its repository')).removeprefix('https://')} at its release: small files only, "
-        "the rest downloads once it is added")
+    from ..tasks import supported
+    supported.received["bytes"] = 0
+    say(f"reading {str(found.get('repository', 'its repository')).removeprefix('https://')} at its release, small files only "
+        "(the rest downloads once it is added)")
     entry = await asyncio.to_thread(adding.from_found, s.ws, s.ident, found)
     return entry, list(found.get("sources") or [])
 

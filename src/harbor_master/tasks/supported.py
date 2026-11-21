@@ -60,6 +60,68 @@ def _dataset(name: str, commit: str, repo: Path) -> bool:
         return False
 
 
+received = {"bytes": 0}     # how much the download going on has received, for the screen to say that it moves
+
+
+def _size(folder: Path) -> int:
+    total = 0
+    for root, _, files in os.walk(folder):
+        for name in files:
+            try:
+                total += os.lstat(os.path.join(root, name)).st_size
+            except OSError:
+                pass
+    return total
+
+
+def _dies_with_parent() -> None:
+    """In a child about to become git: on Linux, be stopped when hm is, however hm ends, so that a fetch in a process
+    group of its own is never left running."""
+    try:
+        import ctypes
+        import signal
+        ctypes.CDLL("libc.so.6", use_errno=True).prctl(1, signal.SIGKILL)       # PR_SET_PDEATHSIG
+    except (OSError, AttributeError):
+        pass
+
+
+def _fetch_watched(repo: Path, args: list[str], window: float = 10, fast: int = 100_000, tries: int = 3) -> None:
+    """A git fetch that is started again on a fresh connection when it crawls. One connection to GitHub can crawl at
+    tens of KB a second while a fresh one gets megabytes, and waiting on it can take hours. On every try but the last,
+    under `fast` bytes a second for `window` seconds is a crawl; the last try goes on however slowly, unless nothing
+    arrives for a minute, so that a slow network still gets there. Raises CalledProcessError when it could not be had.
+    Each try runs in a process group of its own, so that stopping it also stops git's helper that holds the connection."""
+    import signal
+    import time
+    for attempt in range(tries):
+        last = attempt == tries - 1
+        need, limit = (64 * 1024, 60.0) if last else (fast * window, window)
+        with tempfile.TemporaryFile() as said:
+            proc = subprocess.Popen(["git", *args], cwd=repo, stdout=subprocess.DEVNULL, stderr=said, start_new_session=True,
+                                    preexec_fn=_dies_with_parent)
+            seen, moved, stalled = _size(repo / ".git"), time.time(), False
+            while proc.poll() is None:
+                time.sleep(1)
+                now = _size(repo / ".git")
+                received["bytes"] = now
+                if now - seen >= need:
+                    seen, moved = now, time.time()
+                elif time.time() - moved > limit:
+                    stalled = True
+                    try:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    proc.wait()
+            if proc.returncode == 0 and not stalled:
+                return
+            said.seek(0)
+            err = said.read().decode(errors="replace").strip()
+        if last:
+            raise subprocess.CalledProcessError(proc.returncode or 1, ["git", *args],
+                                                stderr="nothing arrived for a minute" if stalled else err)
+
+
 def _git_in(repo: Path, *args: str, timeout: float = 3600, data: bytes | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, timeout=timeout, input=data)
 
@@ -70,7 +132,7 @@ def _shallow(url: str, commit: str, repo: Path) -> bool:
     try:
         repo.mkdir(parents=True)
         _git_in(repo, "init", "--quiet")
-        _git_in(repo, "fetch", "--quiet", "--depth", "1", url.removesuffix(".git") + ".git", commit)
+        _fetch_watched(repo, ["fetch", "--quiet", "--depth", "1", url.removesuffix(".git") + ".git", commit], window=20)
         _git_in(repo, "-c", "advice.detachedHead=false", "checkout", "--quiet", "--detach", "FETCH_HEAD")
         return True
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
@@ -81,8 +143,8 @@ def _shallow(url: str, commit: str, repo: Path) -> bool:
 def preview(entry: dict, sources: Path) -> Path:
     """The benchmark at its pinned commit with only its small files (up to SMALL each): enough to find its tasks, read
     its README and licence, and run the cheap checks, in a minute where the whole repository can take hours. A run
-    downloads the rest (fetch). A folder on this machine, a Hugging Face dataset, or a light copy that cannot be had,
-    is fetched in full. Returns the tasks folder."""
+    downloads the rest (fetch). A folder on this machine, or a Hugging Face dataset, is fetched in full. A fetch whose
+    connection stalls is started again. Returns the tasks folder; raises ValueError when it could not be read."""
     repo, url, commit = sources / entry["id"], entry["github"], entry["commit"]
     if Path(url).exists() or _huggingface(url):
         return fetch(entry, sources)
@@ -92,8 +154,9 @@ def preview(entry: dict, sources: Path) -> Path:
     try:
         repo.mkdir(parents=True)
         _git_in(repo, "init", "--quiet")
-        _git_in(repo, "fetch", "--quiet", "--depth", "1", f"--filter=blob:limit={SMALL}", url.removesuffix(".git") + ".git",
-                commit, timeout=900)
+        received["bytes"] = 0
+        _fetch_watched(repo, ["fetch", "--quiet", "--depth", "1", f"--filter=blob:limit={SMALL}", url.removesuffix(".git") + ".git",
+                              commit], window=10)
         _git_in(repo, "update-ref", "--no-deref", "HEAD", "FETCH_HEAD")      # its date is read from it
         # Which files are there: the large ones were left out, and asking for them would fetch them.
         absent = {line[1:] for line in _git_in(repo, "rev-list", "--objects", "--missing=print", "FETCH_HEAD").stdout.decode().split()
@@ -119,9 +182,11 @@ def preview(entry: dict, sources: Path) -> Path:
         (repo / PREVIEW).write_text(f"files up to {SMALL // 1024} KB only; {len(absent)} larger ones are left out\n")
         (repo / PINNED).write_text(commit + "\n")
         return repo / entry["tasks"]
-    except (OSError, ValueError, IndexError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        shutil.rmtree(repo, ignore_errors=True)
-        return fetch(entry, sources)
+    except (OSError, ValueError, IndexError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as err:
+        shutil.rmtree(repo, ignore_errors=True)          # not the whole repository instead: that is what can take hours
+        why = str(getattr(err, "stderr", "") or err).strip().splitlines()
+        raise ValueError(f"Could not read {url} at {commit[:10]}: {why[-1][:200] if why else 'the fetch failed'}. "
+                         "Paste the link again to try once more.") from None
 
 
 def _archive(owner: str, name: str, commit: str, repo: Path) -> bool:

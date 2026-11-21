@@ -121,6 +121,7 @@ class SessionApp(App[None]):
         self.set_interval(0.1, self.refresh_view)
         self.refresh_view()
         loop = asyncio.get_running_loop()
+        signal.signal(signal.SIGTSTP, signal.SIG_IGN)       # ctrl+z is the key that quits: it must never pause the run
         for sig in (signal.SIGTERM, signal.SIGHUP):         # told to end: close the run's books, then go
             try:
                 loop.add_signal_handler(sig, self._end)
