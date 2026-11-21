@@ -47,7 +47,13 @@ def grab(app) -> list[list[Segment]]:
     return list(Segment.split_lines(seg for seg in console._record_buffer if not seg.control))
 
 
-def draw(lines: list[list[Segment]], width: int, out: Path, font_dir: Path | None, size: int = 30) -> None:
+def draw(lines: list[list[Segment]], width: int, out: Path, font_dir: Path | None, size: int = 30, light: bool = False) -> None:
+    """Draw a screen to a PNG. With `light`, on the light theme's ground: what was captured in light mode keeps its own
+    colors, and what has none is drawn in the light theme's. Box-drawing characters are lines and arcs on whole pixels,
+    stroked centered on their path, so that every side of a box meets its corners exactly."""
+    from harbor_master.tui.theme import turned
+    ground, ink = (rgb(turned(BG)), rgb(turned(FG))) if light else (rgb(BG), rgb(FG))
+    paper = (255, 255, 255) if light else ground        # on a light page, the theme's own ground is drawn white
     def font(name: str, fallback: str) -> str:
         p = font_dir / name if font_dir else None
         return str(p) if p and p.exists() else f"{DEJAVU}/{fallback}"
@@ -57,37 +63,45 @@ def draw(lines: list[list[Segment]], width: int, out: Path, font_dir: Path | Non
     fonts = {k: ImageFont.truetype(p, size) for k, p in paths.items()}
     extra = [ImageFont.truetype(f"{DEJAVU}/{n}", size) for n in ("DejaVuSansMono.ttf", "DejaVuSans.ttf")]
     cmaps = [set(TTFont(paths["r"]).getBestCmap()), set(TTFont(f"{DEJAVU}/DejaVuSansMono.ttf").getBestCmap())]
-    theme = TerminalTheme(rgb(BG), rgb(FG), [rgb(FG)] * 8, [rgb(FG)] * 8)
+    theme = TerminalTheme(ground, ink, [ink] * 8, [ink] * 8)
     cw, lh, pad, lw = fonts["r"].getlength("M"), round(size * 1.42), 40, 2
-    img = Image.new("RGB", (round(cw * width) + 2 * pad, lh * len(lines) + 2 * pad), rgb(BG))
+    img = Image.new("RGB", (round(cw * width) + 2 * pad, lh * len(lines) + 2 * pad), paper)
     d = ImageDraw.Draw(img)
     for y, line in enumerate(lines):
         x = 0
         for seg in line:
             st = seg.style
-            fg = tuple(st.color.get_truecolor(theme)) if st and st.color else rgb(FG)
+            fg = tuple(st.color.get_truecolor(theme)) if st and st.color else ink
             bg = tuple(st.bgcolor.get_truecolor(theme)) if st and st.bgcolor else None
             if st and st.reverse:
-                fg, bg = (bg or rgb(BG)), fg
+                fg, bg = (bg or ground), fg
+            if bg == ground:
+                bg = paper
             for ch in seg.text:
-                x0, y0 = pad + x * cw, pad + y * lh
-                cx, cy, rad = x0 + cw / 2, y0 + lh / 2, cw / 2
+                x0, x1, y0 = round(pad + x * cw), round(pad + (x + 1) * cw), pad + y * lh   # whole pixels: a column is
+                cx, cy, rad = round(pad + (x + 0.5) * cw), y0 + lh // 2, round(cw / 2)    # the same column on every row
                 if bg:
-                    d.rectangle([x0, y0, x0 + cw, y0 + lh], fill=bg)
+                    d.rectangle([x0, y0, x1, y0 + lh], fill=bg)
                 if ch == "─":
-                    d.line([(x0, cy), (x0 + cw, cy)], fill=fg, width=lw)
+                    d.rectangle([x0, cy - lw // 2, x1, cy - lw // 2 + lw - 1], fill=fg)
                 elif ch == "│":
-                    d.line([(cx, y0), (cx, y0 + lh)], fill=fg, width=lw)
+                    d.rectangle([cx - lw // 2, y0, cx - lw // 2 + lw - 1, y0 + lh], fill=fg)
                 elif ch in "╭╮╰╯":
                     right, down = ch in "╭╰", ch in "╭╮"
                     ax, ay = (cx + rad if right else cx - rad), (cy + rad if down else cy - rad)
                     start = {"╭": 180, "╮": 270, "╰": 90, "╯": 0}[ch]
-                    d.arc([ax - rad, ay - rad, ax + rad, ay + rad], start, start + 90, fill=fg, width=lw)
-                    d.line([(cx, ay), (cx, y0 + lh if down else y0)], fill=fg, width=lw)
+                    # PIL strokes an arc inside its box: a box half a line wider centres it on the arc's path, where
+                    # the straight sides are drawn, so the corner meets them without a step
+                    r_out, top = rad + lw // 2, cy - lw // 2
+                    d.arc([ax - r_out, ay - r_out, ax + r_out - 1, ay + r_out - 1], start, start + 90, fill=fg, width=lw)
+                    end = x1 if right else x0
+                    d.rectangle([min(ax, end), top, max(ax, end), top + lw - 1], fill=fg)
+                    d.rectangle([cx - lw // 2, min(ay, y0 + lh if down else y0), cx - lw // 2 + lw - 1,
+                                 max(ay, y0 + lh if down else y0)], fill=fg)
                 elif ch == "█":
-                    d.rectangle([x0, y0 + lh * 0.18, x0 + cw, y0 + lh * 0.82], fill=fg)
+                    d.rectangle([x0, y0 + lh * 0.18, x1, y0 + lh * 0.82], fill=fg)
                 elif ch == "░":
-                    d.rectangle([x0, y0 + lh * 0.18, x0 + cw, y0 + lh * 0.82], fill=tuple((a + 2 * b) // 3 for a, b in zip(fg, rgb(BG))))
+                    d.rectangle([x0, y0 + lh * 0.18, x1, y0 + lh * 0.82], fill=tuple((a + 2 * b) // 3 for a, b in zip(fg, ground)))
                 elif not ch.isspace():
                     f = fonts["b" if st and st.bold else "r"]
                     if ord(ch) not in cmaps[0]:
