@@ -19,6 +19,7 @@ from textual.widgets import Button, Input, Static
 from .. import ledger as ledger_mod
 from .. import tasks as tasks_mod
 from ..engine.state import MAX_CELLS
+from .parts import QUIT_KEYS
 from .theme import AM, BG, BORDER, FG, MU, PU, RD, SE, TE, t
 
 CSS = f"""
@@ -123,6 +124,7 @@ class PickScreen(ModalScreen[str]):
                        Input(placeholder="a benchmark's name, or a link to a new one", id="line"),
                        Static(id="said"))
         box.border_title = "curate a benchmark"
+        box.border_subtitle = QUIT_KEYS
         yield box
 
     def on_mount(self) -> None:
@@ -228,7 +230,7 @@ class PickScreen(ModalScreen[str]):
     def _search(self, link: str) -> None:
         """Search for a new benchmark here, with what is happening on the line under the box, and open its draft, filled
         in, once it is found. What goes wrong is said here, and the link can be changed and given again."""
-        self.searching = link
+        self.searching, self.step = link, ""
         self.query_one("#line", Input).disabled = True
         self._tick = self.set_interval(0.1, self._searching)
         self._searching()
@@ -239,13 +241,14 @@ class PickScreen(ModalScreen[str]):
 
         from .theme import spinner
         if self.searching:
-            what = "a stand-in makes it up (simulated)" if self.s.simulate else "the worker agent searches the web for it"
+            what = ("a stand-in makes it up (simulated)" if self.s.simulate else
+                    getattr(self, "step", "") or "the worker agent searches the web for it")
             self.query_one("#said", Static).update(t((spinner(time.time()) + " ", PU), (f"{what} ...", SE)))
 
     async def _found(self, link: str) -> None:
         from ..tasks import adding
         try:
-            entry, sources = await find_draft(self.s, link)
+            entry, sources = await find_draft(self.s, link, lambda said: setattr(self, "step", said))
         except adding.AddError as err:
             self.searching = ""
             self._tick.stop()
@@ -259,7 +262,7 @@ class PickScreen(ModalScreen[str]):
         self.dismiss(("draft", entry, sources))
 
 
-async def find_draft(s, link: str) -> tuple[dict, list[str]]:
+async def find_draft(s, link: str, say=lambda said: None) -> tuple[dict, list[str]]:
     """A new benchmark's draft, from any link, and the pages it was found from: the worker agent searches the web for its
     repository and what is known about it, and the code downloads that repository's release and finds its tasks. In a
     simulated run the agent is a stand-in that makes it up; a folder on this machine is read by the code alone.
@@ -273,6 +276,8 @@ async def find_draft(s, link: str) -> tuple[dict, list[str]]:
         await asyncio.sleep(0.8)                # a stand-in for the agent's search
         return adding.made_up(s.ws, link), ["simulated: no web search was made"]
     found, _ = await adding.find(s.ws, s.ident, link)
+    say(f"reading {str(found.get('repository', 'its repository')).removeprefix('https://')} at its release: small files only, "
+        "the rest downloads once it is added")
     entry = await asyncio.to_thread(adding.from_found, s.ws, s.ident, found)
     return entry, list(found.get("sources") or [])
 
@@ -296,6 +301,7 @@ class DraftScreen(ModalScreen[str]):
                        Static(id="said"),
                        Button("Add it, and curate it", id="add"), Button("Back to the list", id="back"))
         box.border_title = "add a benchmark"
+        box.border_subtitle = QUIT_KEYS
         yield box
 
     def on_mount(self) -> None:
@@ -410,6 +416,7 @@ class ChecksScreen(ModalScreen[str]):
                        Static(id="verdict"),
                        Button("Continue", id="go", disabled=True), Button("Back", id="back"))
         box.border_title = "checks"
+        box.border_subtitle = QUIT_KEYS
         yield box
 
     def on_mount(self) -> None:
@@ -511,6 +518,7 @@ class CellsBox(ModalScreen[str]):
                        Horizontal(Static("containers", classes="label"), Input(str(self.containers), id="containers")),
                        Static(id="said"), Button("Start curating", id="start"))
         box.border_title = "curate"
+        box.border_subtitle = QUIT_KEYS
         yield box
 
     def on_mount(self) -> None:

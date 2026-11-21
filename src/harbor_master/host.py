@@ -12,6 +12,7 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import contextlib
 import os
 import pty
 import selectors
@@ -177,6 +178,9 @@ def relay(ws: Path, argv: list[str], command: str, simulate: bool, verb: str = "
                         got = b""
                     if not got:
                         drop(view)
+                        if not views:       # the last terminal closed without leaving: the run decides if it goes on
+                            with contextlib.suppress(ProcessLookupError):
+                                os.kill(child, signal.SIGUSR1)
                         continue
                     buf = views[view]
                     buf += got

@@ -10,6 +10,8 @@ the person is told why, and nobody can add it to the index again.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import os
 import re
 import subprocess
 from dataclasses import dataclass, field
@@ -252,18 +254,39 @@ def _skip(bench: BenchState, why: str, code: str) -> bool:
     return False
 
 
+async def _downloading(bench: BenchState, folder: Path) -> None:
+    """While a benchmark downloads, how much of it is here, every two seconds: a large repository takes minutes, and
+    the screen says that it moves."""
+    def size() -> int:
+        total = 0
+        for root, _, files in os.walk(folder):
+            for name in files:
+                with contextlib.suppress(OSError):
+                    total += os.lstat(os.path.join(root, name)).st_size
+        return total
+    while True:
+        await asyncio.sleep(2)
+        got = await asyncio.to_thread(size)
+        if got and bench.phase == "fetch":
+            bench.detail = f"downloading it at its pinned release · {got / 1e6:,.0f} MB so far"
+
+
 async def ready(s: Session, bench: BenchState) -> bool:
     """Make a listed benchmark's tasks available to this run. False means it is skipped, with the reason on it."""
     entry, ws = bench.entry, s.ws
     if entry is None or (not foreign(entry) and bench.path != Path() and bench.path.exists()):
         return True
     real = ledger_mod.Ledger(ws).events             # the index's own ledger, whatever kind of run this is
-    bench.phase, bench.detail = "fetch", "fetching it at its pinned release"
+    bench.phase, bench.detail = "fetch", "downloading it at its pinned release"
     STAGE.set("adapt")
+    sources = config_mod.local(ws) / "sources"
+    watching = asyncio.create_task(_downloading(bench, sources / entry["id"]))
     try:
-        source = await asyncio.to_thread(tasks_mod.supported.fetch, entry, config_mod.local(ws) / "sources")
+        source = await asyncio.to_thread(tasks_mod.supported.fetch, entry, sources)
     except (ValueError, subprocess.CalledProcessError, OSError) as err:
         return _skip(bench, f"could not be fetched: {str(getattr(err, 'stderr', '') or err).strip()[:160]}", "fetch_failed")
+    finally:
+        watching.cancel()
     if not await checked(s, bench, entry, source):       # the cheap checks on the whole benchmark, before anything costly
         return False
     if not s.simulate:          # before anything is adapted or screened: can its tasks run here at all

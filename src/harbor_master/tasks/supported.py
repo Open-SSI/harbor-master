@@ -13,6 +13,8 @@ from pathlib import Path
 
 REQUIRED = ("id", "name", "version", "released", "github", "ref", "commit", "tasks")
 PINNED = ".hm-pinned"       # in a source folder fetched as an archive: the commit it holds
+PREVIEW = ".hm-preview"     # in a source folder that holds only the small files, for a draft: a run downloads it all
+SMALL = 512 * 1024          # the largest file a draft's light copy holds
 
 
 def supported(index_dir: Path) -> list[dict]:
@@ -58,6 +60,70 @@ def _dataset(name: str, commit: str, repo: Path) -> bool:
         return False
 
 
+def _git_in(repo: Path, *args: str, timeout: float = 3600, data: bytes | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, timeout=timeout, input=data)
+
+
+def _shallow(url: str, commit: str, repo: Path) -> bool:
+    """The repository's files at one commit, by a shallow git fetch of that commit alone: for a large repository far
+    faster than GitHub's archive of it, which it builds slowly. False when it could not be had."""
+    try:
+        repo.mkdir(parents=True)
+        _git_in(repo, "init", "--quiet")
+        _git_in(repo, "fetch", "--quiet", "--depth", "1", url.removesuffix(".git") + ".git", commit)
+        _git_in(repo, "-c", "advice.detachedHead=false", "checkout", "--quiet", "--detach", "FETCH_HEAD")
+        return True
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        shutil.rmtree(repo, ignore_errors=True)
+        return False
+
+
+def preview(entry: dict, sources: Path) -> Path:
+    """The benchmark at its pinned commit with only its small files (up to SMALL each): enough to find its tasks, read
+    its README and licence, and run the cheap checks, in a minute where the whole repository can take hours. A run
+    downloads the rest (fetch). A folder on this machine, a Hugging Face dataset, or a light copy that cannot be had,
+    is fetched in full. Returns the tasks folder."""
+    repo, url, commit = sources / entry["id"], entry["github"], entry["commit"]
+    if Path(url).exists() or _huggingface(url):
+        return fetch(entry, sources)
+    if repo.exists() and _at(repo) == commit:
+        return repo / entry["tasks"]
+    shutil.rmtree(repo, ignore_errors=True)
+    try:
+        repo.mkdir(parents=True)
+        _git_in(repo, "init", "--quiet")
+        _git_in(repo, "fetch", "--quiet", "--depth", "1", f"--filter=blob:limit={SMALL}", url.removesuffix(".git") + ".git",
+                commit, timeout=900)
+        _git_in(repo, "update-ref", "--no-deref", "HEAD", "FETCH_HEAD")      # its date is read from it
+        # Which files are there: the large ones were left out, and asking for them would fetch them.
+        absent = {line[1:] for line in _git_in(repo, "rev-list", "--objects", "--missing=print", "FETCH_HEAD").stdout.decode().split()
+                  if line.startswith("?")}
+        files = []
+        for item in _git_in(repo, "ls-tree", "-r", "-z", "FETCH_HEAD").stdout.decode(errors="surrogateescape").split("\0"):
+            if item:
+                meta, path = item.split("\t", 1)
+                mode, kind, obj = meta.split()
+                if kind == "blob" and mode != "120000" and obj not in absent:
+                    files.append((obj, path, mode))
+        out = _git_in(repo, "cat-file", "--batch", data="".join(f"{o}\n" for o, _, _ in files).encode()).stdout
+        at = 0
+        for obj, path, mode in files:
+            header_end = out.index(b"\n", at)
+            size = int(out[at:header_end].split()[2])
+            body, at = out[header_end + 1:header_end + 1 + size], header_end + 1 + size + 1
+            target = repo / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(body)
+            if mode == "100755":
+                target.chmod(0o755)
+        (repo / PREVIEW).write_text(f"files up to {SMALL // 1024} KB only; {len(absent)} larger ones are left out\n")
+        (repo / PINNED).write_text(commit + "\n")
+        return repo / entry["tasks"]
+    except (OSError, ValueError, IndexError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        shutil.rmtree(repo, ignore_errors=True)
+        return fetch(entry, sources)
+
+
 def _archive(owner: str, name: str, commit: str, repo: Path) -> bool:
     """The repository's files at one commit, from GitHub's archive of it: much faster than a clone of a large
     repository, and it holds exactly the pinned commit. False when it could not be had."""
@@ -92,12 +158,12 @@ def fetch(entry: dict, sources: Path) -> Path:
     Anything else, or a download that cannot be had, is cloned."""
     repo = sources / entry["id"]
     git = lambda *a, cwd=repo: subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True, text=True)  # noqa: E731
-    if repo.exists() and not _at(repo):         # a fetch that was cut off: start again
+    if repo.exists() and (not _at(repo) or (repo / PREVIEW).exists()):     # cut off, or only a draft's light copy
         shutil.rmtree(repo)
     if not repo.exists():
         sources.mkdir(parents=True, exist_ok=True)
         where, dataset = _github(entry["github"]), _huggingface(entry["github"])
-        got = (_archive(*where, entry["commit"], repo) if where else
+        got = ((_shallow(entry["github"], entry["commit"], repo) or _archive(*where, entry["commit"], repo)) if where else
                _dataset(dataset, entry["commit"], repo) if dataset else False)
         if not got and dataset:
             raise ValueError(f"Could not download the dataset {dataset} at {entry['commit'][:10]} from Hugging Face.")
@@ -200,7 +266,8 @@ def describe(url: str, ref: str, commit: str, sources: Path, id_: str = "") -> d
     entry = {"id": id_ or re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-"), "name": name,
              "version": ref.lstrip("v") if re.search(r"\d", ref) else commit[:7], "released": "",
              "github": url.rstrip("/").removesuffix(".git"), "ref": ref, "commit": commit, "tasks": ".", "format": "harbor"}
-    repo = fetch(entry, sources)
+    repo = preview(entry, sources)          # a light copy: the whole of it is downloaded once it is added and run
+    repo = sources / entry["id"]
     entry["released"] = committed(entry, repo)
     found = tasks_root(repo)
     if found:

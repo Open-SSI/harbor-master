@@ -124,6 +124,10 @@ class SessionApp(App[None]):
                 loop.add_signal_handler(sig, self._end)
             except (NotImplementedError, RuntimeError, ValueError):
                 pass
+        try:                                                # the relay says the last terminal closed without leaving
+            loop.add_signal_handler(signal.SIGUSR1, lambda: self._nothing_to_keep() and self._end())
+        except (NotImplementedError, RuntimeError, ValueError):
+            pass
         if os.environ.get("HM_CONTROL"):                    # the door another run knocks on, to add a benchmark
             self._door = asyncio.create_task(self._listen(os.environ["HM_CONTROL"]))
 
@@ -318,8 +322,17 @@ class SessionApp(App[None]):
         theme.set_mode("")
 
 
+    def _nothing_to_keep(self) -> bool:
+        """A run that is not worth keeping with nobody watching: a simulated one, or one that has taken no benchmark yet.
+        It would only wait at a box that nobody sees."""
+        return self.session.simulate or not self.session.benches
+
     def action_leave(self) -> None:
-        """Leave the screen. Behind a relay the run goes on, and hm curate inside the index's folder opens it again."""
+        """Leave the screen. Behind a relay the run goes on, and hm curate inside the index's folder opens it again.
+        A simulated run, or one that has taken no benchmark, ends instead: nothing of it is left running."""
+        if self._nothing_to_keep():
+            self._end_now()
+            return
         if not os.environ.get("HM_HOSTED") or self._driver is None:
             self.show_result("cannot leave", "This run is tied to this terminal, so leaving would end it. ctrl+q ends it.")
             return
@@ -329,7 +342,7 @@ class SessionApp(App[None]):
     def action_quit_run(self) -> None:
         if self.session.finished:
             self.exit()
-        elif not isinstance(self.screen, ChoiceBox):
+        elif not (isinstance(self.screen, ChoiceBox) and self.screen._title == "end the run"):     # over any other box too
             self.push_screen(ChoiceBox("end the run", "End this run?\nWhat is running is stopped, and its claims are let go. What is "
                                        "recorded stays, and nothing is run twice when you start again.",
                                        [("no", "Keep it going"), ("yes", "End the run")], cancel=True),

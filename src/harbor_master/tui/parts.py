@@ -27,6 +27,9 @@ SCROLLBARS = f"""
 """
 
 
+QUIT_KEYS = "ctrl+l leave   ctrl+q quit"       # on the bottom border of every box: the run can always be left or ended
+
+
 class ChoiceBox(ModalScreen[str]):
     """A decision, in a box: what it is about, and one button for each thing that can be done. It opens by
     itself and nothing else can be done on the screen until one is pressed. With `cancel`, esc closes it
@@ -57,6 +60,8 @@ class ChoiceBox(ModalScreen[str]):
         box = Vertical(VerticalScroll(Static(Text.assemble((head, "bold"), "\n" + rest if rest else ""), id="text"), can_focus=False),
                        *typed, *(Button(label, id=f"pick-{n}", name=value) for n, (value, label) in enumerate(self._options)))
         box.border_title = self._title
+        if not self._cancel:                # the box that asks whether to end the run has esc to go back instead
+            box.border_subtitle = QUIT_KEYS
         yield box
 
     def on_mount(self) -> None:
@@ -90,4 +95,4 @@ class ChoiceBox(ModalScreen[str]):
                 self.dismiss("")
 
 
-__all__ = ["BORDER", "SCROLLBARS", "ChoiceBox"]
+__all__ = ["BORDER", "QUIT_KEYS", "SCROLLBARS", "ChoiceBox"]

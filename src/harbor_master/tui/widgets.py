@@ -15,6 +15,7 @@ from textual.widgets import Input, Static
 
 from .. import interact
 from ..interact import Command
+from .parts import QUIT_KEYS
 from .theme import AM, BG, MU, PU, SE, TE
 
 if TYPE_CHECKING:
@@ -85,6 +86,7 @@ class ReviewScreen(ModalScreen[str]):
         task = self.tasks[self.at]
         box = self.query_one(Vertical)
         box.border_title = f"review {self.at + 1} of {len(self.tasks)}   {task.task_id}"
+        box.border_subtitle = QUIT_KEYS
         self.query_one("#report", Static).update(Markdown(interact.answers.report_text(self.session, task)))
         self.query_one(VerticalScroll).scroll_home(animate=False)
 
@@ -179,7 +181,7 @@ class SelectionScreen(ModalScreen[str]):
             line = Text(interact.answers.task_line(task) if task else "", style=SE if on else MU)
             rows += [head, Padding(line, (0, 0, 1, 7))]
         self.query_one("#tasks", Static).update(Group(*rows))
-        self.query_one(Vertical).border_subtitle = f"the top {k} go on to the costly stages, {len(self.rows) - k} are left out"
+        self.query_one(Vertical).border_subtitle = f"the top {k} go on, {len(self.rows) - k} are left out   ·   {QUIT_KEYS}"
 
     def action_scroll(self, way: int, page: bool) -> None:
         area = self.query_one(VerticalScroll)
@@ -256,6 +258,7 @@ class AskScreen(ModalScreen[str]):
             title, shown = self.KINDS[self.request.kind]
             box = self.query_one(Vertical)
             box.border_title = f"{title}   {self.request.target}".rstrip()
+            box.border_subtitle = QUIT_KEYS
             head, _, rest = self.request.text.partition("\n")
             self.query_one("#asked", Static).update(Text.assemble((head, "bold"), "\n" + rest if rest else ""))
             line = self.query_one("#reply", Input)
