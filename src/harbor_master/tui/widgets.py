@@ -49,11 +49,11 @@ class ReviewScreen(ModalScreen[str]):
 
     It opens by itself when a report is ready, and it stays until every report it shows has a verdict:
     there is no skipping one and no going back to the run's prompt first. The run itself goes on behind it,
-    and the screen can still be left (ctrl+l) or the run ended (ctrl+q)."""
+    and the screen can still be left (ctrl+l) or the run ended (ctrl+z)."""
 
     BINDINGS = [("escape", "stay", "Back"), ("pageup", "scroll(-1, True)", "Up"), ("pagedown", "scroll(1, True)", "Down"),
                 ("up", "scroll(-1, False)", "Up"), ("down", "scroll(1, False)", "Down"),
-                ("ctrl+l", "app.leave", "Leave"), ("ctrl+q", "end", "Quit"), ("ctrl+t", "app.theme", "Light or dark")]
+                ("ctrl+l", "app.leave", "Leave"), ("ctrl+z", "end", "Quit"), ("ctrl+t", "app.theme", "Light or dark")]
     NEEDED = "Each report needs your verdict before anything else: accept, or reject <why>."
     DEFAULT_CSS = f"""
     ReviewScreen {{ align: center middle; background: {BG} 70%; }}
@@ -134,7 +134,7 @@ class SelectionScreen(ModalScreen[str]):
 
     BINDINGS = [("escape", "stay", "Back"), ("pageup", "scroll(-1, True)", "Up"), ("pagedown", "scroll(1, True)", "Down"),
                 ("up", "scroll(-1, False)", "Up"), ("down", "scroll(1, False)", "Down"),
-                ("ctrl+l", "app.leave", "Leave"), ("ctrl+q", "end", "Quit"), ("ctrl+t", "app.theme", "Light or dark")]
+                ("ctrl+l", "app.leave", "Leave"), ("ctrl+z", "end", "Quit"), ("ctrl+t", "app.theme", "Light or dark")]
     DEFAULT_CSS = f"""
     SelectionScreen {{ align: center middle; background: {BG} 70%; }}
     SelectionScreen > Vertical {{ width: 92%; height: 90%; border: round {AM}; border-title-color: {AM}; background: {BG}; }}
@@ -225,11 +225,11 @@ class AskScreen(ModalScreen[str]):
 
     Whatever the run asks of a person is asked here, in a box of its own that opens by itself. Nothing else
     can be done on the screen until it is answered. The run's other work goes on behind it, and the screen
-    can still be left (ctrl+l) or the run ended (ctrl+q)."""
+    can still be left (ctrl+l) or the run ended (ctrl+z)."""
 
     BINDINGS = [("escape", "stay", "Back"), ("pageup", "scroll(-1, True)", "Up"), ("pagedown", "scroll(1, True)", "Down"),
                 ("up", "scroll(-1, False)", "Up"), ("down", "scroll(1, False)", "Down"),
-                ("ctrl+l", "app.leave", "Leave"), ("ctrl+q", "end", "Quit"), ("ctrl+t", "app.theme", "Light or dark")]
+                ("ctrl+l", "app.leave", "Leave"), ("ctrl+z", "end", "Quit"), ("ctrl+t", "app.theme", "Light or dark")]
     DEFAULT_CSS = f"""
     AskScreen {{ align: center middle; background: {BG} 70%; }}
     AskScreen > Vertical {{ width: 86%; height: auto; max-height: 90%; border: round {AM}; border-title-color: {AM}; background: {BG}; }}

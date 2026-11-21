@@ -360,10 +360,10 @@ terminal  <->  view (hm run)  <- socket ->  relay  <- pseudo-terminal ->  the ru
 ```
 
 - **Leaving.** `ctrl+l`, closing the window, or a lost connection closes the view. A real run that has taken a benchmark goes on. A simulated run, or one that has taken no benchmark yet, ends instead: it would only wait at a box nobody sees, so nothing of it is left running.
-- **Quitting.** `ctrl+q`, from the screen or from any box, asks once and ends the run: its Harbor jobs are interrupted and their containers removed, and its claims are let go. Every box shows `ctrl+l leave   ctrl+q quit` on its bottom border.
+- **Quitting.** `ctrl+z`, from the screen or from any box, asks once and ends the run: its Harbor jobs are interrupted and their containers removed, and its claims are let go. Every box shows `ctrl+l leave   ctrl+q quit` on its bottom border.
 - **Coming back.** `hm curate` inside the index's folder, from any terminal, opens a view on the run that is going.
 - **One run per index.** Two indexes run side by side, each behind its own relay.
-- **A finished run stays**, for verdicts or another benchmark, which its first box offers again, until `ctrl+q`.
+- **A finished run stays**, for verdicts or another benchmark, which its first box offers again, until `ctrl+z`.
 - **Ending cleanly.** A run told to end releases its claims, writes its usage, and pushes.
 - **It does not survive a reboot.** The next run reuses everything that was recorded.
 
@@ -394,9 +394,9 @@ terminal  <->  view (hm run)  <- socket ->  relay  <- pseudo-terminal ->  the ru
 | A new benchmark | A link is pasted | Its draft, checked once, then its checks: Continue (or Confirm a rejection), or Back |
 | A benchmark rejected | Its checks, its adapter, its image check or its screen reject it | Confirm: it says why |
 | A trial is stuck | A trial's logs stood still and the worker agent read them as hung; the trial is already stopped | Retry it, or drop the task. It says what the trial was doing and why it is judged hung |
-| Ending | `ctrl+q` | Keep it going, or end the run |
+| Ending | `ctrl+z` | Keep it going, or end the run |
 
-The choice boxes are one widget (`tui/parts.py`, `ChoiceBox`), used by all three screens. The keys are few: a cell's number opens its task, `pgup`/`pgdn` scroll the log, `ctrl+l` leaves, `ctrl+t` switches light and dark, `ctrl+q` ends. There is no pause: to stop, end the run, and its claims are let go. The commands behind the boxes are still in `interact/`, where the boxes and the relay run them. A trial that fails for an infrastructure reason is tried once more by itself, with no box. With nobody to ask (`--no-input`, `--plain`), a stuck trial is run again once, and then its task is dropped.
+The choice boxes are one widget (`tui/parts.py`, `ChoiceBox`), used by all three screens. The keys are few: a cell's number opens its task, `pgup`/`pgdn` scroll the log, `ctrl+l` leaves, `ctrl+t` switches light and dark, `ctrl+z` ends. There is no pause: to stop, end the run, and its claims are let go. The commands behind the boxes are still in `interact/`, where the boxes and the relay run them. A trial that fails for an infrastructure reason is tried once more by itself, with no box. With nobody to ask (`--no-input`, `--plain`), a stuck trial is run again once, and then its task is dropped.
 
 ### When the system asks the user
 

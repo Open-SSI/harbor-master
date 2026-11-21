@@ -11,6 +11,7 @@ from typing import Callable
 
 from rich.text import Text
 from textual import events
+from textual.binding import Binding
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Button, Input, Static
@@ -40,7 +41,7 @@ class Step:
 class WizardApp(App[Answers | None]):
     """Asks the steps in order and returns the answers, or None when it is cancelled."""
     ENABLE_COMMAND_PALETTE = False
-    BINDINGS = [("escape", "back", "Back"), ("ctrl+q", "cancel", "Cancel"), ("ctrl+t", "theme", "Light or dark")]
+    BINDINGS = [("escape", "back", "Back"), ("ctrl+z", "cancel", "Cancel"), Binding("ctrl+q", "cancel", "Cancel", show=False), ("ctrl+t", "theme", "Light or dark")]
     CSS = SCROLLBARS + f"""
     Screen {{ background: {BG}; color: {FG}; align: center middle; }}
     #box {{ width: 84; max-width: 96%; height: auto; max-height: 96%; border: round {PU}; border-title-color: {PU};

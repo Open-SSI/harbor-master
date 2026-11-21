@@ -15,6 +15,7 @@ import signal
 import time
 
 from textual import events
+from textual.binding import Binding
 from textual.app import App, ComposeResult
 from textual.containers import Vertical
 from textual.css.query import NoMatches
@@ -32,7 +33,7 @@ from .theme import BG, BORDER, FG, MU, PU, SE, t
 from .widgets import AskScreen, ReviewScreen, SelectionScreen, TaskScreen
 
 KEYS = t(("1-8", SE), (" cell   ", MU), ("enter", SE), (" task   ", MU), ("pgup/pgdn", SE), (" log   ", MU),
-         ("ctrl+l", SE), (" leave   ", MU), ("ctrl+t", SE), (" theme   ", MU), ("ctrl+q", SE), (" end", MU))
+         ("ctrl+l", SE), (" leave   ", MU), ("ctrl+t", SE), (" theme   ", MU), ("ctrl+z", SE), (" end", MU))
 LOG_MIN = 5         # rows the log needs to be worth showing: its frame and three lines
 DETACH = "\x1b_hm-detach\x1b\\"        # tells the relay behind this screen that the user has left it
 BOXES = (AskScreen, SelectionScreen, ReviewScreen, ChoiceBox, PickScreen, DraftScreen, ChecksScreen, CellsBox)
@@ -60,7 +61,7 @@ def finished_note(s: Session) -> str:
             said.append(f"{b.id} is curated.")
         else:
             said.append(f"{b.id} is let go: it is listed again, and what was done stays.")
-    return " ".join(said) + " Pick the next one, or ctrl+q to end."
+    return " ".join(said) + " Pick the next one, or ctrl+z to end."
 
 
 def decided(session, request, said: str) -> None:
@@ -71,7 +72,8 @@ def decided(session, request, said: str) -> None:
 
 class SessionApp(App[None]):
     ENABLE_COMMAND_PALETTE = False
-    BINDINGS = [("ctrl+q", "quit_run", "Quit"), ("ctrl+l", "leave", "Leave"),
+    BINDINGS = [Binding("ctrl+z", "quit_run", "Quit", priority=True), Binding("ctrl+q", "quit_run", "Quit", show=False, priority=True),
+                ("ctrl+l", "leave", "Leave"),
                 ("ctrl+t", "theme", "Light or dark"), ("escape", "close", "Close"),
                 ("pageup", "log(-1)", "Log back"), ("pagedown", "log(1)", "Log on"), ("home", "log_end(0)", "Log start"),
                 ("end", "log_end(1)", "Log end")]
@@ -334,7 +336,7 @@ class SessionApp(App[None]):
             self._end_now()
             return
         if not os.environ.get("HM_HOSTED") or self._driver is None:
-            self.show_result("cannot leave", "This run is tied to this terminal, so leaving would end it. ctrl+q ends it.")
+            self.show_result("cannot leave", "This run is tied to this terminal, so leaving would end it. ctrl+z ends it.")
             return
         self._driver.write(DETACH)
         self._driver.flush()

@@ -15,6 +15,7 @@ from rich.console import Group
 from rich.table import Table
 from rich.text import Text
 from textual import events
+from textual.binding import Binding
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
@@ -32,7 +33,7 @@ from .theme import AM, BG, BORDER, FG, MU, PU, RD, SE, TE, t
 # The buttons: each opens one thing about the index in full, in a box. name -> label
 LABELS = {"status": "Status", "tasks": "Tasks", "benchmarks": "Benchmarks", "credits": "Credits", "skills": "Skills"}
 KEYS = t(("tab", SE), (" to a button   ", MU), ("enter", SE), (" opens it   ", MU), ("r", SE), (" read again   ", MU),
-         ("ctrl+t", SE), (" light or dark   ", MU), ("ctrl+q", SE), (" quit", MU))
+         ("ctrl+t", SE), (" light or dark   ", MU), ("ctrl+z", SE), (" quit", MU))
 TILES = ("benchmarks", "curated", "accepted", "review", "people", "spent")
 
 
@@ -88,7 +89,7 @@ def pairs(rows: list[tuple[str, str | Text]]) -> Table:
 
 class IndexApp(App[None]):
     ENABLE_COMMAND_PALETTE = False
-    BINDINGS = [("ctrl+q", "quit", "Quit"), ("q", "quit", "Quit"), ("r", "read", "Read again"), ("ctrl+t", "theme", "Light or dark")]
+    BINDINGS = [("ctrl+z", "quit", "Quit"), Binding("ctrl+q", "quit", "Quit", show=False), ("q", "quit", "Quit"), ("r", "read", "Read again"), ("ctrl+t", "theme", "Light or dark")]
     CSS = SCROLLBARS + f"""
     Screen {{ background: {BG}; color: {FG}; }}
     #top {{ height: 1fr; scrollbar-size: 0 0; }}

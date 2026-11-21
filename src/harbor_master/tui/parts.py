@@ -27,7 +27,7 @@ SCROLLBARS = f"""
 """
 
 
-QUIT_KEYS = "ctrl+l leave   ctrl+q quit"       # on the bottom border of every box: the run can always be left or ended
+QUIT_KEYS = "ctrl+l leave   ctrl+z quit"       # on the bottom border of every box: the run can always be left or ended
 
 
 class ChoiceBox(ModalScreen[str]):

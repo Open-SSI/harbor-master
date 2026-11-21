@@ -1,6 +1,6 @@
 """The curate screen's boxes for starting: which benchmark to curate, a new one's draft, and how much runs at once.
 
-The run asks in a box and waits; nothing else can be done on the screen until it is answered (ctrl+q still ends
+The run asks in a box and waits; nothing else can be done on the screen until it is answered (ctrl+z still ends
 the run). Each box says what it is for in its first line.
 """
 from __future__ import annotations
@@ -99,7 +99,7 @@ class PickScreen(ModalScreen[str]):
     PickScreen #rows {{ padding: 0 1 0 0; }}
     PickScreen #head {{ padding: 0 2 0 0; }}
     """
-    BINDINGS = [("ctrl+q", "app.quit_run", "End"), ("ctrl+l", "app.leave", "Leave"), ("ctrl+t", "app.theme", "Light or dark"),
+    BINDINGS = [("ctrl+z", "app.quit_run", "End"), ("ctrl+l", "app.leave", "Leave"), ("ctrl+t", "app.theme", "Light or dark"),
                 Binding("tab", "complete", "Complete", priority=True, show=False),
                 ("up", "scroll(-1)", "Scroll"), ("down", "scroll(1)", "Scroll"),
                 ("pageup", "scroll(-8)", "Scroll"), ("pagedown", "scroll(8)", "Scroll")]
@@ -289,7 +289,7 @@ class DraftScreen(ModalScreen[str]):
     DEFAULT_CSS = CSS.format(name="DraftScreen") + f"""
     DraftScreen #from {{ height: auto; color: {MU}; margin: 0 0 1 0; }}
     """
-    BINDINGS = [("ctrl+q", "app.quit_run", "End"), ("ctrl+l", "app.leave", "Leave"), ("escape", "back", "Back")]
+    BINDINGS = [("ctrl+z", "app.quit_run", "End"), ("ctrl+l", "app.leave", "Leave"), ("escape", "back", "Back")]
 
     def __init__(self, s, entry: dict, sources: list[str]):
         super().__init__()
@@ -396,7 +396,7 @@ class ChecksScreen(ModalScreen[str]):
     ChecksScreen #rows {{ height: auto; padding: 0 1 0 0; }}
     ChecksScreen #verdict {{ height: auto; margin: 0 0 1 0; }}
     """
-    BINDINGS = [("ctrl+q", "app.quit_run", "End"), ("ctrl+l", "app.leave", "Leave"), ("escape", "back", "Back to the draft"),
+    BINDINGS = [("ctrl+z", "app.quit_run", "End"), ("ctrl+l", "app.leave", "Leave"), ("escape", "back", "Back to the draft"),
                 ("up", "scroll(-1)", "Scroll"), ("down", "scroll(1)", "Scroll")]
     LOOK = {"pass": ("✓", TE), "warn": ("!", AM), "fail": ("✗", RD), "unknown": ("?", MU)}
 
@@ -504,7 +504,7 @@ class CellsBox(ModalScreen[str]):
     CellsBox .label { width: 26; height: 3; content-align: left middle; color: #aaa89f; }
     CellsBox Input { width: 12; }
     """
-    BINDINGS = [("ctrl+q", "app.quit_run", "End"), ("ctrl+l", "app.leave", "Leave")]
+    BINDINGS = [("ctrl+z", "app.quit_run", "End"), ("ctrl+l", "app.leave", "Leave")]
 
     def __init__(self, request, cells: int, containers: int):
         super().__init__()

@@ -201,7 +201,7 @@ def curate(benchmarks: list[str] = typer.Argument(None, help="Benchmarks to run.
                  + ("Open it in a terminal with: hm curate" if going.get("socket") else "It has no screen: wait for it to end."))
         if going.get("simulate") != simulate and (benchmarks or simulate):
             fail(f"The run that is going is {host.describe(going)}. A {'simulated' if simulate else 'real'} one cannot join it: "
-                 "end that run first, with ctrl+q on its screen.")
+                 "end that run first, with ctrl+z on its screen.")
         for b in benchmarks or []:
             reply = host.tell(ws, {"add": [b]})
             console.print(reply["text"], highlight=False)

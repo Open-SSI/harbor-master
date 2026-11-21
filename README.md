@@ -58,7 +58,7 @@ If a trial hangs (its logs stand still and the worker agent reads them as stuck)
   <img src="assets/review.png" width="100%" alt="The review box: the report on a kept task, opening with its recommendation and the reasons for it, and an input for accept or reject.">
 </p>
 
-Keys: `1`–`8` a work cell, `enter` its task, `pgup`/`pgdn` the log, `ctrl+l` leaves (a real run goes on, and `hm curate` shows it again; a demo ends), `ctrl+q` ends the run. Both work from every box.
+Keys: `1`–`8` a work cell, `enter` its task, `pgup`/`pgdn` the log, `ctrl+l` leaves (a real run goes on, and `hm curate` shows it again; a demo ends), `ctrl+z` ends the run. Both work from every box.
 
 ## Start your own index
 
