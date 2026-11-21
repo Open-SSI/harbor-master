@@ -127,8 +127,8 @@ def log_row(entry: tuple[float, str, str, str]) -> Table:
     ts, kind, task_id, text = entry
     g = Table.grid(expand=True, padding=(0, 2, 0, 0), pad_edge=False)
     g.add_column(no_wrap=True)
-    g.add_column(width=8, no_wrap=True)
-    g.add_column(width=12, no_wrap=True, overflow="ellipsis")
+    g.add_column(width=10, no_wrap=True)                                  # the longest kind, "difficulty"
+    g.add_column(width=28, no_wrap=True, overflow="ellipsis")             # most benchmark and task names, in full
     g.add_column(ratio=1)
     g.add_row(t((time.strftime("%H:%M:%S", time.localtime(ts)), MU)), t((kind, KIND_COLOR.get(kind, SE))),
               task_id.split("/", 1)[-1], t((text, SE)))
