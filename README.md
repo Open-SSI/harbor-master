@@ -1,10 +1,7 @@
 <h1 align="center">Harbor-Master</h1>
 
 <p align="center">
-  <strong>Benchmarks saturate fast, and curating hard ones by hand does not scale.</strong> <strong>Harbor-Master</strong> turns curation into a <strong>continual, open process run by agents</strong>: it takes benchmarks in any format and keeps an <strong>index</strong> of tasks that are sound, verifiable, and still too hard for frontier agents. People only <strong>sign the verdict</strong>.
-</p>
-<p align="center">
-  Every task goes through stages ordered by cost. Agents <strong>audit before anything runs</strong>, <strong>repair</strong> what is broken, and spend <strong>frontier trials last</strong>. Every decision, trial and verdict is a record in a <strong>signed ledger</strong>, so nothing runs twice and anyone can check how a task got in.
+  <strong>Benchmarks saturate fast, and curating hard ones by hand does not scale.</strong> <strong>Harbor-Master</strong> lets agents do the curating: it takes benchmarks in any format and keeps an open, growing <strong>index</strong> of tasks that are sound, verifiable, and still too hard for frontier agents. People only <strong>sign the verdict</strong>.
 </p>
 
 <p align="center">
@@ -18,16 +15,12 @@
 
 ## Why Harbor-Master
 
-The last large curation of agent tasks, Harbor-Index, took 6,627 tasks down to 82. It needed over 10,000 review comments and 14 expert reviewers, it spent frontier trials on tasks that were broken, and it ran once. Harbor-Master does the same job differently:
-
-1. **Cheapest judge first.** A small decision model takes every gate as a typed value with a probability. A worker agent audits and repairs, a frontier agent is called only when they are unsure or stuck, and a person signs the final report. Ranking all 70 Terminal-Bench-Science tasks took 468 decision calls, $0.02 and 11 seconds.
-2. **Audit before anything runs.** Before any trial, agents read every task to check that its reference solution really solves it, and that its instruction states the form of the answer and the goal the tests judge. An undisclosed bar on a stated goal counts as difficulty, not a defect.
-3. **Repair, not just filter.** A task the worker agent fails because of a broken environment or an unclear check is repaired, and the new version goes through every check again.
-4. **Frontier trials last, and once.** Only a task that passes everything else meets the frontier agents, and their trials stop as soon as the outcome is settled.
-5. **A ledger that remembers.** Records are signed, hash-chained and keyed by the task's content. A repair re-runs only what it affects. A new setting keeps what was already settled. A model that cannot be reached leaves its task for the next run, not dropped.
-6. **Open and continual.** An index is a git repository. Anyone the owner adds curates from their own machine, claims keep two people off the same benchmark, and each benchmark curated keeps the index current.
-
-We estimate this takes about 15 expert hours per 1,000 tasks, against about 130 for Harbor-Index's one-off curation, at about a sixth of the total cost ([DESIGN.md](DESIGN.md), Section 12).
+- **Cheapest judge first.** A small decision model takes every gate with a probability; worker and frontier agents step in only when it is unsure. Ranking 70 tasks costs $0.02.
+- **Audit before anything runs.** Agents check that each reference solution truly solves its task, and that the instruction states what the tests judge.
+- **Repair, not just filter.** Broken tasks are fixed by agents and checked again.
+- **Frontier trials last, and once,** stopping as soon as the outcome is settled.
+- **A signed ledger.** Every decision, trial and verdict is recorded, so nothing runs twice and anyone can check how a task got in.
+- **Open.** An index is a git repository: anyone the owner adds curates from their own machine.
 
 ## Install
 
