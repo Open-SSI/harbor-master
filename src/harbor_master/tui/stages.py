@@ -288,6 +288,8 @@ def task_boxes(s: Session, c: CellState) -> list[tuple[str, str, str]]:
             state, under = "done", f"{seconds.get(name, 0):.0f}s"
         elif name == "fix" and c.stage > index:             # the task passed with nothing to repair
             state, under = "skip", "not needed"
+        elif index < c.stage:       # passed by this version in an earlier run: a repair would have sent it back to verify
+            state, under = "done", "earlier run"
         else:
             state, under = "todo", ""
         boxes.append((name, under, state))

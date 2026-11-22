@@ -38,3 +38,16 @@ async def test_the_curate_line_puts_every_chosen_task_in_one_state_and_they_add_
     assert sum(counts.values()) == len(b.chosen) == 20
     assert counts.get("left for retry", 0) == len(b.left) and "working" not in counts and "waiting" not in counts
     assert stages.standing_line(session, b).startswith("20 tasks: ")
+
+
+async def test_a_resumed_task_shows_the_stages_it_passed_in_an_earlier_run_as_done(workspace, session):
+    from harbor_master.engine.stages import STAGE_NO
+    from harbor_master.tui import stages
+    await session.run()
+    cell = session.cells[0]
+    cell.task, cell.stage = session.benches["demo-bench"].tasks[0], STAGE_NO["difficulty"]
+    session.blackboards[cell.task.task_id] = {"stages": []}        # nothing ran in this run before difficulty
+    boxes = {name: (under, state) for name, under, state in stages.task_boxes(session, cell)}
+    assert all(boxes[n] == ("earlier run", "done") for n in ("verify", "probe", "worker", "audit"))
+    assert boxes["fix"] == ("not needed", "skip") and boxes["difficulty"] == ("now", "now")
+    assert boxes["report"] == ("", "todo")
