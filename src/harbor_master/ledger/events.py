@@ -36,7 +36,8 @@ def trial_slot(e: dict) -> tuple:
 
 def decision_key(e: dict) -> tuple:
     """A decision about a whole benchmark, such as dropping it, has no task and so no digest: it is keyed by its benchmark."""
-    return (e.get("digest") or e.get("benchmark", ""), e.get("stage", ""), e.get("gate", ""), e["protocol"], e.get("tier", ""))
+    return (e.get("digest") or e.get("benchmark", ""), e.get("stage", ""), e.get("gate", ""), e["protocol"], e.get("tier", ""),
+            *((e["redo"],) if e.get("redo") else ()))       # a decision made again, by a stricter rule, beside the first
 
 
 def duplicate_key(e: dict) -> tuple | None:

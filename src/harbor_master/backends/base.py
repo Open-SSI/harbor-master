@@ -24,6 +24,7 @@ class Decision:
     tokens: int = 0
     rationale: str = ""
     skill: str = ""            # the skill and version that produced it, such as triage/gates@3f2a91c0d4
+    evidence: str = ""         # what the answer rests on, checked: a file of the task and a line quoted from it
 
 
 @dataclass

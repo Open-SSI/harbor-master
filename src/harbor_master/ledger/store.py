@@ -121,12 +121,12 @@ class Ledger:
         return None
 
     def decision(self, digest: str, stage: str, gate: str, protocol: str) -> dict | None:
-        """The standing decision for a gate: the highest tier wins, then the latest."""
+        """The standing decision for a gate: the highest tier wins, then one made again over the first, then the latest."""
         found = [e for e in self._decisions.get((digest, stage, gate, protocol), ())
                  if self.accept_assumed or not e.get("assumed")]
         if not found:
             return None
-        return max(found, key=lambda e: (TIER_RANK.get(e.get("tier", ""), 0), e["time"]))
+        return max(found, key=lambda e: (TIER_RANK.get(e.get("tier", ""), 0), int(e.get("redo") or 0), e["time"]))
 
     def brief(self, benchmark: str) -> dict | None:
         briefs = [e for e in self.events if e["type"] == "brief" and e["benchmark"] == benchmark]

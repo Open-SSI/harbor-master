@@ -144,3 +144,72 @@ async def test_a_costly_verifier_is_the_worker_agents_to_confirm_and_an_old_drop
     assert (standing["outcome"], standing["tier"]) == ("pass", "worker")
     assert await shared.triage(session, other)                  # and that answer stands: it is not asked a third time
     assert len(confirmed) == 2
+
+
+def test_a_costly_verdict_must_cite_a_line_the_tasks_file_really_has(tmp_path):
+    from harbor_master.backends.real import cited
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test.py").write_text("def test_fit():\n    run_mcmc(walkers=128,   steps=9000)\n")
+    assert cited(tmp_path, "tests/test.py", "run_mcmc(walkers=128, steps=9000)") == ""      # spacing aside, as copied
+    assert "not in tests/test.py" in cited(tmp_path, "tests/test.py", "steps=900000")
+    assert "does not have" in cited(tmp_path, "tests/slow.py", "anything")
+    assert "does not have" in cited(tmp_path, "../outside.py", "anything")
+    assert "no file" in cited(tmp_path, "", "")
+
+
+async def test_a_workers_costly_drop_that_cited_nothing_is_screened_again(workspace, session, monkeypatch):
+    from harbor_master.backends import Decision
+    from harbor_master.engine import shared
+    from harbor_master.ledger import duplicate_key
+    task = tasks.load_benchmark(Path(tasks.read_registry(workspace)["demo-bench"]["path"]), "demo-bench")[2]
+    session.benches[task.benchmark].reported = {}
+    session.record(task.benchmark, "decision", task, stage="triage", gate="verifier_cost", tier="worker", value="costly",
+                   outcome="drop", rationale="I did not read the files.")
+    session.record(task.benchmark, "decision", task, stage="triage", gate="gates", tier="worker", outcome="drop",
+                   reason="verifier_cost:costly", value={"format": {"value": "agentic", "p": 1.0, "tier": "decision"},
+                                                         "verifier": {"value": "programmatic", "p": 1.0, "tier": "decision"},
+                                                         "verifier_cost": {"value": "costly", "p": 0.7, "tier": "worker"}})
+
+    async def decide_gates(task, wanted):
+        return {g: Decision("distinct", 0.99, "decision", "small") for g in wanted}
+
+    async def confirm(gate, choices, task, first):      # this time it reads the tests, and cites them
+        return Decision("costly", 0.9, "worker", "agent", rationale="a long simulation", evidence="tests/test.sh: run 10000 steps")
+    monkeypatch.setattr(session.backend, "decide_gates", decide_gates)
+    monkeypatch.setattr(session.backend, "confirm", confirm)
+    assert not await shared.triage(session, task)
+    standing = session.ledger.decision(task.digest, "triage", "gates", session.protocol)
+    assert standing.get("redo") == 2 and standing["value"]["verifier_cost"]["evidence"] == "tests/test.sh: run 10000 steps"
+    assert not shared.unconfirmed_drop(standing)            # cited: it stands
+    keys = [duplicate_key(e) for e in session.ledger.events if duplicate_key(e)]
+    assert len(keys) == len(set(keys))                      # no record clashes with the first screening's
+
+
+async def test_ranking_asks_both_orders_at_once_and_a_restart_asks_nothing_again(workspace, tmp_path, monkeypatch):
+    import asyncio
+    import time
+    from harbor_master.backends import jev, real
+    from harbor_master.core import config as config_mod
+    calls = []
+
+    async def decisions(model, state, questions):      # a decision model that takes a moment to answer
+        calls.append(state)
+        await asyncio.sleep(0.2)
+        if "importance" in questions:
+            return {"importance": {"type": "score", "score": float(len(state["task"]) % 7)}}, 0.0, 10
+        return {"first_matters_more": {"noul": 0.7}}, 0.0, 10
+    monkeypatch.setattr(jev, "decisions", decisions)
+    cfg = config_mod.load(workspace)
+    run_dir = tmp_path / ".hm" / "runs" / "r1"
+    backend = real.RealBackend(cfg, lambda tier, cost, tokens: None, run_dir)
+    found = tasks.load_benchmark(Path(tasks.read_registry(workspace)["demo-bench"]["path"]), "demo-bench")[:2]
+    started = time.monotonic()
+    assert abs(await backend.compare("brief", found[0], found[1]) - 0.5) < 1e-9       # 0.7 one way, 0.3 the other
+    assert time.monotonic() - started < 0.35 and len(calls) == 2                     # the two orders side by side
+    assert await backend.importance("brief", found[0]) is not None
+    again = real.RealBackend(cfg, lambda tier, cost, tokens: None, tmp_path / ".hm" / "runs" / "r2")     # the next run
+    await again.compare("brief", found[0], found[1])
+    await again.importance("brief", found[0])
+    assert len(calls) == 3                       # a restart asks neither comparison again, nor a score it has
+    await again.compare("another brief", found[0], found[1])
+    assert len(calls) == 5                       # a new brief is asked afresh

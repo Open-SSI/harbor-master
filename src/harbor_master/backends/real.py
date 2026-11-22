@@ -12,6 +12,8 @@ report is written by code from the records, with no model.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import hashlib
 import json
 import re
 import shutil
@@ -61,6 +63,64 @@ def card(task: Task, limit: int = 1200) -> str:
     text = " ".join(re.sub(r"<!--.*?-->", " ", task.instruction, flags=re.S).split())     # no canary comments
     lines.append("Instruction, beginning: " + (text[:limit] + ("..." if len(text) > limit else "")))
     return "\n".join(lines)
+
+
+class RankCache:
+    """The decision model's ranking answers on this machine, kept in a file: a run that is stopped and started again,
+    or that ranks again after screening changed, asks only what it has not asked before. Keyed by the model, the
+    skill's version and everything the model was shown, so a changed brief or task card is asked afresh."""
+
+    def __init__(self, path: Path):
+        self.path, self._seen = path, None
+
+    @staticmethod
+    def key(model: str, tag: str, state: dict) -> str:
+        return hashlib.sha256(json.dumps([model, tag, state], sort_keys=True).encode()).hexdigest()
+
+    def _load(self) -> dict[str, float]:
+        if self._seen is None:
+            self._seen = {}
+            with contextlib.suppress(OSError, ValueError):
+                for line in self.path.read_text().splitlines():
+                    k, v = json.loads(line)
+                    self._seen[k] = float(v)
+        return self._seen
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._load()
+
+    def __getitem__(self, key: str) -> float:
+        return self._load()[key]
+
+    def __setitem__(self, key: str, value: float) -> None:
+        self._load()[key] = value
+        with contextlib.suppress(OSError):
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("a") as f:
+                f.write(json.dumps([key, value]) + "\n")
+
+
+COST_RULE = """For this question, read the files that grade a submission: tests/test.sh, and the test files it runs. Answer
+"costly" only from what you read there: grading needs a GPU or a paid API, or the tests themselves do slow work, such as
+running a solver over many cases or a long simulation. A timeout setting is a limit, not how long grading takes: it is no
+evidence on its own, and neither is the instruction's time allowed for the agent's own work. For "costly", give the file
+you read and copy one line from it that shows the slow work. If you did not read the tests, or found nothing slow in them,
+answer "cheap": the curation measures the real time of grading later, and drops a task whose grading is too slow."""
+
+
+def cited(folder: Path, file: str, quote: str) -> str:
+    """Why a cited line does not hold up, or "": the file must be the task's, and hold the line, as copied."""
+    file, quote = (file or "").strip().lstrip("./"), " ".join((quote or "").split())
+    if not file or not quote:
+        return "it cited no file and line"
+    path = (folder / file).resolve()
+    if not path.is_file() or folder.resolve() not in path.parents:
+        return f"it cited {file}, which the task does not have"
+    try:
+        text = " ".join(path.read_text(errors="replace").split())
+    except OSError:
+        return f"{file} could not be read"
+    return "" if quote in text else f"the line it quoted is not in {file}"
 
 
 def _choice_schema(choices: list[str], rationale: bool = False) -> dict:
@@ -137,6 +197,7 @@ class RealBackend(Backend):
         self.sim = SimulatedBackend(cfg, lambda tier, cost, tokens: None, speed=0)
         self.kept: dict[str, list[dict]] = {}       # each task version's agent trials, by digest: what the audits read
         self.mutants: dict[str, list[dict]] = {}    # each task version's mutants and what the verifier said of them
+        self.ranked = RankCache(run_dir.parents[1] / "cache" / "ranking.jsonl")     # answers kept for a restart
         if cfg.tiers.decision.provider != "openrouter":     # a general model states a confidence, not a probability
             raise NotImplementedBackend(
                 f"The decision tier is set to provider {cfg.tiers.decision.provider!r}. It runs on Jev only: "
@@ -195,21 +256,41 @@ class RealBackend(Backend):
 
     async def confirm(self, gate: str, choices: list[str], task: Task, first: Decision) -> Decision:
         skill, (questions, _, _) = skills.load("triage/confirm"), gates.wording()
-        r = await self._ask("worker", skill.system,
-                            skill.fill(question=questions[gate], first_value=first.value or "(no answer)",
-                                       first_prob=f"{first.prob:.2f}", task=describe(task)),
-                            _choice_schema(choices, rationale=True), cwd=task.path, max_turns=12)
-        return Decision(r.data["value"], float(r.data["confidence"]), "worker", self.cfg.tiers.worker.model,
-                        r.cost, r.tokens, r.data.get("rationale", ""), skill=skill.tag)
+        prompt = skill.fill(question=questions[gate], first_value=first.value or "(no answer)",
+                            first_prob=f"{first.prob:.2f}", task=describe(task))
+        schema = _choice_schema(choices, rationale=True)
+        if gate == "verifier_cost":
+            prompt += "\n\n" + COST_RULE
+            schema["properties"]["evidence_file"] = {"type": "string", "description": "The task file you read that shows grading "
+                                                     "is slow, relative to the task's folder. Empty for cheap."}
+            schema["properties"]["evidence_quote"] = {"type": "string", "description": "One line copied exactly from that file. "
+                                                      "Empty for cheap."}
+            schema["required"] = list(schema["properties"])
+        r = await self._ask("worker", skill.system, prompt, schema, cwd=task.path, max_turns=16)
+        d = Decision(r.data["value"], float(r.data["confidence"]), "worker", self.cfg.tiers.worker.model,
+                     r.cost, r.tokens, r.data.get("rationale", ""), skill=skill.tag)
+        if gate == "verifier_cost" and d.value == "costly":
+            why = cited(task.path, r.data.get("evidence_file", ""), r.data.get("evidence_quote", ""))
+            if why:         # a costly with nothing read behind it drops nothing: verify measures the real time
+                return Decision("cheap", d.prob, "worker", d.model, d.cost, d.tokens,
+                                f"Not dropped: {why}. It said: {d.rationale}", skill=d.skill)
+            d.evidence = f"{r.data['evidence_file']}: {r.data['evidence_quote'].strip()}"[:400]
+        return d
 
     async def importance(self, brief: str, task: Task) -> float | None:
         skill = skills.load("rank/score")
         state = {"brief_from_the_field_lead": brief or "(none given)", "task": card(task)}
+        key = self.ranked.key(self.cfg.tiers.decision.model, skill.tag, state)
+        if key in self.ranked:
+            return self.ranked[key]
         q = {"importance": {"type": "score", "instructions": skill.data["question"], "criteria": skill.data["levels"]}}
         answers, cost, tokens = await jev.decisions(self.cfg.tiers.decision.model, state, q)
         self.usage("decision", cost, tokens)
         answer = answers.get("importance") or {}
-        return float(answer["score"]) if answer.get("type") == "score" and "score" in answer else None
+        score = float(answer["score"]) if answer.get("type") == "score" and "score" in answer else None
+        if score is not None:
+            self.ranked[key] = score
+        return score
 
     async def compare(self, brief: str, a: Task, b: Task) -> float:
         skill = skills.load("rank/compare")
@@ -217,12 +298,20 @@ class RealBackend(Backend):
         async def ask(first: Task, second: Task) -> float:
             state = {"brief_from_the_field_lead": brief or "(none given)",
                      "first_task": card(first), "second_task": card(second)}
+            key = self.ranked.key(self.cfg.tiers.decision.model, skill.tag, state)
+            if key in self.ranked:
+                return self.ranked[key]
             q = {"first_matters_more": jev.noul(skill.data["question"], skill.data["yes"], skill.data["no"])}
             answers, cost, tokens = await jev.decisions(self.cfg.tiers.decision.model, state, q)
             self.usage("decision", cost, tokens)
-            return min(0.99, max(0.01, float((answers.get("first_matters_more") or {}).get("noul", 0.5))))
+            got = (answers.get("first_matters_more") or {}).get("noul")
+            p = min(0.99, max(0.01, float(got if got is not None else 0.5)))
+            if got is not None:
+                self.ranked[key] = p
+            return p
 
-        return (await ask(a, b) + (1 - await ask(b, a))) / 2      # both orders, to cancel position bias
+        ab, ba = await asyncio.gather(ask(a, b), ask(b, a))      # both orders, to cancel position bias, side by side
+        return (ab + (1 - ba)) / 2
 
     # ----- tier W -----
 
