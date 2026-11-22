@@ -1,12 +1,33 @@
 <h1 align="center">Harbor-Master</h1>
 
 <p align="center">
-  <strong>Harbor-Master</strong> curates benchmarks into an <strong>index</strong>: tasks that are sound, verifiable, and still too hard for frontier agents. It checks each task in stages ordered by cost, repairs what is broken, and hands a person a report to sign. Every decision, trial and verdict goes into a <strong>signed ledger</strong>, so nothing runs twice and anyone can check how a task got in.
+  <strong>Benchmarks saturate fast, and curating hard ones by hand does not scale.</strong> <strong>Harbor-Master</strong> turns curation into a <strong>continual, open process run by agents</strong>: it takes benchmarks in any format and keeps an <strong>index</strong> of tasks that are sound, verifiable, and still too hard for frontier agents. People only <strong>sign the verdict</strong>.
+</p>
+<p align="center">
+  Every task goes through stages ordered by cost. Agents <strong>audit before anything runs</strong>, <strong>repair</strong> what is broken, and spend <strong>frontier trials last</strong>. Every decision, trial and verdict is a record in a <strong>signed ledger</strong>, so nothing runs twice and anyone can check how a task got in.
+</p>
+
+<p align="center">
+  <a href="https://harbor-master.org"><img src="https://img.shields.io/badge/🌐_Project_Page-6C63E3?style=for-the-badge&logoColor=white" alt="Project page"></a>
+  <a href="https://open-ssi.org"><img src="https://img.shields.io/badge/🔭_Open--SSI-0F766E?style=for-the-badge&logoColor=white" alt="Open-SSI"></a>
 </p>
 
 <p align="center">
   <img src="assets/pipeline.svg" width="100%" alt="How a benchmark becomes index tasks. Once per benchmark: fetch, check, adapt, screen, rank and select. Each selected task then goes through a work cell of its own, in parallel: verify, probe, worker, audit (with a fix loop back to verify), difficulty, report, verdict. Accepted tasks land in the index, and every stage writes signed records to the index repository.">
 </p>
+
+## Why Harbor-Master
+
+The last large curation of agent tasks, Harbor-Index, took 6,627 tasks down to 82. It needed over 10,000 review comments and 14 expert reviewers, it spent frontier trials on tasks that were broken, and it ran once. Harbor-Master does the same job differently:
+
+1. **Cheapest judge first.** A small decision model takes every gate as a typed value with a probability. A worker agent audits and repairs, a frontier agent is called only when they are unsure or stuck, and a person signs the final report. Ranking all 70 Terminal-Bench-Science tasks took 468 decision calls, $0.02 and 11 seconds.
+2. **Audit before anything runs.** Before any trial, agents read every task to check that its reference solution really solves it, and that its instruction states the form of the answer and the goal the tests judge. An undisclosed bar on a stated goal counts as difficulty, not a defect.
+3. **Repair, not just filter.** A task the worker agent fails because of a broken environment or an unclear check is repaired, and the new version goes through every check again.
+4. **Frontier trials last, and once.** Only a task that passes everything else meets the frontier agents, and their trials stop as soon as the outcome is settled.
+5. **A ledger that remembers.** Records are signed, hash-chained and keyed by the task's content. A repair re-runs only what it affects. A new setting keeps what was already settled. A model that cannot be reached leaves its task for the next run, not dropped.
+6. **Open and continual.** An index is a git repository. Anyone the owner adds curates from their own machine, claims keep two people off the same benchmark, and each benchmark curated keeps the index current.
+
+We estimate this takes about 15 expert hours per 1,000 tasks, against about 130 for Harbor-Index's one-off curation, at about a sixth of the total cost ([DESIGN.md](DESIGN.md), Section 12).
 
 ## Install
 
@@ -49,7 +70,7 @@ Type a listed benchmark's name, or paste any link to a new one: an agent finds i
 | The **selection**: how many ranked tasks go on | How many work cells run at once |
 | A **verdict** on each kept task: `accept`, or `reject <why>` | A benchmark that is rejected, with why |
 
-A trial that hangs is stopped, and a box asks whether to retry it or drop the task. `ctrl+l` leaves (a real run goes on, and `hm curate` shows it again), `ctrl+z` ends the run.
+The line beside curate counts every chosen task as working, waiting, accepted, dropped or left for retry, and the counts add up to the selection. A trial that hangs is stopped, and a box asks whether to retry it or drop the task. A task left for retry (a model that could not be reached, a run you ended) is taken again by the next `hm curate`, and what it already passed is kept. `ctrl+l` leaves (a real run goes on, and `hm curate` shows it again), `ctrl+z` ends the run.
 
 <p align="center">
   <img src="assets/review.png" width="100%" alt="The review box: the report on a kept task, opening with its recommendation and the reasons for it, and an input for accept or reject.">
@@ -84,10 +105,10 @@ A fast **decision** model takes every gate, a **worker** agent builds, audits an
 1. **Fetch** the benchmark at its pinned release, **check** it as a whole, and **adapt** it to Harbor format if needed.
 2. **Screen** each task: an agent executes work, a program grades it, and no model is reported to solve it more than 40% of the time.
 3. **Rank** the tasks under your brief and **select** the top ones (at most 24, and a quarter of the benchmark).
-4. **Verify and probe**: nothing is run. The worker agent audits whether the reference solution is valid (one is written if missing) and whether the instruction states everything the tests check. The decision model decides from each audit, the frontier agent audits again when it is unsure or goes against the worker's verdict, and a person confirms any drop.
-5. **Worker and audit**: a task the worker agent solves twice is too easy; a broken one is repaired and checked again.
-6. **Difficulty**: two frontier agents try three times each; a task is kept if at most 3 of the 6 pass.
-7. **Report**: you accept or reject each kept task.
+4. **Verify and probe**: nothing is run. The worker agent audits whether the reference solution is valid (one is written if missing), and whether the instruction gives the form of the answer and the goal the tests check. The decision model decides from each audit. The frontier agent audits again when that decision is unsure or goes against the worker's verdict. A rejection stands only if the last agent to audit found a decisive point itself, and a person confirms every drop.
+5. **Worker and audit**: the worker agent tries twice, side by side. A task it solves both times is too easy. When it fails, an audit says whether the task, the agent or the infrastructure was at fault. A broken task is repaired and goes back to step 4, for at most two rounds.
+6. **Difficulty**: two frontier agents try three times each, and a task is kept if at most 3 of the 6 pass. The count is checked after every trial, and the run stops once the outcome is settled.
+7. **Report**: you accept or reject each kept task. An accepted task goes to the task store as a complete Harbor task.
 
 A benchmark that is rejected, or of which no task is accepted, is dropped after you confirm; anyone may curate it again.
 
