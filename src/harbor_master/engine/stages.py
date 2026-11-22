@@ -202,8 +202,8 @@ async def audited(s: Session, cell: CellState, task: Task, check: str) -> tuple[
 
     1. The worker agent reads the task's files and writes what it found.
     2. The decision model decides from that, with a probability.
-    3. Unsure (under the escalation threshold, or no answer): the frontier agent audits again, shown the worker's audit,
-       and the decision model decides from both.
+    3. Unsure (under the escalation threshold, or no answer), or against the worker's own verdict, however sure: the
+       frontier agent audits again, shown the worker's audit, and the decision model decides from both.
     4. A decision to reject goes to a person in a box, who drops the task or lets it go on.
 
     Each step is recorded. A decision already made for this version of the task, under this protocol, is used as it is:
@@ -217,30 +217,36 @@ async def audited(s: Session, cell: CellState, task: Task, check: str) -> tuple[
         if prior.get("tier") == "human":
             s.board(task)["why"] = f"{c['says']}, and a person confirmed the drop"
             return "drop", f"{check}_rejected"
-        return await confirm_drop(s, task, check, prior.get("rationale", ""))
+        verdicts = " ".join(f"The {t} agent's verdict: {v}." for t, v in (prior.get("verdicts") or {}).items())
+        return await confirm_drop(s, task, check, f"{verdicts} The decision model decided {prior.get('value') or 'nothing'}."
+                                  f"\n\nThe {prior.get('tier', 'last')} agent found:\n{prior.get('rationale', '')}")
     t0 = enter(cell, STAGE_NO[stage], c["doing"])
     first = await s.backend.check_audit(task, check, "worker")
     audits = [first]
     d = await s.backend.check_decide(task, check, audits)
     floor = s.cfg.escalation.gate_min_confidence.get(check, s.cfg.escalation.min_confidence)
-    if not d.value or d.prob < floor:
+    if not d.value or d.prob < floor or d.value != first.value:
         s.record(task.benchmark, "decision", task, stage=stage, gate=check, tier="worker", model=first.model, value=d.value,
                  probability=round(d.prob, 3), outcome="escalate", cost=first.cost + d.cost, rationale=first.rationale[:2000],
-                 skill=first.skill)
-        cell.detail = "the decision was unsure: the frontier agent audits it"
+                 skill=first.skill, verdict=first.value)
+        cell.detail = ("the decision went against the worker's verdict" if d.value and d.value != first.value else
+                       "the decision was unsure") + ": the frontier agent audits it"
         audits.append(await s.backend.check_audit(task, check, "frontier", [first]))
         d = await s.backend.check_decide(task, check, audits)
     last = audits[-1]
     ok = bool(d.value) and d.value != c["reject"]
+    verdicts = {a.tier: a.value for a in audits}
     s.record(task.benchmark, "decision", task, stage=stage, gate=check, tier=last.tier, model=last.model, value=d.value,
              probability=round(d.prob, 3), outcome="pass" if ok else "reject", cost=last.cost + d.cost,
-             rationale=last.rationale[:2000], skill=last.skill)
+             rationale=last.rationale[:2000], skill=last.skill, verdicts=verdicts)
     s.stage_done(task, STAGE_NO[stage], t0, check=check, value=d.value or "no answer", probability=round(d.prob, 3),
                  tiers=[a.tier for a in audits], rationale=last.rationale)
     if ok:
         return "ok", ""
-    return await confirm_drop(s, task, check, last.rationale if d.value else
-                              "The decision model gave no answer, even after the frontier agent's audit. " + last.rationale)
+    said = " ".join(f"The {tier} agent's verdict: {value}." for tier, value in verdicts.items())
+    said += (f" The decision model decided {d.value}, at p={d.prob:.2f}." if d.value else
+             " The decision model gave no answer, even after the frontier agent's audit.")
+    return await confirm_drop(s, task, check, f"{said}\n\nThe {last.tier} agent found:\n{last.rationale}")
 
 
 async def confirm_drop(s: Session, task: Task, check: str, found: str) -> tuple[str, str]:
@@ -249,7 +255,7 @@ async def confirm_drop(s: Session, task: Task, check: str, found: str) -> tuple[
     c = CHECKS[check]
     s.board(task)["why"] = c["says"]
     s.note_recent("to drop", task.task_id, f"{c['says']}: a person decides")
-    text = (f"{task.task_id}: {c['says']}.\n\n{found.strip()[:1800]}\n\n"
+    text = (f"{task.task_id}: {c['says']}.\n\n{found.strip()[:2400]}\n\n"
             "Drop drops the task. Continue ignores this, and the task goes on to its next stage.")
     said = await s.ask("drop", text, task.task_id, ["drop", "continue"])
     if said is None:                # recorded under the agent's rejection, which stands: the next run asks again

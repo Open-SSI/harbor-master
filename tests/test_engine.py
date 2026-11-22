@@ -83,15 +83,17 @@ async def test_a_benchmark_of_which_no_task_is_accepted_is_dropped(workspace, id
     assert status() == "dropped" and "no task was accepted" in s.benches["demo-bench"].detail
 
 
-def _scripted(session, monkeypatch, decided):
-    """The audits as a script: each agent's audit says which tier wrote it, and the decision model answers `decided`,
-    one (value, probability) for each call, in turn. Returns what each call was given."""
+def _scripted(session, monkeypatch, decided, verdicts=None):
+    """The audits as a script: each agent's audit says which tier wrote it, with its verdict from `verdicts` (by tier;
+    by default the decision's own first answer, so they agree), and the decision model answers `decided`, one (value,
+    probability) for each call, in turn. Returns what each call was given."""
     from harbor_master.backends import Decision
     seen = {"audit": [], "decide": []}
+    verdicts = verdicts or {"worker": decided[0][0], "frontier": decided[-1][0]}
 
     async def check_audit(task, check, tier, earlier=None):
         seen["audit"].append((check, tier, [e.rationale for e in earlier or []]))
-        return Decision("", 0.0, tier, f"{tier}-model", 0.1, 100, f"the {tier} agent's findings")
+        return Decision(verdicts[tier], 0.0, tier, f"{tier}-model", 0.1, 100, f"the {tier} agent's findings")
 
     async def check_decide(task, check, audits):
         seen["decide"].append([a.rationale for a in audits])
@@ -123,6 +125,28 @@ async def test_an_unsure_decision_goes_to_the_frontier_agent_and_is_decided_on_b
     assert seen["decide"][1] == ["the worker agent's findings", "the frontier agent's findings"]
     said = [e for e in session.ledger.events if e.get("gate") == "coverage"]
     assert [(e["tier"], e["outcome"]) for e in said] == [("worker", "escalate"), ("frontier", "pass")]
+
+
+async def test_a_sure_decision_against_the_workers_own_verdict_goes_to_the_frontier_agent(workspace, session, monkeypatch):
+    """The worker found only minor points and said covered; the decision model, sure, said unstated. The frontier agent
+    audits it, and the box, if any, opens with both verdicts."""
+    from harbor_master.engine import stages
+    from harbor_master.engine.state import CellState
+    task = tasks.load_benchmark(Path(tasks.read_registry(workspace)["demo-bench"]["path"]), "demo-bench")[0]
+    seen = _scripted(session, monkeypatch, [("unstated", 0.95), ("unstated", 0.9)], {"worker": "covered", "frontier": "unstated"})
+    boxes = []
+
+    async def person(kind, text, target="", choices=None):
+        boxes.append(text)
+        return "continue"
+    monkeypatch.setattr(session, "ask", person)
+    assert await stages.stage_probe(session, CellState(1), task, 0) == ("ok", "")
+    assert [t for _, t, _ in seen["audit"]] == ["worker", "frontier"]
+    said = [e for e in session.ledger.events if e.get("gate") == "coverage"]
+    assert [(e["tier"], e["outcome"]) for e in said] == [("worker", "escalate"), ("frontier", "reject"), ("human", "pass")]
+    assert said[1]["verdicts"] == {"worker": "covered", "frontier": "unstated"}
+    first = boxes[0].split("\n\n")[1]
+    assert first.startswith("The worker agent's verdict: covered. The frontier agent's verdict: unstated. The decision model decided unstated")
 
 
 async def test_a_rejection_is_a_persons_to_confirm_and_continue_lets_the_task_go_on(workspace, session, monkeypatch):

@@ -1,6 +1,7 @@
 # Is the reference solution a valid one? (DESIGN.md Section 4, stage 3.)
 # Asked once per selected task, before any agent trial. Nothing is run: an agent reads the task's files and writes an
-# audit, and the decision tier decides from that audit. When it is unsure, the frontier tier audits again.
+# audit with its own verdict, and the decision tier decides from that audit. When it is unsure, or disagrees with
+# the verdict, the frontier tier audits again.
 
 system = "You audit the reference solution of a benchmark task for a curated index. You read files and never run anything. Report what you find, with the file and the lines it rests on."
 
@@ -14,10 +15,14 @@ It is not valid when it cheats or cannot work. Look for each of these, and say f
 - it uses a tool, file, package or network resource the environment does not provide, or has a plain error that would make it fail;
 - it does not produce what the instruction asks for, where the instruction asks for it.
 
-Read the instruction, the solution, the tests and the environment's Dockerfile. Write a short summary: what the solution does, each problem found with its file and the lines, and what you could not tell."""
+Read the instruction, the solution, the tests, the environment's Dockerfile and any code under environment/ that the solution calls.
+
+Mark each problem as decisive or minor. Decisive: the solution cheats, or would plainly fail. Minor: a style or robustness point that leaves it a legitimate, working solution.
+
+Give your verdict: valid, unless you found at least one decisive problem. Then write a summary that starts with your verdict and the decisive problems, each with its file and lines; then the minor ones; then what the solution does and what you could not tell."""
 
 question = "Is this task's reference solution a valid one: it solves the task legitimately, without reading the tests, hard-coding answers or faking the work, and nothing in it would plainly fail?"
 
 [criteria]
 valid = "The solution does the work the instruction asks for, in the task's environment, without copying from the tests or faking outputs, and the audit found nothing that would make it fail."
-invalid = "The audit found that the solution cheats (reads the tests, hard-codes answers, writes placeholder output, skips a required step) or cannot work (a missing tool or file, a plain error, the wrong output)."
+invalid = "The audit found at least one decisive problem: the solution cheats (reads the tests, hard-codes answers, writes placeholder output, skips a required step) or cannot work (a missing tool or file, a plain error, the wrong output). Minor points alone are not enough."

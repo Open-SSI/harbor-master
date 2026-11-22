@@ -84,7 +84,7 @@ A fast **decision** model takes every gate, a **worker** agent builds, audits an
 1. **Fetch** the benchmark at its pinned release, **check** it as a whole, and **adapt** it to Harbor format if needed.
 2. **Screen** each task: an agent executes work, a program grades it, and no model is reported to solve it more than 40% of the time.
 3. **Rank** the tasks under your brief and **select** the top ones (at most 24, and a quarter of the benchmark).
-4. **Verify and probe**: nothing is run. The worker agent audits whether the reference solution is valid (one is written if missing) and whether the instruction states everything the tests check. The decision model decides from each audit, the frontier agent audits again when it is unsure, and a person confirms any drop.
+4. **Verify and probe**: nothing is run. The worker agent audits whether the reference solution is valid (one is written if missing) and whether the instruction states everything the tests check. The decision model decides from each audit, the frontier agent audits again when it is unsure or goes against the worker's verdict, and a person confirms any drop.
 5. **Worker and audit**: a task the worker agent solves twice is too easy; a broken one is repaired and checked again.
 6. **Difficulty**: two frontier agents try three times each; a task is kept if at most 3 of the 6 pass.
 7. **Report**: you accept or reject each kept task.

@@ -119,8 +119,9 @@ class Backend(ABC):
 
     @abstractmethod
     async def check_audit(self, task: Task, check: str, tier: str, earlier: list[Decision] | None = None) -> Decision:
-        """An agent of `tier` reads the task's files for one of CHECKS and writes what it found: the rationale of a
-        Decision with no value. `earlier` holds the audits the decision tier was unsure on."""
+        """An agent of `tier` reads the task's files for one of CHECKS: its own verdict is the Decision's value (with no
+        probability), and what it found, verdict and decisive points first, its rationale. `earlier` holds the audits the
+        decision tier was unsure on, or decided against."""
         ...
     @abstractmethod
     async def check_decide(self, task: Task, check: str, audits: list[Decision]) -> Decision:

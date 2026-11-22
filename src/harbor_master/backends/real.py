@@ -149,8 +149,12 @@ def tests_text(task: Task, limit: int = 14000) -> str:
     return "\n".join(out) or "(no readable tests)"
 
 
-AUDIT_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["summary"],
-                "properties": {"summary": {"type": "string", "description": "What was found, each point with the file and lines it rests on."}}}
+def _audit_schema(choices: list[str]) -> dict:
+    """An audit's answer: the agent's own verdict, and what it found, its verdict and decisive points first."""
+    return {"type": "object", "additionalProperties": False, "required": ["verdict", "summary"],
+            "properties": {"verdict": {"type": "string", "enum": choices},
+                           "summary": {"type": "string", "description": "The verdict and the decisive points first, then the minor "
+                                       "ones, each with the file and lines it rests on."}}}
 DIAGNOSES = ["write_solution", "repair_solution", "repair_verifier", "repair_environment", "drop"]
 REPORTED_SCHEMA = {
     "type": "object", "additionalProperties": False, "required": ["source", "tasks"],
@@ -329,11 +333,13 @@ class RealBackend(Backend):
             d.cost = 0.0
             return d
         skill = skills.load(c["skill"])
-        before = "".join(f"\n\nAN EARLIER AUDIT, by the {e.tier} model, which left the decision unsure. Read the files "
-                         f"yourself and take nothing in it on trust:\n{e.rationale}" for e in (earlier or []))
+        before = "".join(f"\n\nAN EARLIER AUDIT, by the {e.tier} model, whose verdict was \"{e.value}\". The decision on it was "
+                         f"unsure, or went against that verdict. Read the files yourself and take nothing in it on trust:\n{e.rationale}"
+                         for e in (earlier or []))
         prompt = f"{skill.data['agent']}\n\nThe task's files, its solution and tests among them, are in the current directory.{before}\n\n{describe(task)}"
-        r = await self._ask(tier, skill.data["system"], prompt, AUDIT_SCHEMA, cwd=task.path, max_turns=40 if tier == "frontier" else 30)
-        return Decision("", 0.0, tier, self.cfg.tier(tier).model, r.cost, r.tokens, r.data["summary"], skill=skill.tag)
+        r = await self._ask(tier, skill.data["system"], prompt, _audit_schema(c["choices"]), cwd=task.path,
+                            max_turns=40 if tier == "frontier" else 30)
+        return Decision(r.data["verdict"], 0.0, tier, self.cfg.tier(tier).model, r.cost, r.tokens, r.data["summary"], skill=skill.tag)
 
     async def check_decide(self, task: Task, check: str, audits: list[Decision]) -> Decision:
         c = CHECKS[check]
@@ -343,7 +349,7 @@ class RealBackend(Backend):
             return d
         skill = skills.load(c["skill"])
         state = {"task": describe(task, 4000)[:8000],
-                 "audits": [{"by": f"the {a.tier} model", "found": a.rationale[:8000]} for a in audits]}
+                 "audits": [{"by": f"the {a.tier} model", "verdict": a.value, "found": a.rationale[:8000]} for a in audits]}
         answers, cost, tokens = await jev.decisions(self.cfg.tiers.decision.model, state,
                                                     {check: jev.choice(skill.data["question"], skill.data["criteria"])})
         self.usage("decision", cost, tokens)

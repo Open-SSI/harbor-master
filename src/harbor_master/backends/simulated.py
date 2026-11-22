@@ -129,7 +129,9 @@ class SimulatedBackend(Backend):
                  ("solution", False): "solution/solve.py computes the output from the task's data; it reads nothing under tests/.",
                  ("coverage", True): "tests/test_outputs.py line 40 requires a tolerance of 1% on each value; the instruction never states one.",
                  ("coverage", False): "Every check in tests/ is stated in the instruction or follows plainly from it."}
-        return Decision("", 0.0, tier, self.cfg.tier(tier).model, cost, tokens, found[(check, self._flawed(task, check))],
+        flawed = self._flawed(task, check)
+        verdict = CHECKS[check]["reject"] if flawed else CHECKS[check]["choices"][0]
+        return Decision(verdict, 0.0, tier, self.cfg.tier(tier).model, cost, tokens, f"{verdict}. {found[(check, flawed)]}",
                         skill=CHECKS[check]["skill"])
 
     async def check_decide(self, task: Task, check: str, audits: list[Decision]) -> Decision:
