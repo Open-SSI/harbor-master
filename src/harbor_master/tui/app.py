@@ -81,6 +81,7 @@ def decided(session, request, said: str) -> None:
 
 
 class SessionApp(App[None]):
+    ALLOW_SELECT = False        # a click that moves a cell would leave a selection box on the screen for good
     ENABLE_COMMAND_PALETTE = False
     BINDINGS = [Binding("ctrl+z", "quit_run", "Quit", priority=True), Binding("ctrl+q", "quit_run", "Quit", show=False, priority=True),
                 ("ctrl+l", "leave", "Leave"),

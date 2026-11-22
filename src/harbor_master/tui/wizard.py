@@ -40,6 +40,7 @@ class Step:
 
 class WizardApp(App[Answers | None]):
     """Asks the steps in order and returns the answers, or None when it is cancelled."""
+    ALLOW_SELECT = False        # a click that moves a cell would leave a selection box on the screen for good
     ENABLE_COMMAND_PALETTE = False
     BINDINGS = [("escape", "back", "Back"), ("ctrl+z", "cancel", "Cancel"), Binding("ctrl+q", "cancel", "Cancel", show=False), ("ctrl+t", "theme", "Light or dark")]
     CSS = SCROLLBARS + f"""

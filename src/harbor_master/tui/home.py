@@ -88,6 +88,7 @@ def pairs(rows: list[tuple[str, str | Text]]) -> Table:
 
 
 class IndexApp(App[None]):
+    ALLOW_SELECT = False        # a click that moves a cell would leave a selection box on the screen for good
     ENABLE_COMMAND_PALETTE = False
     BINDINGS = [("ctrl+z", "quit", "Quit"), Binding("ctrl+q", "quit", "Quit", show=False), ("q", "quit", "Quit"), ("r", "read", "Read again"), ("ctrl+t", "theme", "Light or dark")]
     CSS = SCROLLBARS + f"""
