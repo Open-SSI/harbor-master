@@ -112,3 +112,35 @@ async def test_a_correct_variant_whose_own_script_fails_counts_for_nothing(works
     assert await stages.mutants(session, CellState(1), task) == ("ok", "")
     said = next(e for e in session.ledger.events if e.get("gate") == "verifier")
     assert said["outcome"] == "pass" and said["broken"] and not said.get("right_rejected")
+
+
+async def test_a_costly_verifier_is_the_worker_agents_to_confirm_and_an_old_drop_is_screened_again(workspace, session, monkeypatch):
+    from harbor_master.backends import Decision
+    from harbor_master.engine import shared
+    task = tasks.load_benchmark(Path(tasks.read_registry(workspace)["demo-bench"]["path"]), "demo-bench")[0]
+    session.benches[task.benchmark].reported = {}
+    sure = {"format": "agentic", "verifier": "programmatic", "duplicate": "distinct"}
+    confirmed = []
+
+    async def decide_gates(task, wanted):        # the small model calls the verifier costly, fairly sure
+        return {g: Decision("costly", 0.7, "decision", "small") if g == "verifier_cost" else Decision(sure[g], 0.99, "decision", "small")
+                for g in wanted}
+
+    async def confirm(gate, choices, task, first):   # the worker agent reads the tests: it is cheap
+        confirmed.append((gate, first.value))
+        return Decision("cheap", 0.9, "worker", "agent", rationale="the tests run in seconds")
+    monkeypatch.setattr(session.backend, "decide_gates", decide_gates)
+    monkeypatch.setattr(session.backend, "confirm", confirm)
+    assert await shared.triage(session, task) and confirmed == [("verifier_cost", "costly")]
+
+    # A drop recorded before, on the small model's word alone, is screened again: the worker decides it.
+    other = tasks.load_benchmark(Path(tasks.read_registry(workspace)["demo-bench"]["path"]), "demo-bench")[1]
+    session.record(other.benchmark, "decision", other, stage="triage", gate="gates", tier="decision", outcome="drop",
+                   reason="verifier_cost:costly", value={"format": {"value": "agentic", "p": 1.0, "tier": "decision"},
+                                                         "verifier": {"value": "programmatic", "p": 1.0, "tier": "decision"},
+                                                         "verifier_cost": {"value": "costly", "p": 0.64, "tier": "decision"}})
+    assert await shared.triage(session, other) and confirmed[-1] == ("verifier_cost", "costly")
+    standing = session.ledger.decision(other.digest, "triage", "gates", session.protocol)
+    assert (standing["outcome"], standing["tier"]) == ("pass", "worker")
+    assert await shared.triage(session, other)                  # and that answer stands: it is not asked a third time
+    assert len(confirmed) == 2

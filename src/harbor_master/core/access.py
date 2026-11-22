@@ -4,16 +4,22 @@ A key that is present can still be wrong or expired, a token that sees the task 
 not be allowed to push, and Docker may not be running. Each would fail hours into a run. So each is tried once, with
 the smallest real request there is, and every problem is listed together. Nothing here writes or spends anything that
 matters: key checks read an account or list models (one a few-token model call, for a Claude sign-in, which has no free
-check), the push is a dry run, and the store is only asked whether this token may write.
+check), the push is a dry run, and the store is only asked whether this token may write. Each agent of the difficulty
+suite is also started once in a small container, as a trial would start it (the same program, mounted the same way,
+with the same credentials), and asked to run one shell command on its model: a few cents, and a broken agent is found
+before a single trial is counted as failed because of it.
 """
 from __future__ import annotations
 
 import os
+import secrets
 import shutil
 import subprocess
+import tempfile
+import time
 import urllib.error
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable
 
@@ -136,25 +142,89 @@ def docker() -> str:
     return ""
 
 
-def problems(cfg, ws: Path) -> list[str]:
-    """Everything that keeps a real curation from working here, tried side by side. Empty when it can start."""
-    jobs: dict[str, Callable[[], str]] = {"store": lambda: store(cfg), "repository": lambda: repository(ws), "docker": docker}
+IMAGE = "python:3.12-slim"          # small, with certificates, and the C library both agents' programs are built for
+
+
+def agent_runs(agent: str, model: str, version: str) -> str:
+    """Why an agent of the suite cannot run a command in a container here, or "". It is started as a trial starts it: its
+    pinned program mounted at /usr/local/bin, and the credentials a trial gets. It is asked to write a word to a file,
+    and the file is read after it ends: an agent that answers but cannot run a command (a missing helper program, a
+    refused sign-in) fails here, not in a trial."""
+    from ..backends import agents
+    mounted = agents.mounts(agent, version)
+    if not mounted:
+        return ""           # no program of its own to mount: Harbor installs the agent in each container, and is trusted to
+    word = f"hm-check-{secrets.token_hex(4)}"
+    ask = f"Run this shell command with your shell tool: echo {word} > /root/hm-check . Then reply done."
+    env = {k: v for k, v in keys.agent_env(agent).items() if k != "CODEX_AUTH_JSON_PATH"}
+    cmd = ["docker", "run", "--rm", *(a for k in env for a in ("-e", k))]       # the values come from the environment, never the command line
+    for m in mounted:
+        cmd += ["-v", f"{m['source']}:{m['target']}:ro"]
+    with tempfile.TemporaryDirectory() as home:
+        signin = keys.codex_sign_in() if agent == "codex" else None
+        if signin is not None and signin.is_file():         # a copy: Codex rewrites its sign-in when it refreshes it
+            Path(home, "auth.json").write_bytes(signin.read_bytes())
+            cmd += ["-v", f"{home}/auth.json:/root/.codex/auth.json"]       # only the file: what else it writes stays inside
+        if agent == "claude-code":
+            run = f"claude -p {_quote(ask)} --model {_quote(model)} --allowedTools Bash"
+        else:
+            run = (f"codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -m {_quote(model)} "
+                   f"-c model_reasoning_effort=low {_quote(ask)}")
+        cmd += [IMAGE, "bash", "-c", f"cd /root && timeout 170 {run} 2>&1 | tail -n 20; echo; echo \"HM_FILE=$(cat /root/hm-check 2>/dev/null)\""]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=400, env={**os.environ, **env})
+        except subprocess.TimeoutExpired:
+            return f"{agent} did not finish one shell command in a container within a few minutes"
+    out = r.stdout + r.stderr
+    if f"HM_FILE={word}" in out:
+        return ""
+    said = [line.strip() for line in out.splitlines() if line.strip() and not line.startswith("HM_FILE=")]
+    return f"{agent} with {model} could not run a shell command in a container: {keys.scrub(' | '.join(said[-3:]))[:300]}"
+
+
+def _quote(text: str) -> str:
+    return "'" + text.replace("'", "'\\''") + "'"
+
+
+def jobs_of(cfg, ws: Path) -> dict[str, Callable[[], str]]:
+    """Every check, by what it shows on the terminal."""
+    jobs: dict[str, Callable[[], str]] = {"the task store": lambda: store(cfg), "the index's repository": lambda: repository(ws),
+                                          "Docker": docker}
     for name in sorted(wanted(cfg)):
         if name in KEY_CHECKS:
-            jobs[name] = lambda name=name: KEY_CHECKS[name](keys.get(name) or "")
+            jobs[f"key {name}"] = lambda name=name: KEY_CHECKS[name](keys.get(name) or "")
         elif name == "CODEX_AUTH_JSON_PATH":
-            jobs[name] = codex_signin
-        elif name == "CLAUDE_CODE_OAUTH_TOKEN":
-            model = next((cfg.tier(t).model for t in ("worker", "frontier") if cfg.tier(t).provider in ("claude-agent-sdk", "claude")),
-                         "claude-haiku-5-5")
-            jobs[name] = lambda model=model: claude_signin(model)
+            jobs["the Codex sign-in"] = codex_signin
+    for tier in ("worker", "frontier"):     # a Claude model a curation agent uses: one session of a few tokens on it
+        t = cfg.tier(tier)
+        if t.provider in ("claude-agent-sdk", "claude"):
+            jobs[f"the {tier} model, {t.model}"] = lambda model=t.model: claude_signin(model)
+    for e in cfg.difficulty.suite:
+        jobs[f"{e.agent} with {e.model}, in a container"] = lambda e=e: agent_runs(e.agent, e.model, e.version)
+    return jobs
+
+
+def check(cfg, ws: Path, say: Callable[[str, str, float], None] | None = None) -> list[str]:
+    """Everything that keeps a real curation from working here, tried side by side; `say(what, why, seconds)` is told of
+    each as it ends, why being "" when it is fine. Returns the problems: empty when it can start."""
+    jobs, start, out = jobs_of(cfg, ws), time.time(), []
     with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
-        said = dict(zip(jobs, pool.map(lambda f: f(), jobs.values())))
-    out = []
-    for name, why in said.items():
-        if why:
-            out.append(why if name in ("store", "repository", "docker") else f"{name} in secrets.env: {why}")
+        running = {pool.submit(f): what for what, f in jobs.items()}
+        for done in as_completed(running):
+            what = running[done]
+            try:
+                why = done.result()
+            except Exception as err:        # a check that breaks is a problem to show, not a crash
+                why = f"the check failed: {keys.scrub(str(err))[:160]}"
+            if say is not None:
+                say(what, why, time.time() - start)
+            if why:
+                out.append(why if not what.startswith("key ") else f"{what[4:]} in secrets.env: {why}")
     return out
 
 
-__all__ = ["problems", "wanted", "store", "repository", "docker"]
+def problems(cfg, ws: Path) -> list[str]:
+    return check(cfg, ws)
+
+
+__all__ = ["problems", "check", "wanted", "store", "repository", "docker", "agent_runs"]

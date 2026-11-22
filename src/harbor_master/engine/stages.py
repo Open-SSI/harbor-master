@@ -343,13 +343,20 @@ async def stage_difficulty(s: Session, cell: CellState, task: Task, rounds: int)
     result = None
     for r in range(s.cfg.difficulty.trials):
         cell.detail = f"{passes + fails} of {n_total} trials run · {passes} passed"
-        got = await asyncio.gather(*(
-            trial(s, task, "difficulty", entry.agent, entry.model, r,
-                  lambda entry=entry, r=r: s.backend.run_trial(task, entry, r),
-                  version=entry.version, effort=entry.reasoning_effort)
-            for entry in d.suite))
-        passes += sum(bool(e["passed"]) for e in got)
-        fails += sum(not e["passed"] for e in got)
+
+        async def one(entry, r=r):
+            """One trial, counted on the screen and told in the log the moment it ends, not when its round does."""
+            nonlocal passes, fails
+            e = await trial(s, task, "difficulty", entry.agent, entry.model, r,
+                            lambda: s.backend.run_trial(task, entry, r), version=entry.version, effort=entry.reasoning_effort)
+            passes, fails = passes + bool(e["passed"]), fails + (not e["passed"])
+            cell.detail = f"{passes + fails} of {n_total} trials run · {passes} passed"
+            minutes = (e.get("container_seconds") or 0) / 60
+            s.note_recent("checked", task.task_id, f"difficulty try {r + 1} of {d.trials} by {entry.agent} ({entry.model}): "
+                          + ("passed" if e["passed"] else "failed") + (f" after {minutes:.0f} min" if minutes >= 1 else "")
+                          + (f", {e['error'][:80]}" if e.get("error") else ""))
+            return e
+        await asyncio.gather(*(one(entry) for entry in d.suite))
         result = difficulty.outcome(passes, fails, n_total, d.max_pass_rate)
         if result and d.early_stop:
             break

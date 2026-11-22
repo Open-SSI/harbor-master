@@ -53,8 +53,8 @@ max_reported_pass_rate = 0.4    # an agent reads the benchmark's own published r
 
 # ----- adapters: for a benchmark that is not in Harbor format -----
 [adapt]
-max_rounds = 3                  # rounds of writing the adapter in all: the worker's, then the frontier model's
-frontier_after_round = 2        # the worker tier writes rounds 1 and 2, the frontier tier the rest
+max_rounds = 2                  # rounds of writing the adapter in all: round 1 by the worker model, round 2 by the frontier model
+frontier_after_round = 1        # the worker tier writes round 1, the frontier tier the rest
 oracle_tasks = 3                # generated tasks whose reference solution is run through Harbor as a check
 require_review = false          # if true, a person confirms an adapter that passes before it is used
 

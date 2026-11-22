@@ -13,6 +13,7 @@ from .. import ledger as ledger_mod
 from pathlib import Path
 
 from ..backends import NotImplementedBackend
+from ..backends.base import Decision
 from ..curation import gates, ranking
 from ..tasks import Task, load_benchmark
 from . import claims, prepare
@@ -307,6 +308,20 @@ async def reported_results(s: Session, bench: BenchState) -> dict[str, dict]:
     return results
 
 
+# Gates where the decision model's word alone never drops a task: it is sent to the worker agent, which reads the
+# task's files. On verifier_cost, the decision model reads only the start of long tests and calls many cheap verifiers
+# costly; a wrong "cheap" costs one measured run in verify, a wrong "costly" loses the task for good.
+CONFIRM_DROP = {"verifier_cost"}
+
+
+def unconfirmed_drop(prior: dict) -> bool:
+    """A recorded screening drop that rests on the decision model alone, on a gate that needs the worker's word."""
+    if prior.get("outcome") != "drop":
+        return False
+    gate = str(prior.get("reason", "")).split(":")[0]
+    return gate in CONFIRM_DROP and (prior.get("value") or {}).get(gate, {}).get("tier") == "decision"
+
+
 async def triage(s: Session, task: Task) -> bool:
     """The admission gates. Code settles what it can, tier D the rest, tier W the unsure ones.
 
@@ -315,13 +330,17 @@ async def triage(s: Session, task: Task) -> bool:
     because that pair is the label the thresholds are tuned on.
     """
     prior = s.ledger.decision(task.digest, "triage", "gates", s.protocol)
-    if prior is not None:
+    if prior is not None and not unconfirmed_drop(prior):
         return prior["outcome"] == "pass"
+    # A drop the decision model made alone on a gate that needs the worker's word is screened again, keeping the
+    # answers it had: that gate goes to the worker, and the gates after it are asked.
+    kept = {g: a for g, a in (prior or {}).get("value", {}).items() if g in gates.D_GATES and g not in CONFIRM_DROP}
     answers: dict[str, dict] = {}
     cost, skill = 0.0, ""
 
     def done(failed: str = "") -> bool:
-        s.record(task.benchmark, "decision", task, stage="triage", gate="gates", tier="decision",
+        tier = "worker" if any(a.get("tier") == "worker" for a in answers.values()) else "decision"
+        s.record(task.benchmark, "decision", task, stage="triage", gate="gates", tier=tier,
                  model=s.cfg.tiers.decision.model, value=answers, outcome="drop" if failed else "pass",
                  reason=f"{failed}:{answers[failed]['value']}" if failed else "", cost=cost, skill=skill)
         return not failed
@@ -335,12 +354,26 @@ async def triage(s: Session, task: Task) -> bool:
     # A task with no reference solution goes on: if it is selected, its work cell writes one (engine/stages.py).
     answers["reference_solution"] = {"value": "present" if task.has_solution else "missing: written if selected", "tier": "code"}
     wanted = {g: choices for g, (choices, _) in gates.D_GATES.items()}
-    decided = await s.backend.decide_gates(task, wanted)       # one request where the backend can
+    redo = prior is not None
+    if redo:
+        first = prior["value"].get("verifier_cost") or {}
+        decided = {g: Decision(a["value"], float(a.get("p", 1.0)), a.get("tier", "decision"), "", 0.0, 0) for g, a in kept.items()}
+        decided["verifier_cost"] = Decision(first.get("value", ""), float(first.get("p", 0.0)), "decision", "", 0.0, 0)
+        rest = {g: c for g, c in wanted.items() if g not in decided}
+        decided.update(await s.backend.decide_gates(task, rest) if rest else {})
+    else:
+        decided = await s.backend.decide_gates(task, wanted)       # one request where the backend can
     cost = sum(d.cost for d in decided.values())
     skill = next((d.skill for d in decided.values() if d.skill), "")
     for gate, choices in wanted.items():
         d = decided[gate]
-        if d.prob < s.cfg.escalation.gate_min_confidence.get(gate, s.cfg.escalation.min_confidence):
+        if gate in kept and redo:          # answered before, and not what is screened again
+            answers[gate] = kept[gate]
+            if not gates.passes(gate, d.value, s.cfg):
+                return done(gate)
+            continue
+        drop_alone = gate in CONFIRM_DROP and d.tier == "decision" and not gates.passes(gate, d.value, s.cfg)
+        if drop_alone or d.prob < s.cfg.escalation.gate_min_confidence.get(gate, s.cfg.escalation.min_confidence):
             first = d
             d = await s.backend.confirm(gate, choices, task, first)
             s.record(task.benchmark, "decision", task, stage="triage", gate=gate, tier=first.tier, value=first.value,

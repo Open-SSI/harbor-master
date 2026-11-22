@@ -241,8 +241,13 @@ def curate(benchmarks: list[str] = typer.Argument(None, help="Benchmarks to run.
             fail(f"Refused: {why}")
     if not simulate and not foreground:     # every part tried once, before anything is claimed or spent
         from ..core import access
-        console.print("Checking your keys, the task store, the index's repository and Docker ...", highlight=False)
-        missing = access.problems(cfg, ws)
+        console.print("Checking, before anything is spent: your keys, the models, Docker, and each agent in a container ...",
+                      highlight=False)
+
+        def said(what: str, why: str, seconds: float) -> None:
+            mark = f"[{theme.RD}]✗[/]" if why else f"[{theme.TE}]✓[/]"
+            console.print(f"  {mark} {what}  [{theme.MU}]{seconds:.0f} s[/]", highlight=False)
+        missing = access.check(cfg, ws, said)
         if missing:
             fail("Nothing was started:\n" + "\n".join(f"- {p}" for p in missing))
     if until not in ("", "select", "verify", "probe") or assume_after not in ("", "verify", "probe"):

@@ -51,6 +51,14 @@ class Session:
         self.trial_cost = 0.0
         self.backend = make_backend(cfg, self._usage, simulate, speed, self.run_dir, assume_after)
         self.backend.on_hung = self.hung
+        self.running_cost: dict[str, float] = {}       # what each agent trial still running has cost so far
+
+        def on_spend(key: str, cost: float | None) -> None:
+            if cost is None:
+                self.running_cost.pop(key, None)
+            else:
+                self.running_cost[key] = cost
+        self.backend.on_spend = on_spend
         self.backend.on_progress = lambda task, what, doing, ran: self.note_recent(
             "running", task.task_id, f"{what}, {ran / 60:.0f} min in: {doing}")
         self.assumed: set[str] = getattr(self.backend, "assumed", set())    # stages whose results are assumed, not run
@@ -120,7 +128,7 @@ class Session:
 
     @property
     def spent(self) -> float:
-        return sum(self.cost_by_tier.values()) + self.trial_cost
+        return sum(self.cost_by_tier.values()) + self.trial_cost + sum(self.running_cost.values())
 
     def record(self, benchmark: str, type: str, task: Task | None = None, **data) -> dict:
         shard = self._shards.get(benchmark)

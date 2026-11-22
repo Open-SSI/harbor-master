@@ -149,22 +149,22 @@ async def test_a_run_fetches_adapts_and_locks_with_no_one_asked(quiet, monkeypat
     asked, told = models(monkeypatch)
     s = await ran(ws, "r1")                                                    # nothing was fetched or adapted before this
     bench = s.benches["toy"]
-    assert bench.phase == "ready" and len(bench.tasks) == 3 and asked == ["worker", "worker", "decision", "frontier"]   # two tries, then the stronger model
-    assert told[0] == "" and "no tests/test.sh" in told[1] and "no tests/test.sh" in told[2]     # each told what failed
+    assert bench.phase == "ready" and len(bench.tasks) == 3 and asked == ["worker", "decision", "frontier"]   # one try, then the stronger model
+    assert told[0] == "" and "no tests/test.sh" in told[1]          # the frontier model is told what failed
     assert not (pkg(ws) / "src" / "escape.py").exists() and "--source-dir" in (pkg(ws) / "src" / "toy" / "main.py").read_text()
     assert not any(r.blocking for r in s.requests)                             # nobody was asked anything on the way
     assert s.cost_by_tier["worker"] >= 0.5 and s.cost_by_tier["frontier"] >= 0.25           # the models' work is in the run's cost
     assert passes(ws) and not any(e["type"] == "protocol" for e in ledger.Ledger(ws).events)        # vouched for by its record
     assert ledger.verify(ws) == []
     done = next(e for e in s.ledger.events if e.get("stage") == "adapt" and e.get("gate") == "adapter")
-    assert (done["outcome"], done["tier"], done["rounds"], done["skill"]) == ("pass", "frontier", 3, "adapt/write-adapter@test")
+    assert (done["outcome"], done["tier"], done["rounds"], done["skill"]) == ("pass", "frontier", 2, "adapt/write-adapter@test")
     prompt = writer.about({"id": "toy", "name": "Toy", "format": "jsonl", "email": "x"}) + writer.layout(source)
     assert "format: jsonl" in prompt and "questions.jsonl" in prompt and "email" not in prompt
     assert tasks.read_registry(ws)["toy"]["adapter"] == adapter.digest(pkg(ws))
     again = await ran(ws, "r2")                                                # the next run uses the locked adapter as it is
-    assert again.benches["toy"].phase == "ready" and len(asked) == 4
+    assert again.benches["toy"].phase == "ready" and len(asked) == 3
     tried = await ran(ws, "r3", as_real=False)                                 # and so does a simulated one
-    assert tried.benches["toy"].phase == "ready" and len(asked) == 4
+    assert tried.benches["toy"].phase == "ready" and len(asked) == 3
 
 
 async def test_a_benchmark_no_model_can_adapt_is_dropped_and_may_be_tried_again(quiet, monkeypatch):
@@ -179,7 +179,7 @@ async def test_a_benchmark_no_model_can_adapt_is_dropped_and_may_be_tried_again(
         await asyncio.wait_for(run, 10)
         assert s.benches["toy"].phase == "skipped" and "judges it cannot be adapted" in s.benches["toy"].detail
         assert ledger.benchmarks.statuses(ledger.Ledger(ws).events, ["toy"])["toy"]["status"] == "dropped"
-    assert asked == ["worker", "worker", "decision"] * 2
+    assert asked == ["worker", "decision"] * 2
     dropped = ledger.abandoned(ledger.Ledger(ws).events)["toy"]
     assert (dropped["outcome"], dropped["value"]) == ("drop", "abandoned") and "judged not adaptable (90%)" in dropped["reason"]
 

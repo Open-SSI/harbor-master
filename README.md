@@ -33,7 +33,7 @@ hm clone INDEX && cd INDEX
 hm curate
 ```
 
-Send the owner the line `hm init` printed, so they can add you. Put your keys in the clone's `secrets.env` (git ignores it): a Claude and an OpenAI key or subscription, an OpenRouter key, and your own `HF_TOKEN`. `hm curate` checks them all, and Docker, before anything is spent.
+Send the owner the line `hm init` printed, so they can add you. Put your keys in the clone's `secrets.env` (git ignores it): a Claude and an OpenAI key or subscription, an OpenRouter key, and your own `HF_TOKEN`. Before anything is spent, `hm curate` checks each key and model, Docker, and that each agent of the difficulty suite runs a command in a container.
 
 ## The curate screen
 

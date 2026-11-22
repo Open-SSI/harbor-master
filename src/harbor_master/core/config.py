@@ -51,8 +51,8 @@ class Triage(BaseModel):
 
 class Adapt(BaseModel):
     """Building the adapter for a benchmark that is not in Harbor format."""
-    max_rounds: int = 3               # rounds of writing it in all: the worker's, then the frontier model's
-    frontier_after_round: int = 2     # the worker tier writes rounds up to this one, the frontier tier the rest
+    max_rounds: int = 2               # rounds of writing it in all: the worker's, then the frontier model's
+    frontier_after_round: int = 1     # the worker tier writes rounds up to this one, the frontier tier the rest
     oracle_tasks: int = 3             # generated tasks whose reference solution is run through Harbor as a check
     require_review: bool = False      # if true, a person confirms an adapter that passes before it is used
 

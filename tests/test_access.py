@@ -14,6 +14,8 @@ def test_every_problem_is_listed_together_and_no_key_is_shown(workspace, monkeyp
     monkeypatch.setitem(access.KEY_CHECKS, "OPENROUTER_API_KEY", access.openrouter)
     monkeypatch.setattr(access, "store", lambda cfg: "The task store: Your token cannot write to it.")
     monkeypatch.setattr(access, "docker", lambda: "Docker is not running, or this user may not use it. Start it, then try again.")
+    monkeypatch.setattr(access, "claude_signin", lambda model: "")         # no model is called, and no container started
+    monkeypatch.setattr(access, "agent_runs", lambda agent, model, version: "")
     found = access.problems(cfg, workspace)
     told = "\n".join(found)
     assert "OPENROUTER_API_KEY" in told and "wrong or expired" in told and secret not in told

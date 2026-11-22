@@ -277,7 +277,7 @@ Anyone on the contributor list adds a benchmark, and the owner does nothing for 
 
 A benchmark whose tasks are not Harbor task folders needs an adapter. It has Harbor's own adapter layout, so one built here can be offered to Harbor.
 
-- **A run builds it by itself.** The worker model writes it, the checks run, and a failing one goes back with its failures (`adapt.frontier_after_round` rounds, 2).
+- **A run builds it by itself.** The worker model writes it, the checks run, and a failing one goes back with its failures (`adapt.frontier_after_round` rounds, 1).
 - **Jev decides what happens next.** When the worker's rounds fail, the decision model, Jev, is asked whether the benchmark can be adapted at all (`skills/adapt/judge.toml`), and answers with a typed choice and its probability, recorded as a signed `decision` on that version of the adapter. If it can be adapted, or Jev declines to answer, the frontier model tries (`max_rounds` minus those, 1 round), with nobody asked. If it cannot, a box shows Jev's judgment, what failed and the worker's notes: the person agrees, and the benchmark is dropped, or types a hint, which goes to the frontier model with the failures. With nobody to ask, the benchmark is left for a person, not dropped.
 - **If the frontier model fails too,** the benchmark is dropped at once, with a signed `decision` that says why, and a box tells the person, who acknowledges it; the run goes on with the others.
 - **It converts, it does not curate.** The adapter writes every task once, cheaply, so the screen and the ranking can read them. It is told Harbor's own adapter guide (its sections 1 to 3, read from the installed Harbor), keeps each task's instruction, check and solution, mends what is broken for every task (a wrong path, a missing dependency) and lists each fix, and writes a task whose solution is missing with an empty solution folder. Making each task valid is left to the work cells, after the selection: only the selected tasks cost a repair.
@@ -304,7 +304,7 @@ Both are written commented by `hm new`. The index commits `hm.example.toml` and 
 | `difficulty.suite` | Fable on Claude Code, GPT-6 Astra on Codex, both pinned |
 | `difficulty.max_pass_rate`, `trials`, `max_agent_hours` | 0.50, 3, 4 |
 | `difficulty.cheap_solve`, `cheap_trials`, `cheap_agent`, `cheap_agent_hours` | true, 2, claude-code, 1 |
-| `adapt.max_rounds`, `fix.max_rounds`, `fix.frontier_after_round` | 3, 2, 1 |
+| `adapt.max_rounds`, `fix.max_rounds`, `fix.frontier_after_round` | 2, 2, 1 |
 | `run.cells`, `max_containers`, `claim_hours` | 4, 16, 12 |
 
 ### Settings and the version

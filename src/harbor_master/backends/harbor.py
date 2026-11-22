@@ -97,6 +97,7 @@ class Watch:
     judge: Callable[[str, float], Awaitable[str]]
     say: Callable[[str, float], None] | None = None     # what the trial is doing, in a line, and how long it has run
     say_every: float = 300.0
+    spend: Callable[[float], None] | None = None        # an agent trial's cost so far, each time its logs are looked at
 
 
 def _container_of(job: Path) -> str:
@@ -136,11 +137,114 @@ def inside(job: Path, lines: int = 60) -> tuple[int, str]:
 
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+USAGE = {   # agent -> a script that prints its token counts so far, from what it is writing in its container
+    "claude-code": "grep -ohE '\"id\":\"msg_[A-Za-z0-9]+\"|\"type\":\"result\"|\"(input_tokens|cache_creation_input_tokens|"
+                   "cache_read_input_tokens|output_tokens)\":[0-9]+' /logs/agent/claude-code.txt 2>/dev/null",
+    "codex": "grep -rhoE '\"total_token_usage\":\\{[^}]*\\}' /logs/agent/sessions 2>/dev/null | tail -n 1",
+}
+
+
+def tokens_so_far(agent: str, out: str) -> tuple[int, int, int, int]:
+    """(fresh input, cached input, cache writes, output) from what USAGE printed. Claude Code repeats a message's usage
+    on each of its parts, so each message counts once; Codex keeps a running total, so its last one is all of it."""
+    if agent == "codex":
+        n = dict((k, int(v)) for k, v in re.findall(r'"(\w+)":(\d+)', out))
+        cached = n.get("cached_input_tokens", 0)
+        return n.get("input_tokens", 0) - cached, cached, n.get("cache_write_input_tokens", 0), n.get("output_tokens", 0)
+    by_message: dict[str, dict[str, int]] = {}
+    current = ""
+    for token in out.split():
+        if token == '"type":"result"':          # the final summary repeats the totals: the messages are already counted
+            break
+        if token.startswith('"id":'):
+            current = token.split('"')[3]
+            continue
+        key, _, value = token.strip('"').partition('":')
+        if current and value.isdigit():
+            slot = by_message.setdefault(current, {})
+            slot[key] = max(slot.get(key, 0), int(value))
+    total = lambda k: sum(m.get(k, 0) for m in by_message.values())      # noqa: E731
+    return (total("input_tokens"), total("cache_read_input_tokens"), total("cache_creation_input_tokens"),
+            total("output_tokens"))
+
+
+def spent_so_far(job: Path, agent: str, model: str) -> float | None:
+    """What an agent trial that is still running has cost so far, at list price; None when it cannot be read."""
+    import subprocess
+    script = USAGE.get(agent)
+    cid = _container_of(job) if script else ""
+    if not cid:
+        return None
+    try:
+        out = subprocess.run(["docker", "exec", cid, "sh", "-c", script], capture_output=True, text=True, timeout=20).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return prices.estimate(model, *tokens_so_far(agent, out))
+
+
+def _name(path: str) -> str:
+    return path.rstrip("/").split("/")[-1] or path
+
+
+def plain_command(command: str) -> str:
+    """A shell command an agent ran, said in a few words: what it does, not its text."""
+    cmd = " ".join(str(command).split())
+    if cmd.startswith(("bash -lc ", "/bin/bash -lc ", "sh -c ")):          # Codex wraps each command in a shell
+        cmd = cmd.split(" ", 2)[-1].strip("'\"")
+    parts = [x.strip() for x in re.split(r"&&|;|\|\|", cmd) if x.strip()]
+    parts = [x for x in parts if x.split()[0] not in ("cd", "export", "source", "set", "ulimit", "true")] or parts
+    if parts and not re.search(r"<<", cmd):             # a heredoc's text is no command: read the whole thing
+        cmd = parts[0] if len(parts) == 1 else next((x for x in parts if x.split()[0] not in ("echo", "sleep")), parts[-1])
+    if cmd.split()[:1] == ["sleep"] or re.match(r"^(timeout \d+ )?(sleep|wait)\b", cmd):
+        return "waiting"
+    if m := re.search(r"(?:cat|tee)\s*>{1,2}\s*([^\s<;&|]+)|^>\s*([^\s<;&|]+)", cmd):
+        return f"writing {_name(m.group(1) or m.group(2))}"
+    if re.search(r"<<-?\s*['\"]?\w+", cmd) and re.search(r"\bpython3?\b", cmd):
+        return "running a Python snippet"
+    if m := re.search(r"\b(?:python3?|Rscript|julia|node|bash|sh)\s+(?:-u\s+)?([^\s;&|-][^\s;&|]*\.(?:py|R|jl|js|sh))", cmd):
+        return f"running {_name(m.group(1))}"
+    if re.search(r"\bpython3?\s+-c\b", cmd):
+        return "running a Python snippet"
+    if re.search(r"\b(pip3?|uv|conda|apt-get|apt|npm)\s+(install|add|sync)\b", cmd):
+        return "installing packages"
+    if re.search(r"\b(pytest|make|cargo|go test|lake build)\b", cmd):
+        return "running tests or a build"
+    cmd = re.sub(r"^(?:(?:cd|export|source)\s+[^;&]*(?:;|&&)\s*)+", "", cmd)
+    first = cmd.split()[0] if cmd else ""
+    if first in ("ls", "cat", "head", "tail", "find", "grep", "rg", "wc", "file", "tree", "sed", "awk", "du", "stat"):
+        return "looking at files"
+    return f"running {first}" if first else "running a command"
+
+
+def _step(name: str, given: dict) -> str:
+    """One tool call of Claude Code, in a few words."""
+    path = given.get("file_path") or given.get("path") or given.get("notebook_path") or ""
+    if name == "Bash":
+        return plain_command(given.get("command", ""))
+    if name in ("Write", "NotebookEdit"):
+        return f"writing {_name(path)}"
+    if name in ("Edit", "MultiEdit"):
+        return f"editing {_name(path)}"
+    if name == "Read":
+        return f"reading {_name(path)}"
+    if name in ("Grep", "Glob", "LS"):
+        return "looking at files"
+    if name in ("TodoWrite", "Task", "Agent"):
+        return "planning"
+    if name in ("WebSearch", "WebFetch"):
+        return "reading the web"
+    return f"using {name}"
+
+
+def _said(text: str) -> str:
+    first = re.split(r"(?<=[.!?])\s", " ".join(text.split()), maxsplit=1)[0]
+    return f"says: {first[:120]}"
 
 
 def now_doing(text: str) -> str:
-    """The trial's latest step, in one line: from an agent's event stream, its last tool call or message; from a
-    solution's output, its last line, a progress bar as it stands now."""
+    """The trial's latest step, in a few plain words: from an agent's event stream (Claude Code's or Codex's), what its
+    last tool call does ("writing overdisp.py", "running fit.py") or the first sentence it last said; from a solution's
+    output, its last line, a progress bar as it stands now."""
     rows = [r for r in text.splitlines() if r.strip() and not r.startswith("=== ")]
     for row in reversed(rows[-400:]):
         if not row.lstrip().startswith("{"):
@@ -149,13 +253,26 @@ def now_doing(text: str) -> str:
             event = json.loads(row)
         except ValueError:
             continue
-        for item in reversed((event.get("message") or {}).get("content") or [] if event.get("type") == "assistant" else []):
-            if item.get("type") == "tool_use":
-                given = item.get("input") or {}
-                what = given.get("command") or given.get("file_path") or given.get("pattern") or given.get("description") or ""
-                return f"{item.get('name', 'tool')}: {' '.join(str(what).split())}"[:160]
-            if item.get("type") == "text" and item.get("text", "").strip():
-                return " ".join(item["text"].split())[:160]
+        if not isinstance(event, dict):
+            continue
+        item = event.get("item") if isinstance(event.get("item"), dict) else None
+        if item is not None and event.get("type", "").startswith("item."):         # Codex
+            kind = item.get("type", "")
+            if kind == "command_execution":
+                return plain_command(item.get("command", ""))
+            if kind == "file_change":
+                changed = [_name(c.get("path", "")) for c in item.get("changes") or [] if isinstance(c, dict)]
+                return f"editing {', '.join(changed[:3])}" if changed else "editing files"
+            if kind == "agent_message" and item.get("text", "").strip():
+                return _said(item["text"])
+            if kind == "reasoning":
+                return "thinking"
+            continue
+        for part in reversed((event.get("message") or {}).get("content") or [] if event.get("type") == "assistant" else []):
+            if part.get("type") == "tool_use":
+                return _step(part.get("name", ""), part.get("input") or {})
+            if part.get("type") == "text" and part.get("text", "").strip():
+                return _said(part["text"])
     plain = [r for r in rows if not r.lstrip().startswith("{")]
     if not plain:
         return "thinking" if rows else ""
@@ -285,6 +402,10 @@ async def _run_once(task_dir, jobs_dir, agent, model, agent_kwargs, with_keys, t
                     continue
             now = loop.time()
             size, text = await asyncio.to_thread(inside, job)       # what it has written in its container so far
+            if watch.spend and agent in USAGE:
+                so_far = await asyncio.to_thread(spent_so_far, job, agent, model)
+                if so_far is not None:
+                    watch.spend(so_far)
             state = (len(printed), _newest(job), size)
             if watch.say and now - said >= watch.say_every:
                 said = now

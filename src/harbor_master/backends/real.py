@@ -445,12 +445,24 @@ class RealBackend(Backend):
         self._settle(result, keep=finding or bool(result.error), label=f"{task.name}.mutant-{mutant['id']}")
         return result.passed
 
-    async def _agent_run(self, task: Task, entry: SuiteEntry, max_hours: float, mounts: list[dict]) -> TrialResult:
+    async def _agent_run(self, task: Task, entry: SuiteEntry, max_hours: float, mounts: list[dict], what: str = "") -> TrialResult:
+        """One agent trial. While it runs, its cost so far is reported each minute, so that what is spent keeps up with
+        it; when it ends, that running figure gives way to the trial's own cost, which the trial's record carries."""
+        key, caps = uuid.uuid4().hex, self.limits(task, what or f"a trial of {entry.agent} with {entry.model}")
+        if self.on_spend is not None:
+            caps["watch"].spend = lambda cost: self.on_spend(key, cost)
+        try:
+            return await self._agent_trial(task, entry, max_hours, mounts, caps)
+        finally:
+            if self.on_spend is not None:
+                self.on_spend(key, None)
+
+    async def _agent_trial(self, task: Task, entry: SuiteEntry, max_hours: float, mounts: list[dict], caps: dict) -> TrialResult:
         return await harbor.run(task.path, self.jobs, entry.agent, entry.model,
                                 {"version": entry.version, "reasoning_effort": entry.reasoning_effort}, with_keys=True,
                                 max_agent_seconds=(max_hours or self.cfg.difficulty.max_agent_hours) * 3600,
                                 agent_setup_seconds=self.cfg.run.agent_setup_minutes * 60, mounts=mounts,
-                                agent_env=entry.env or None, **self.limits(task, f"a trial of {entry.agent} with {entry.model}"))
+                                agent_env=entry.env or None, **caps)
 
     async def run_trial(self, task: Task, entry: SuiteEntry, index: int, max_hours: float = 0) -> TrialResult:
         if "difficulty" in self.assumed:
@@ -461,10 +473,12 @@ class RealBackend(Backend):
         # an install of several minutes in every one. Should a trial fail in setup with it mounted (an image it cannot
         # run in), it is run once more the plain way.
         shared = await asyncio.to_thread(agents.mounts, entry.agent, entry.version)
-        r = await self._agent_run(task, entry, max_hours, shared)
-        if shared and r.error and "setup" in r.error.lower():
-            r = await self._agent_run(task, entry, max_hours, [])
         worker = bool(max_hours)            # the worker agent's tries carry their own limit; the suite's use the protocol's
+        what = (f"the worker agent's try {index + 1} ({entry.model})" if worker else
+                f"difficulty try {index + 1} of {self.cfg.difficulty.trials} by {entry.agent} ({entry.model})")
+        r = await self._agent_run(task, entry, max_hours, shared, what)
+        if shared and r.error and "setup" in r.error.lower():
+            r = await self._agent_run(task, entry, max_hours, [], what)
         who = f"{entry.agent} with {entry.model}" + (f", effort {entry.reasoning_effort}" if entry.reasoning_effort else "")
         label = re.sub(r"[^A-Za-z0-9._-]+", "-", f"{'worker' if worker else 'frontier'}-{entry.agent}-{entry.reasoning_effort or 'default'}-{index}")
         r = self._settle(r, keep=True, label=f"{task.name}.{label}.{uuid.uuid4().hex[:4]}")

@@ -54,12 +54,12 @@ def test_an_agents_program_is_downloaded_once_and_mounted_into_each_container(tm
     from harbor_master.backends import agents
     monkeypatch.setenv("HM_AGENT_CACHE", str(tmp_path / "cache"))
     calls = []
-    monkeypatch.setattr(agents, "_fetch", lambda agent, version: calls.append(agent) or b"#!/bin/sh\necho 1.2.3\n")
+    monkeypatch.setattr(agents, "_fetch", lambda agent, version, name="": calls.append(agent) or b"#!/bin/sh\necho 1.2.3\n")
     first, again = agents.mounts("claude-code", "1.2.3"), agents.mounts("claude-code", "1.2.3")
     assert first == again == [{"type": "bind", "source": str(tmp_path / "cache/claude-code/1.2.3/claude"),
                                "target": "/usr/local/bin/claude", "read_only": True}] and calls == ["claude-code"]
     assert (tmp_path / "cache/claude-code/1.2.3/claude").stat().st_mode & 0o111        # it can be run
-    monkeypatch.setattr(agents, "_fetch", lambda agent, version: 1 / 0)                 # no network: Harbor installs it
+    monkeypatch.setattr(agents, "_fetch", lambda agent, version, name="": 1 / 0)                 # no network: Harbor installs it
     assert agents.mounts("codex", "9.9.9") == [] and agents.mounts("oracle", "") == []
 
 
@@ -81,7 +81,16 @@ async def test_a_long_trial_says_what_it_is_doing_every_few_minutes(tmp_path, mo
 def test_an_agents_latest_step_is_read_from_its_event_stream():
     stream = "\n".join(['{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"python fit.py --all"}}]}}',
                         '{"type":"system","subtype":"thinking_tokens","estimated_tokens":1400}'])
-    assert harbor.now_doing(stream) == "Bash: python fit.py --all"
+    assert harbor.now_doing(stream) == "running fit.py"
+    heredoc = "cat > /root/work/overdisp.py << 'EOF'\nimport sys, numpy as np\nEOF"
+    assert harbor.plain_command(heredoc) == "writing overdisp.py"           # what it does, not its text
+    assert harbor.plain_command("python3 - <<'EOF'\nimport numpy\nEOF") == "running a Python snippet"
+    assert harbor.plain_command("pip install scanpy") == "installing packages"
+    assert harbor.plain_command("ls -la /root/data") == "looking at files"
+    codex = '{"type":"item.started","item":{"id":"i3","type":"command_execution","command":"bash -lc \'python run_fit.py\'"}}'
+    assert harbor.now_doing(codex) == "running run_fit.py"
+    said = '{"type":"assistant","message":{"content":[{"type":"text","text":"The fit converged. Next I check residuals."}]}}'
+    assert harbor.now_doing(said) == "says: The fit converged."
     assert harbor.now_doing('{"type":"system","subtype":"init"}') == "thinking"
 
 
@@ -91,3 +100,42 @@ def test_a_reference_solution_over_the_verify_limit_drops_its_task():
     assert SLOW.search(error)
     assert slow_build(error, {"max_verify_minutes": 30}) == \
         "its reference solution did not finish within 30 minutes, the protocol's limit"
+
+
+def test_codex_is_mounted_with_the_host_it_runs_commands_in(tmp_path, monkeypatch):
+    from harbor_master.backends import agents
+    monkeypatch.setenv("HM_AGENT_CACHE", str(tmp_path))
+    monkeypatch.setattr(agents, "_fetch", lambda agent, version, name="": b"#!/bin/sh\n")
+    targets = [m["target"] for m in agents.mounts("codex", "9.9.9")]
+    assert targets == ["/usr/local/bin/codex", "/usr/local/bin/codex-code-mode-host"]
+
+    def fails(agent, version, name=""):
+        raise OSError("no network")
+    monkeypatch.setattr(agents, "_fetch", fails)
+    assert agents.mounts("codex", "9.9.8") == []        # never codex without its host: Harbor installs it instead
+
+
+def test_the_checks_before_a_run_report_each_one_as_it_ends(monkeypatch, tmp_path):
+    from harbor_master.core import access
+    monkeypatch.setattr(access, "jobs_of", lambda cfg, ws: {"Docker": lambda: "", "codex with m, in a container": lambda: "it could not run"})
+    seen = []
+    missing = access.check(None, tmp_path, lambda what, why, seconds: seen.append((what, why)))
+    assert sorted(seen) == [("Docker", ""), ("codex with m, in a container", "it could not run")]
+    assert missing == ["it could not run"]
+
+
+def test_a_command_is_said_by_what_it_does():
+    assert harbor.plain_command("cd /root/work && python em.py --iters 50") == "running em.py"
+    assert harbor.plain_command("sleep 60") == "waiting"
+    assert harbor.plain_command("cd /root/work; python3 - <<'E'\nimport re\nE") == "running a Python snippet"
+
+
+def test_a_running_agents_tokens_are_counted_once_per_message():
+    out = "\n".join(['"id":"msg_a"', '"input_tokens":2', '"cache_creation_input_tokens":100', '"cache_read_input_tokens":1000',
+                     '"output_tokens":5', '"id":"msg_a"', '"input_tokens":2', '"cache_creation_input_tokens":100',
+                     '"cache_read_input_tokens":1000', '"output_tokens":40',          # the same message's next part
+                     '"id":"msg_b"', '"input_tokens":3', '"cache_read_input_tokens":1100', '"output_tokens":10',
+                     '"type":"result"', '"input_tokens":999', '"output_tokens":999'])  # the summary: already counted
+    assert harbor.tokens_so_far("claude-code", out) == (5, 2100, 100, 50)
+    codex = '"total_token_usage":{"input_tokens":46011,"cached_input_tokens":39424,"cache_write_input_tokens":0,"output_tokens":846}'
+    assert harbor.tokens_so_far("codex", codex) == (6587, 39424, 0, 846)

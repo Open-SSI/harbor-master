@@ -65,6 +65,7 @@ class Backend(ABC):
         self.on_hung: Callable[[Task, str, Decision, float], Awaitable[str]] | None = None
         # Set by the session: a long trial's latest step, every few minutes, for the log.
         self.on_progress: Callable[[Task, str, str, float], None] | None = None
+        self.on_spend: Callable[[str, float | None], None] | None = None    # a running trial's cost so far; None when it ended
 
     async def stuck(self, task: Task, what: str, log: str, quiet: float) -> str:
         """A trial whose logs stopped moving: the worker agent reads them. "wait" when it judges the trial still working;
