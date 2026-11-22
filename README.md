@@ -17,10 +17,10 @@
 
 - **Cheapest judge first.** A small decision model takes every gate with a probability; worker and frontier agents step in only when it is unsure. Ranking 70 tasks costs $0.02.
 - **Audit before anything runs.** Agents check that each reference solution truly solves its task, and that the instruction states what the tests judge.
-- **Repair, not just filter.** Broken tasks are fixed by agents and checked again.
-- **Frontier trials last, and once,** stopping as soon as the outcome is settled.
+- **Repair first, frontier trials last.** Broken tasks are fixed by agents and checked again; frontier agents try a task once, at the end, and stop as soon as the outcome is settled.
 - **A signed ledger.** Every decision, trial and verdict is recorded, so nothing runs twice and anyone can check how a task got in.
 - **Open.** An index is a git repository: anyone the owner adds curates from their own machine.
+- **Self-improving.** Harbor-Master will learn from every benchmark it adapts and from human feedback to upgrade its own harness, so each benchmark it curates makes it better at adapting the next ([Roadmap](#roadmap)).
 
 ## Install
 
