@@ -192,7 +192,7 @@ async def test_ranking_asks_both_orders_at_once_and_a_restart_asks_nothing_again
     from harbor_master.core import config as config_mod
     calls = []
 
-    async def decisions(model, state, questions):      # a decision model that takes a moment to answer
+    async def decisions(model, state, questions, **_):  # a decision model that takes a moment to answer
         calls.append(state)
         await asyncio.sleep(0.2)
         if "importance" in questions:
@@ -213,3 +213,19 @@ async def test_ranking_asks_both_orders_at_once_and_a_restart_asks_nothing_again
     assert len(calls) == 3                       # a restart asks neither comparison again, nor a score it has
     await again.compare("another brief", found[0], found[1])
     assert len(calls) == 5                       # a new brief is asked afresh
+
+
+async def test_a_task_whose_stage_errors_is_tried_again_later_not_abandoned(workspace, session, monkeypatch):
+    real = session.backend.write_mutants
+    failed = []
+
+    async def flaky(task, *a, **k):         # the session writing probe answers does not start, once per task
+        if task.task_id not in failed:
+            failed.append(task.task_id)
+            raise RuntimeError("Claude (worker) did not return a typed result: Exception: Control request timeout: initialize")
+        return await real(task, *a, **k)
+    monkeypatch.setattr(session.backend, "write_mutants", flaky)
+    await session.run()
+    bench = session.benches["demo-bench"]
+    assert failed and bench.kept + bench.dropped == bench.selected == 20      # every task finished, on its second try
+    assert not any(str(b.get("status", "")).startswith("error") for b in session.boards.values()) if hasattr(session, "boards") else True

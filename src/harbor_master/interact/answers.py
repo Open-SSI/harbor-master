@@ -46,7 +46,7 @@ def how_to_answer(r) -> str:
     """The command that answers a request."""
     short = r.target.split("/")[-1]
     return {"brief": f"Answer with: /brief {r.target} <what is important>",
-            "selection": f"Approve the top K with /approve {short} K. See the whole list with /selection {short}. "
+            "selection": f"Approve the tasks at some positions with /approve {short} 1, 2, 3, 5. See the whole list with /selection {short}. "
                          f"To rank differently, give a new brief: /brief {r.target} <text>",
             "verdict": "Nothing enters the index until you sign. Start with /review",
             "rejected": "The workflow rejected it: a box says why, and you confirm",
@@ -59,7 +59,7 @@ def ready_to_type(r) -> str:
     It is a hint and nothing more. The user types the answer: none is put in the prompt for them."""
     short = r.target.split("/")[-1]
     return {"brief": f"/brief {r.target} <what matters most in this benchmark, in a sentence or two>",
-            "selection": f"/approve {short} <how many of the top tasks>   or   /brief {r.target} <a new brief, to rank again>",
+            "selection": f"/approve {short} <the positions that go on, such as 1-13, 16>   or   /brief {r.target} <a new brief, to rank again>",
             "verdict": "/review   to read each report and accept or reject it",
             "lock": f"/lock {short}"}.get(r.kind, "")
 

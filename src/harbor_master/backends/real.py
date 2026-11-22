@@ -65,6 +65,9 @@ def card(task: Task, limit: int = 1200) -> str:
     return "\n".join(lines)
 
 
+RANK_ASK = {"timeout": 25, "attempts": 3}      # a ranking answer is one of hundreds: a slow one is not waited on long
+
+
 class RankCache:
     """The decision model's ranking answers on this machine, kept in a file: a run that is stopped and started again,
     or that ranks again after screening changed, asks only what it has not asked before. Keyed by the model, the
@@ -284,7 +287,10 @@ class RealBackend(Backend):
         if key in self.ranked:
             return self.ranked[key]
         q = {"importance": {"type": "score", "instructions": skill.data["question"], "criteria": skill.data["levels"]}}
-        answers, cost, tokens = await jev.decisions(self.cfg.tiers.decision.model, state, q)
+        try:
+            answers, cost, tokens = await jev.decisions(self.cfg.tiers.decision.model, state, q, **RANK_ASK)
+        except RuntimeError:
+            return None
         self.usage("decision", cost, tokens)
         answer = answers.get("importance") or {}
         score = float(answer["score"]) if answer.get("type") == "score" and "score" in answer else None
@@ -302,7 +308,10 @@ class RealBackend(Backend):
             if key in self.ranked:
                 return self.ranked[key]
             q = {"first_matters_more": jev.noul(skill.data["question"], skill.data["yes"], skill.data["no"])}
-            answers, cost, tokens = await jev.decisions(self.cfg.tiers.decision.model, state, q)
+            try:
+                answers, cost, tokens = await jev.decisions(self.cfg.tiers.decision.model, state, q, **RANK_ASK)
+            except RuntimeError:        # no answer in time: this pair says nothing, and the ranking does not wait for it
+                return 0.5
             self.usage("decision", cost, tokens)
             got = (answers.get("first_matters_more") or {}).get("noul")
             p = min(0.99, max(0.01, float(got if got is not None else 0.5)))
@@ -320,7 +329,7 @@ class RealBackend(Backend):
             return {**await self.sim.write_mutants(task), "cost": 0.0}
         skill = skills.load("probe/write-mutants")
         r = await self._ask("worker", skill.system, skill.fill(n=n, task=describe(task, 3000)), MUTANT_SCHEMA,
-                            cwd=task.path, max_turns=20)
+                            cwd=task.path, max_turns=30)
         mutants = [{**m, "files": {f["path"]: f["content"] for f in m["files"]}} for m in r.data["mutants"]]
         self.mutants[task.digest] = mutants        # run_mutant adds what the verifier said: a repair reads it
         return {"mutants": mutants, "cost": r.cost, "tokens": r.tokens, "skill": skill.tag}

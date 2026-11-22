@@ -128,9 +128,10 @@ class ReviewScreen(ModalScreen[str]):
 class SelectionScreen(ModalScreen[str]):
     """The ranked tasks of a benchmark, and the choice of how many go on to the costly stages.
 
-    It opens by itself when a ranking is ready, and nothing else can be done until it is answered: with a
-    number k, which approves the top k of the list, or with a new brief, which ranks again. Each task is
-    listed in the order it is taken, with a line on what it asks, so "the top k" is the first k rows."""
+    It opens by itself when a ranking is ready, and nothing else can be done until it is answered: with the
+    positions of the tasks that go on (1, 2, 3, 5, or 1-13, 16), which approves them, with enter alone, which approves
+    the ones proposed, or with a new brief, which ranks again. Each task is listed with its position and a line on what
+    it asks."""
 
     BINDINGS = [("escape", "stay", "Back"), ("pageup", "scroll(-1, True)", "Up"), ("pagedown", "scroll(1, True)", "Down"),
                 ("up", "scroll(-1, False)", "Up"), ("down", "scroll(1, False)", "Down"),
@@ -148,7 +149,7 @@ class SelectionScreen(ModalScreen[str]):
         self.session, self.request, self.bench = session, request, session.benches[request.target]
         self.rows = list(self.bench.ranking)        # (task id, rating, proposed), in the order tasks are taken
         self.most = self.bench.most
-        self.k = sum(1 for r in self.rows if r[2])
+        self.proposed = [i for i, r in enumerate(self.rows, 1) if r[2]]
 
     def compose(self) -> ComposeResult:
         yield Vertical(VerticalScroll(Static(id="tasks")), Static(id="said"), Input(id="choice"))
@@ -161,18 +162,19 @@ class SelectionScreen(ModalScreen[str]):
             box = self.query_one(Vertical)
             box.border_title = f"selection   {self.bench.id}   {len(self.rows)} tasks passed the gates and are ranked"
             line = self.query_one("#choice", Input)
-            line.placeholder = f"{self.k}     or another number from 1 to {self.most}     or: brief <what matters most, to rank again>"
+            line.placeholder = (f"enter: the top {len(self.proposed)}     or the positions that go on, such as 1-13, 16"
+                                f" (at most {self.most})     or: brief <what matters most, to rank again>")
             line.focus()
-            self.draw(self.k)
+            self.draw(self.proposed)
         except NoMatches:       # the screen is closing under it
             pass
 
-    def draw(self, k: int) -> None:
-        """The list, with the first k rows marked as the ones that go on."""
-        rows = []
+    def draw(self, at: list[int]) -> None:
+        """The list, with the rows at these positions marked as the ones that go on."""
+        rows, chosen = [], set(at)
         for i, (task_id, rating, _) in enumerate(self.rows, 1):
             task = self.session.find_task(task_id)
-            on = i <= k
+            on = i in chosen
             head = Text(f"{'●' if on else '○'} {i:>3}  ", style=f"bold {TE}" if on else MU)
             title = str((task.meta.get("task") or {}).get("title") or "") if task else ""
             head.append(task_id.split("/")[-1] + (f"   {title}" if title else ""), style="bold" if on else MU)
@@ -181,7 +183,7 @@ class SelectionScreen(ModalScreen[str]):
             line = Text(interact.answers.task_line(task) if task else "", style=SE if on else MU)
             rows += [head, Padding(line, (0, 0, 1, 7))]
         self.query_one("#tasks", Static).update(Group(*rows))
-        self.query_one(Vertical).border_subtitle = f"the top {k} go on, {len(self.rows) - k} are left out   ·   {QUIT_KEYS}"
+        self.query_one(Vertical).border_subtitle = f"{len(chosen)} go on, {len(self.rows) - len(chosen)} are left out   ·   {QUIT_KEYS}"
 
     def action_scroll(self, way: int, page: bool) -> None:
         area = self.query_one(VerticalScroll)
@@ -192,32 +194,37 @@ class SelectionScreen(ModalScreen[str]):
         self.app.action_quit_run()      # type: ignore[attr-defined]
 
     def action_stay(self) -> None:
-        self.query_one("#said", Static).update(f"The run waits for this: a number from 1 to {self.most}, or brief <what matters>.")
+        self.query_one("#said", Static).update("The run waits for this: the positions that go on, such as 1-13, 16, "
+                                               "or brief <what matters>.")
 
     def on_input_changed(self, event: Input.Changed) -> None:
+        from ..curation.ranking import positions
         typed = event.value.strip()
-        if typed.isdigit() and 1 <= int(typed) <= self.most:
-            self.draw(int(typed))       # the marks follow the number as it is typed
-        elif not typed:
-            self.draw(self.k)
+        if not typed:
+            self.draw(self.proposed)
+        elif not typed.lower().startswith(("brief", "/brief")):
+            at, _ = positions(typed, len(self.rows), len(self.rows))
+            if at:
+                self.draw(at)           # the marks follow the positions as they are typed
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         event.stop()                    # an answer to this page, not a command for the run
         typed, short = event.value.strip(), self.bench.id
         said = self.query_one("#said", Static)
-        if not typed or typed.isdigit():
-            k = int(typed) if typed else self.k
-            if not 1 <= k <= self.most:
-                said.update(f"{typed} is not possible: choose a number from 1 to {self.most}.")
+        if not typed.lower().startswith(("brief", "/brief")):
+            from ..curation.ranking import positions
+            at, why = positions(typed, len(self.rows), self.most) if typed else (self.proposed, "")
+            if why:
+                said.update(why[:1].upper() + why[1:] + ".")
                 return
-            self.dismiss(interact.execute(self.session, Command("approve", [short, str(k)])))
+            self.dismiss(interact.execute(self.session, Command("approve", [short, ",".join(map(str, at))])))
         elif typed.lower().startswith(("brief ", "/brief ")) and len(typed.split()) > 1:
             words = typed.split()[1:]
             if words and words[0] == short:
                 words = words[1:]
             self.dismiss(interact.execute(self.session, Command("brief", [short, *words])))
         else:
-            said.update(f"Type a number from 1 to {self.most} to approve that many, or brief <what matters> to rank again.")
+            said.update("Type the positions that go on, such as 1-13, 16, or brief <what matters> to rank again.")
 
 
 class AskScreen(Fits, ModalScreen[str]):

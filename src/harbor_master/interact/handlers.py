@@ -244,19 +244,20 @@ def brief(session, args):
     return f"Brief recorded for {args[0]}. It applies the next time this benchmark is ranked."
 
 
-@command("approve", "answer", "/approve benchmark [K]", "the selection is signed in the ledger, and its tasks start")
+@command("approve", "answer", "/approve benchmark [positions]", "the selection is signed in the ledger, and its tasks start")
 def approve(session, args):
+    from ..curation.ranking import positions
     waiting = next((r for r in session.requests if r.kind == "selection" and args and
                     (r.target == args[0] or r.target.endswith("/" + args[0]))), None)
     if waiting is None:
-        return "No selection is waiting for approval" + (f" for {args[0]}." if args else ". Use /approve BENCHMARK [K]")
+        return "No selection is waiting for approval" + (f" for {args[0]}." if args else ". Use /approve BENCHMARK 1, 2, 3, 5")
     bench = session.benches[waiting.target]
-    proposed = sum(1 for r in bench.ranking if r[2])
-    if len(args) > 1 and not (args[1].isdigit() and 1 <= int(args[1]) <= bench.most):
-        return f"Choose how many of the top tasks go on: a number from 1 to {bench.most}. {proposed} is proposed."
-    k = int(args[1]) if len(args) > 1 else proposed
-    session.answer_request(waiting, f"approve {k}")
-    return f"Selection approved for {waiting.target}: the top {k} of {len(bench.ranking)} tasks go on."
+    proposed = [i for i, r in enumerate(bench.ranking, 1) if r[2]]
+    at, why = positions(" ".join(args[1:]), len(bench.ranking), bench.most) if len(args) > 1 else (proposed, "")
+    if why:
+        return why[:1].upper() + why[1:] + "."
+    session.answer_request(waiting, "approve " + ",".join(map(str, at)))
+    return f"Selection approved for {waiting.target}: {len(at)} of {len(bench.ranking)} tasks go on."
 
 
 @command("leave", "view", "/leave")

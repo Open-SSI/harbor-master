@@ -73,6 +73,7 @@ class Session:
         self.walk: list[tuple[str, str]] = []       # a simulated run: each stage reached so far, with what it does
         self.active_cells = min(MAX_CELLS, cfg.run.cells)
         self.queue: list[Task] = []
+        self.retried: set[str] = set()      # tasks put back in the queue once after an error
         self._retried: set[tuple[str, str]] = set()       # trials that failed to run and were tried once more
         self.recent: deque[tuple[float, str, str, str]] = deque(maxlen=2000)     # the curate screen's log
         self.requests: list[Request] = []
@@ -494,6 +495,7 @@ class Session:
             title = str((task.meta.get("task") or {}).get("title") or "")
             self.note_recent("started", task.task_id, f"in work cell {cell.n}" + (f": {title}" if title else ""))
             bench = self.benches[task.benchmark]
+            requeued = False
             try:
                 await stages.process(self, cell, task)
             except asyncio.CancelledError:
@@ -504,11 +506,21 @@ class Session:
                 self.save_board(task)
                 self.note_recent("stopped", task.task_id, f"stopped at {STAGES[cell.stage]}, marked incomplete")
             except Exception as err:      # one task's failure must not take the run down
-                self.board(task)["status"] = f"error at {STAGES[cell.stage]}: {type(err).__name__}: {err}"[:400]
-                self.save_board(task)
-                self.note_recent("error", task.task_id, f"{STAGES[cell.stage]}: {type(err).__name__}: {str(err)[:140]}")
+                said = f"{STAGES[cell.stage]}: {type(err).__name__}: {str(err)[:140]}"
+                if task.task_id not in self.retried:
+                    # An error is ours, not the task's: a session that did not start, a model that gave no answer. The
+                    # task goes to the back of the queue once, and starts again where its records leave it.
+                    self.retried.add(task.task_id)
+                    self.queue.append(task)
+                    requeued = True
+                    self.note_recent("error", task.task_id, f"{said}. It is tried again later in this run")
+                else:
+                    self.board(task)["status"] = f"error at {STAGES[cell.stage]}: {type(err).__name__}: {err}"[:400]
+                    self.save_board(task)
+                    self.note_recent("error", task.task_id, f"{said}. It failed twice: left for the next run")
             finally:
-                bench.done += 1
+                if not requeued:
+                    bench.done += 1
                 cell.task, cell.detail, cell.stage, cell.attention = None, "", 0, False
             # Its records stay on this machine until there is something for others: a report to review.
             reported = self.board(task).get("status") == "report_ready"

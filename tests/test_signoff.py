@@ -36,7 +36,7 @@ async def test_no_trial_is_spent_before_the_lead_approves_the_selection_and_a_ne
     await until(lambda: any(r.kind == "selection" for r in s.requests))
     await asyncio.sleep(0.1)
     first = s.requests[0]
-    assert s.benches[BENCH].phase == "signoff" and "24 tasks are ranked" in first.text and "from 1 to 20. 20 is proposed" in first.text
+    assert s.benches[BENCH].phase == "signoff" and "24 tasks are ranked" in first.text and "at most 20. The top 20 are proposed" in first.text
     assert not any(e["type"] == "trial" for e in s.ledger.events)       # nothing costly has started
     assert "selected" in do(s, "selection", BENCH)
 
@@ -45,11 +45,14 @@ async def test_no_trial_is_spent_before_the_lead_approves_the_selection_and_a_ne
     assert s.ledger.brief(BENCH)["text"] == "Spectra tasks matter most."
     assert not any(e["type"] == "trial" for e in s.ledger.events)
 
-    assert "from 1 to 20" in do(s, "approve", BENCH, "21") and "from 1 to 20" in do(s, "approve", BENCH, "none")     # not more than may go on
-    assert "the top 7 of 24" in do(s, "approve", BENCH, "7")            # the user says how many of the top ones go on
+    assert "at most 20" in do(s, "approve", BENCH, "1-21") and "not on the list" in do(s, "approve", BENCH, "25")   # not more than may go on
+    assert "not a position" in do(s, "approve", BENCH, "none")
+    assert "7 of 24" in do(s, "approve", BENCH, "1-5,", "7", "9")      # the user names the positions that go on
     await run
     signed = [e for e in s.ledger.events if e.get("gate") == "signoff" and e["tier"] == "human"]
-    assert len(signed) == 1 and signed[0]["selected"] == 7
+    assert len(signed) == 1 and signed[0]["selected"] == 7 and signed[0]["positions"] == [1, 2, 3, 4, 5, 7, 9]
+    order = [t for t, _, _ in s.benches[BENCH].ranking]
+    assert [t for t, _, on in s.benches[BENCH].ranking if on] == [order[i - 1] for i in (1, 2, 3, 4, 5, 7, 9)]   # 6 and 8 left out
     assert s.benches[BENCH].kept + s.benches[BENCH].dropped == 7 and s.benches[BENCH].not_selected == 17 and ledger.verify(workspace) == []
 
     again = interactive(workspace, ident, "r2")                          # an approved selection is not asked twice

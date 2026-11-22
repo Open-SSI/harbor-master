@@ -157,17 +157,19 @@ async def _run_shared(s: Session, bench: BenchState) -> None:
         rating = {t.task_id: r for t, r in ranked}
         bench.most = most = min(limit_n, len(order))        # the cap: the most that may go on
 
-        def pick(k: int) -> tuple[list[Task], str]:
-            ids = sorted(t.task_id for t in order[:k])
-            return order[:k], hashlib.sha256("|".join(ids + [brief["id"] if brief else ""]).encode()).hexdigest()
+        def pick(at: list[int]) -> tuple[list[Task], str]:
+            """The tasks at these ranked positions (from 1), and the digest a signoff on them carries."""
+            tasks_at = [order[i - 1] for i in at if 1 <= i <= len(order)]
+            ids = sorted(t.task_id for t in tasks_at)
+            return tasks_at, hashlib.sha256("|".join(ids + [brief["id"] if brief else ""]).encode()).hexdigest()
 
-        chosen, signoff = pick(most)
+        chosen, signoff = pick(list(range(1, most + 1)))
         approved = False
-        for e in s.ledger.events:       # an approval already signed for this ranking, for whichever k it named
+        for e in s.ledger.events:       # an approval already signed for this ranking, for whichever tasks it named
             if e["type"] == "decision" and e.get("gate") == "signoff" and e["benchmark"] == bench.id:
-                k = int(e.get("selected") or 0)
-                if 1 <= k <= most and pick(k)[1] == e["digest"]:
-                    (chosen, signoff), approved = pick(k), True
+                at = [int(i) for i in e.get("positions") or []] or list(range(1, int(e.get("selected") or 0) + 1))
+                if at and len(at) <= most and pick(at)[1] == e["digest"]:
+                    (chosen, signoff), approved = pick(at), True
         while True:
             chosen_ids = {t.task_id for t in chosen}
             bench.ranking = [(t.task_id, round(rating[t.task_id], 3), t.task_id in chosen_ids) for t in order]
@@ -179,11 +181,11 @@ async def _run_shared(s: Session, bench: BenchState) -> None:
             words = answer.split() if isinstance(answer, str) else []
             if not words or words[0] != "approve":
                 break
-            k = int(words[1]) if len(words) > 1 and words[1].isdigit() else most
-            if 1 <= k <= most:              # anything else is asked again
-                chosen, signoff = pick(k)
+            at, why = ranking.positions(" ".join(words[1:]), len(order), most) if len(words) > 1 else (list(range(1, most + 1)), "")
+            if not why:                     # anything else is asked again
+                chosen, signoff = pick(at)
                 s.record(bench.id, "decision", stage="select", gate="signoff", tier="human", value="approved",
-                         outcome="pass", selected=len(chosen), signoff=signoff, digest_override=signoff)
+                         outcome="pass", selected=len(chosen), positions=at, signoff=signoff, digest_override=signoff)
                 approved = True
         if approved or not s.cfg.select.require_signoff or not chosen:
             break
@@ -397,7 +399,8 @@ async def triage(s: Session, task: Task) -> bool:
 
 
 def selection_brief(bench: BenchState, most: int) -> str:
-    """What a contributor is asked to approve: how many of the ranked tasks go on to the costly stages."""
+    """What a contributor is asked to approve: which of the ranked tasks go on to the costly stages."""
     picked = [tid.split("/")[-1] for tid, _, chosen in bench.ranking if chosen]
-    return (f"{bench.id}: {len(bench.ranking)} tasks are ranked. Choose how many of the top ones go on to the costly "
-            f"stages: any number from 1 to {most}. {len(picked)} is proposed. Ranked highest: {', '.join(picked[:5])}.")
+    return (f"{bench.id}: {len(bench.ranking)} tasks are ranked. Type the positions of the tasks that go on to the costly "
+            f"stages, such as 1, 2, 3, 5 or 1-13, 16: at most {most}. The top {len(picked)} are proposed. Ranked highest: "
+            f"{', '.join(picked[:5])}.")
