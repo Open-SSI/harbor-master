@@ -282,16 +282,16 @@ async def test_a_stage_that_errors_goes_to_the_frontier_model_and_runs_again_and
     names = sorted({t.name for t in (workspace.parent / "fake" / "demo-bench").iterdir()})
     broken = names[0]                       # this one errors every time; the rest error once
 
-    async def flaky(task, check, *a, **k):  # the coverage audit's session does not start
+    async def flaky(task, check, *a, **k):  # the coverage audit fails on something in the task
         if check != "coverage":
             return await real(task, check, *a, **k)
         calls[task.name] = calls.get(task.name, 0) + 1
         if calls[task.name] == 1 or task.name == broken:
-            raise RuntimeError("Claude (worker) did not return a typed result: Exception: Control request timeout: initialize")
+            raise RuntimeError("tests/test_outputs.py could not be read: UnicodeDecodeError")
         return await real(task, check, *a, **k)
 
     async def looked(task, defect, round_no, tier, why=""):
-        repairs.append((task.name, defect, tier, "Control request timeout" in why))
+        repairs.append((task.name, defect, tier, "UnicodeDecodeError" in why))
         return await repair(task, defect, round_no, tier, why)
     monkeypatch.setattr(session.backend, "check_audit", flaky)
     monkeypatch.setattr(session.backend, "repair", looked)
@@ -303,3 +303,63 @@ async def test_a_stage_that_errors_goes_to_the_frontier_model_and_runs_again_and
     assert calls.get(broken) == 2 and sum(r[0] == broken for r in errored) == 1           # one look, one retry, then dropped
     gone = [e for e in session.ledger.events if e.get("gate") == "error" and e["task_id"].endswith("/" + broken)]
     assert gone and gone[0]["outcome"] == "drop" and gone[0]["reason"] == "error:probe"
+
+
+async def test_a_model_that_cannot_be_reached_neither_repairs_nor_drops_the_task_and_the_next_run_takes_it_again(workspace, ident, session, monkeypatch):
+    from harbor_master.backends.base import Unreachable
+    real, repair, repairs = session.backend.check_audit, session.backend.repair, []
+    names = sorted({t.name for t in (workspace.parent / "fake" / "demo-bench").iterdir()})
+    away = names[0]
+
+    async def cut_off(task, check, *a, **k):    # Claude Code never starts for this task's coverage audit
+        if check == "coverage" and task.name == away:
+            raise Unreachable("Claude (worker) could not be reached, after 5 tries over 7.5 minutes: Control request timeout")
+        return await real(task, check, *a, **k)
+
+    async def looked(*a, **k):
+        repairs.append(a)
+        return await repair(*a, **k)
+    monkeypatch.setattr(session.backend, "check_audit", cut_off)
+    monkeypatch.setattr(session.backend, "repair", looked)
+    await session.run()
+    mine = [e for e in session.ledger.events if e.get("task_id", "").endswith("/" + away)]
+    assert not any(e.get("gate") == "error" or e.get("outcome") == "drop" for e in mine)      # not dropped
+    assert not any(a[0].name == away and a[1] == "error" for a in repairs)                       # not repaired
+    bench = session.benches["demo-bench"]
+    assert bench.done == 20 and bench.kept + bench.dropped == 19           # counted as finished in this run, with no outcome
+    again = another(workspace, ident, "r2")
+    await again.run()
+    assert any(e.get("gate") == "coverage" and e.get("task_id", "").endswith("/" + away) for e in again.ledger.events)
+
+
+async def test_trials_stop_once_the_result_cannot_change_and_no_agent_waits_for_another(workspace, session, monkeypatch):
+    import asyncio
+    import time
+
+    from harbor_master.backends.base import TrialResult
+    fable, astra = session.cfg.difficulty.suite                 # claude-code with Fable, codex with Astra
+    worker = session.cfg.tiers.worker.model
+    started, finished = [], []
+
+    async def run_trial(task, entry, index, max_hours=0):
+        started.append((task.name, entry.model, index))
+        if entry.model == worker:           # the worker agent: its first try fails at once, its second would take long
+            if index == 0:
+                return TrialResult(False, 0.0, 0, 0, 0.0, 1.0)
+            await asyncio.sleep(60)
+        if entry.model == fable.model:      # Fable's tries take long; Astra's fail at once, three of them settle it
+            await asyncio.sleep(60)
+        finished.append((task.name, entry.model, index))
+        return TrialResult(False, 0.0, 0, 0, 0.0, 1.0)
+    monkeypatch.setattr(session.backend, "run_trial", run_trial)
+    t0 = time.monotonic()
+    await session.run()
+    assert time.monotonic() - t0 < 30                           # no slow try ran to its end
+    assert not any(m == fable.model or (m == worker and i == 1) for _, m, i in finished)
+    trials = [e for e in session.ledger.events if e["type"] == "trial"]
+    assert trials and not any(e["model"] == fable.model or (e["purpose"] == "cheap_solve" and e["trial_index"] == 1)
+                              for e in trials)                  # a stopped try is not recorded
+    rates = [e for e in session.ledger.events if e.get("gate") == "pass_rate"]
+    assert rates and all(e["trials"] == 3 and not e.get("passes") and e["stopped_early"] and e["outcome"] == "pass" for e in rates)
+    for name in {n for n, _, _ in started}:                    # Astra ran all three while Fable's first was still going
+        assert sum((n, m) == (name, astra.model) for n, m, _ in started) in (0, 3)

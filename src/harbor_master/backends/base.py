@@ -69,6 +69,12 @@ class NotImplementedBackend(RuntimeError):
     pass
 
 
+class Unreachable(RuntimeError):
+    """A model's session could not be had: it did not start, the connection broke, or the provider was overloaded, and
+    waiting and trying again did not help. Nothing the task did: it is never repaired or dropped for it, only left for
+    the next run."""
+
+
 class Backend(ABC):
     def __init__(self, cfg: Config, usage: Usage):
         self.cfg, self.usage = cfg, usage

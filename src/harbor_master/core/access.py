@@ -58,7 +58,7 @@ def claude_signin(model: str) -> str:
     from ..backends import claude
     schema = {"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"], "additionalProperties": False}
     try:
-        asyncio.run(claude.ask(model, "Answer with ok = true.", "Check.", schema, attempts=1))
+        asyncio.run(claude.ask(model, "Answer with ok = true.", "Check.", schema, attempts=1, waits=()))   # a check: no waiting
         return ""
     except Exception as err:        # the SDK raises many kinds: a refused token, no network, a model it does not know
         return f"a test call to {model} failed: {keys.scrub(str(err))[:160]}"

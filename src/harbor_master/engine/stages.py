@@ -23,7 +23,7 @@ import time
 from typing import TYPE_CHECKING
 
 from ..backends import NotImplementedBackend
-from ..backends.base import CHECKS, TaskDropped
+from ..backends.base import CHECKS, TaskDropped, Unreachable
 from ..core.config import SuiteEntry
 from ..curation import difficulty
 from ..tasks import Task
@@ -89,13 +89,15 @@ async def process(s: Session, cell: CellState, task: Task) -> None:
 async def attempt(s: Session, cell: CellState, task: Task, name: str, step, rounds: int) -> tuple[str, str]:
     """One stage. A stage before the difficulty run that errors (an image that does not build, a session that gave no
     answer) is not left for later: the frontier model reads the error and repairs the task if the task causes it, and the
-    stage runs again. A second error in the same stage drops the task. An error in the difficulty run is the run's own."""
+    stage runs again. A second error in the same stage drops the task. An error in the difficulty run is the run's own,
+    and so is a model that could not be reached (Unreachable): the task is left for the next run, neither repaired nor
+    dropped."""
     try:
         return await step(s, cell, task, rounds)
     except TaskDropped as gone:          # a trial hung, and the person chose to drop the task
         s.board(task)["why"] = gone.why
         return "drop", gone.reason
-    except NotImplementedBackend:
+    except (NotImplementedBackend, Unreachable):
         raise
     except Exception as err:
         if name == "difficulty":
@@ -271,6 +273,30 @@ async def confirm_drop(s: Session, task: Task, check: str, found: str) -> tuple[
     return "ok", ""
 
 
+async def until_settled(chains, stop: asyncio.Event) -> int:
+    """Runs `chains` (coroutines, each a series of trials) side by side until all of them end or one sets `stop`
+    because the result can no longer change. What is still running is then cancelled, which stops its Harbor job and
+    removes its containers; a trial stopped so is not recorded. An error in one (a hung trial the person dropped)
+    stops the others and is raised. Returns how many were stopped."""
+    running = {asyncio.ensure_future(c) for c in chains}
+    stopper = asyncio.ensure_future(stop.wait())
+    try:
+        while running:
+            done, _ = await asyncio.wait(running | {stopper}, return_when=asyncio.FIRST_COMPLETED)
+            running -= done
+            for t in done - {stopper}:
+                if t.exception() is not None:
+                    raise t.exception()
+            if stopper in done:
+                break
+        return len(running)
+    finally:
+        stopper.cancel()
+        for t in running:
+            t.cancel()
+        await asyncio.gather(*running, return_exceptions=True)
+
+
 async def cheap_solve(s: Session, cell: CellState, task: Task) -> list[dict] | None:
     """The worker tier's model tries first, `cheap_trials` times side by side, before any frontier agent runs.
     Returns its trials when every one passed: a task a smaller model solves each time is too easy, and the
@@ -283,11 +309,18 @@ async def cheap_solve(s: Session, cell: CellState, task: Task) -> list[dict] | N
     if any((e.agent, e.model, e.reasoning_effort) == (entry.agent, entry.model, entry.reasoning_effort) for e in d.suite):
         return None                 # the very configuration the suite runs: there is no cheaper try to make
     cell.detail = f"{d.cheap_trials} tries by {entry.model}"
-    got = await asyncio.gather(*(
-        trial(s, task, "cheap_solve", entry.agent, entry.model, i,
-              lambda i=i: s.backend.run_trial(task, entry, i, d.cheap_agent_hours), version=entry.version)
-        for i in range(d.cheap_trials)))
-    return list(got) if all(e["passed"] and not e.get("error") for e in got) else None
+    got, failed = [], asyncio.Event()
+
+    async def one(i: int) -> None:
+        e = await trial(s, task, "cheap_solve", entry.agent, entry.model, i,
+                        lambda: s.backend.run_trial(task, entry, i, d.cheap_agent_hours), version=entry.version)
+        got.append(e)
+        if not e["passed"] or e.get("error"):     # one failure settles it: the task is not solved every time
+            failed.set()
+    stopped = await until_settled([one(i) for i in range(d.cheap_trials)], failed)
+    if stopped:
+        s.note_recent("checked", task.task_id, f"the worker agent failed a try: its other {stopped} stopped, not needed")
+    return sorted(got, key=lambda e: e["trial_index"]) if not failed.is_set() else None
 
 
 async def stage_worker(s: Session, cell: CellState, task: Task, rounds: int):
@@ -330,25 +363,34 @@ async def stage_difficulty(s: Session, cell: CellState, task: Task, rounds: int)
     t0 = enter(cell, STAGE_NO["difficulty"], f"0 of {n_total} trials run")
     passes = fails = 0
     result = None
-    for r in range(s.cfg.difficulty.trials):
-        cell.detail = f"{passes + fails} of {n_total} trials run · {passes} passed"
+    settled = asyncio.Event()
+    cell.detail = f"0 of {n_total} trials run · 0 passed"
 
-        async def one(entry, r=r):
-            """One trial, counted on the screen and told in the log the moment it ends, not when its round does."""
-            nonlocal passes, fails
-            e = await trial(s, task, "difficulty", entry.agent, entry.model, r,
-                            lambda: s.backend.run_trial(task, entry, r), version=entry.version, effort=entry.reasoning_effort)
-            passes, fails = passes + bool(e["passed"]), fails + (not e["passed"])
-            cell.detail = f"{passes + fails} of {n_total} trials run · {passes} passed"
-            minutes = (e.get("container_seconds") or 0) / 60
-            s.note_recent("checked", task.task_id, f"difficulty try {r + 1} of {d.trials} by {entry.agent} ({entry.model}): "
-                          + ("passed" if e["passed"] else "failed") + (f" after {minutes:.0f} min" if minutes >= 1 else "")
-                          + (f", {e['error'][:80]}" if e.get("error") else ""))
-            return e
-        await asyncio.gather(*(one(entry) for entry in d.suite))
+    async def one(entry, r):
+        """One trial, counted on the screen and told in the log the moment it ends."""
+        nonlocal passes, fails, result
+        e = await trial(s, task, "difficulty", entry.agent, entry.model, r,
+                        lambda: s.backend.run_trial(task, entry, r), version=entry.version, effort=entry.reasoning_effort)
+        passes, fails = passes + bool(e["passed"]), fails + (not e["passed"])
+        cell.detail = f"{passes + fails} of {n_total} trials run · {passes} passed"
+        minutes = (e.get("container_seconds") or 0) / 60
+        s.note_recent("checked", task.task_id, f"difficulty try {r + 1} of {d.trials} by {entry.agent} ({entry.model}): "
+                      + ("passed" if e["passed"] else "failed") + (f" after {minutes:.0f} min" if minutes >= 1 else "")
+                      + (f", {e['error'][:80]}" if e.get("error") else ""))
         result = difficulty.outcome(passes, fails, n_total, d.max_pass_rate)
-        if result and d.early_stop:
-            break
+        if result and d.early_stop:     # checked after every trial: once it cannot change, nothing more is run
+            settled.set()
+
+    async def agent(entry):
+        """Each agent's tries one after another, its next as soon as its last ends: no agent waits for another."""
+        for r in range(d.trials):
+            if settled.is_set():
+                return
+            await one(entry, r)
+    stopped = await until_settled([agent(entry) for entry in d.suite], settled)
+    if stopped:
+        s.note_recent("checked", task.task_id, f"settled at {passes} of {passes + fails} passed: "
+                      f"{stopped} running trial{'s' if stopped > 1 else ''} stopped, not needed")
     result = result or ("drop" if passes > difficulty.max_passes(n_total, d.max_pass_rate) else "keep")
     value = f"{passes} of {passes + fails} passed"
     early = passes + fails < n_total

@@ -44,6 +44,10 @@ LEAVE = (b"\x1b[=0;1u\x1b[<u"                                                   
          b"\x1b[?1016l\x1b[?1006l\x1b[?1015l\x1b[?1003l\x1b[?1002l\x1b[?1000l"       # the mouse
          b"\x1b[0m\x1b[?25h\x1b[?1049l")                                             # colors, the cursor, the screen
 OTHER, BACK = b"\x1b[?1049h", b"\x1b[?1049l"
+# The most of the screen's output the relay holds for one view that is not reading it (a terminal whose window is
+# asleep, a connection that stalled). The relay never waits for a view: if it did, the screen behind it could not
+# write, and the whole run would stop with it. A view that falls this far behind is let go; `hm curate` opens another.
+MAX_BACKLOG = 4 * 1024 * 1024
 
 
 def back_already(back: bool, tail: bytes, shown: bytes) -> tuple[bool, bytes]:
@@ -134,14 +138,52 @@ def relay(ws: Path, argv: list[str], command: str, simulate: bool, verb: str = "
     sel = selectors.DefaultSelector()
     sel.register(server, selectors.EVENT_READ, "server")
     sel.register(master, selectors.EVENT_READ, "run")
-    views: dict[socket.socket, bytearray] = {}
+    views: dict[socket.socket, bytearray] = {}      # what each view has sent that is not read yet
+    unsent: dict[socket.socket, bytearray] = {}     # the screen's output each view has not taken yet
     tail, later = b"", None         # the end of the last output, in case the mark is split; and a size to set in a moment
     mouse = False                   # whether the screen has switched the mouse on, for a view that opens later
 
     def drop(view: socket.socket) -> None:
+        if view not in views:
+            return
         sel.unregister(view)
         views.pop(view, None)
+        unsent.pop(view, None)
         view.close()
+
+    def send(view: socket.socket, data: bytes) -> None:
+        """Give a view the screen's output without ever waiting for it: what it does not take now waits in its backlog,
+        sent as it reads. One whose backlog passes MAX_BACKLOG has stopped reading, and is let go."""
+        if view not in views:
+            return
+        box = unsent[view]
+        if not box:
+            try:
+                n = view.send(data)
+            except (BlockingIOError, InterruptedError):
+                n = 0
+            except OSError:
+                drop(view)
+                return
+            data = data[n:]
+        box += data
+        if len(box) > MAX_BACKLOG:
+            drop(view)
+            return
+        sel.modify(view, selectors.EVENT_READ | (selectors.EVENT_WRITE if box else 0), "view")
+
+    def flush(view: socket.socket) -> None:
+        box = unsent[view]
+        try:
+            n = view.send(box)
+        except (BlockingIOError, InterruptedError):
+            return
+        except OSError:
+            drop(view)
+            return
+        del box[:n]
+        if not box:
+            sel.modify(view, selectors.EVENT_READ, "view")
 
     try:
         while True:
@@ -151,14 +193,14 @@ def relay(ws: Path, argv: list[str], command: str, simulate: bool, verb: str = "
             if later and time.time() >= later[0]:
                 _resize(master, later[1], later[2])
                 later = None
-            for key, _ in sel.select(0.05):
+            for key, mask in sel.select(0.05):
                 if key.data == "server":
                     view, _ = server.accept()
-                    views[view] = bytearray()
-                    if mouse:               # the screen is up: this view's terminal reports the mouse too
-                        with contextlib.suppress(OSError):
-                            view.sendall(MOUSE_ON)
+                    view.setblocking(False)
+                    views[view], unsent[view] = bytearray(), bytearray()
                     sel.register(view, selectors.EVENT_READ, "view")
+                    if mouse:               # the screen is up: this view's terminal reports the mouse too
+                        send(view, MOUSE_ON)
                 elif key.data == "run":
                     try:
                         data = os.read(master, 65536)
@@ -176,17 +218,22 @@ def relay(ws: Path, argv: list[str], command: str, simulate: bool, verb: str = "
                     keep = next((n for n in range(min(len(DETACH) - 1, len(data)), 0, -1) if DETACH.startswith(data[-n:])), 0)
                     data, tail = (data[:-keep], data[-keep:]) if keep else (data, b"")
                     for view in list(views):
-                        try:
-                            view.sendall(data)
-                        except OSError:
-                            drop(view)
+                        send(view, data)
                     if left:                # the user left the screen: every view closes, and the run goes on
                         for view in list(views):
                             drop(view)
                 else:
                     view = key.fileobj
+                    if view not in views:   # let go earlier in this same pass
+                        continue
+                    if mask & selectors.EVENT_WRITE:
+                        flush(view)
+                        if view not in views or not mask & selectors.EVENT_READ:
+                            continue
                     try:
                         got = view.recv(65536)
+                    except (BlockingIOError, InterruptedError):
+                        continue
                     except OSError:
                         got = b""
                     if not got:

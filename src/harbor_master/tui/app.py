@@ -9,10 +9,14 @@ to 8 choose which cell is shown. Nothing is typed: whatever the run needs from a
 from __future__ import annotations
 
 import asyncio
+import io
 import json
+import math
 import os
 import signal
 import time
+
+from rich.console import Console
 
 from textual import events
 from textual.binding import Binding
@@ -96,6 +100,7 @@ class SessionApp(App[None]):
         self._run: asyncio.Task | None = None
         self._told_finished = False
         self.shown = 1              # the work cell drawn under the benchmark
+        self._drawn: dict[str, int] = {}    # what each panel last showed, so that one that has not changed is not redrawn
 
     def compose(self) -> ComposeResult:
         with Vertical(id="top"):
@@ -191,21 +196,38 @@ class SessionApp(App[None]):
         except NoMatches:       # a box is open, or the app is closing
             pass
 
+    def _put(self, name: str, renderable, width: int) -> None:
+        """Show `renderable` in the panel `name`, unless it is what the panel already shows. The screen is looked at ten
+        times a second, and a panel that is updated is sent to the terminal whole, changed or not."""
+        out = Console(width=max(width, 20), file=io.StringIO(), force_terminal=True, color_system="truecolor")
+        out.print(renderable)
+        drawn = hash((out.file.getvalue(), theme.mode()))
+        if self._drawn.get(name) != drawn:
+            self._drawn[name] = drawn
+            self.query_one(f"#{name}", Static).update(renderable)
+
+    @staticmethod
+    def _title(widget, title: str) -> None:
+        """Set a panel's title only when it changes: Textual redraws the whole panel each time one is set."""
+        if str(widget.border_title or "") != title:
+            widget.border_title = title
+
     def _refresh_view(self) -> None:
         theme.follow(self, self._light)
-        s, now, width = self.session, time.time(), self.size.width
-        self.query_one("#header", Static).update(render.header(s, width))
-        self.query_one("#summary", Static).update(render.summary(s, now, width))
+        # What moves on the screen moves ANIMATE times a second, however often the screen is looked at
+        s, now, width = self.session, math.floor(time.time() * theme.ANIMATE) / theme.ANIMATE, self.size.width
+        self._put("header", render.header(s, width), width - 4)
+        self._put("summary", render.summary(s, now, width), width - 4)
         names = ", ".join(s.benches) or "none yet"
-        self.query_one("#benchmarks").border_title = f"benchmark   {names}"
-        self.query_one("#benchmarks", Static).update(stages.benchmarks(s, width - 4, now))
+        self._title(self.query_one("#benchmarks"), f"benchmark   {names}")
+        self._put("benchmarks", stages.benchmarks(s, width - 4, now), width - 4)
         cells = self.query_one("#cells", Static)
         curating = any(b.phase == "ready" and b.selected for b in s.benches.values())
         cells.display = curating                                  # the work cells appear with the curating stage
         if curating:
             self.shown = min(self.shown, s.active_cells)
-            cells.border_title = stages.cells_title(s, self.shown)
-            cells.update(stages.cell_view(s, self.shown, width - 4, now))
+            self._title(cells, stages.cells_title(s, self.shown))
+            self._put("cells", stages.cell_view(s, self.shown, width - 4, now), width - 4)
         self._log()
         self._fit()
         if s.leaving:

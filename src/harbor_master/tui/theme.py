@@ -27,8 +27,12 @@ def t(*parts) -> Text:
     return out
 
 
+ANIMATE = 2     # frames a second for what moves on the screen. Each frame redraws the panels it is in, and a terminal
+                # over a slow link (VS Code Remote, ssh) falls behind at 10: leaving the screen then waits for it to catch up
+
+
 def spinner(now: float) -> str:
-    return SPINNER[int(now * 10) % len(SPINNER)]
+    return SPINNER[int(now * ANIMATE) % len(SPINNER)]
 
 
 def clock(seconds: float) -> str:

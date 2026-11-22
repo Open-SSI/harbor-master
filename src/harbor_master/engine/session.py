@@ -234,8 +234,12 @@ class Session:
             self.note_recent(STAGES[stage], task.task_id, said)
 
     async def container(self, coro):
-        while self.containers_used >= self.max_containers:     # the limit can change while the run goes on
-            await asyncio.sleep(0.05)
+        try:
+            while self.containers_used >= self.max_containers:     # the limit can change while the run goes on
+                await asyncio.sleep(0.05)
+        except asyncio.CancelledError:      # no longer wanted before it started: it never runs
+            coro.close()
+            raise
         self.containers_used += 1
         try:
             return await coro
