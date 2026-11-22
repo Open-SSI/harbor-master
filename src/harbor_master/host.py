@@ -44,10 +44,20 @@ LEAVE = (b"\x1b[=0;1u\x1b[<u"                                                   
          b"\x1b[?1016l\x1b[?1006l\x1b[?1015l\x1b[?1003l\x1b[?1002l\x1b[?1000l"       # the mouse
          b"\x1b[0m\x1b[?25h\x1b[?1049l")                                             # colors, the cursor, the screen
 OTHER, BACK = b"\x1b[?1049h", b"\x1b[?1049l"
-# The most of the screen's output the relay holds for one view that is not reading it (a terminal whose window is
-# asleep, a connection that stalled). The relay never waits for a view: if it did, the screen behind it could not
-# write, and the whole run would stop with it. A view that falls this far behind is let go; `hm curate` opens another.
-MAX_BACKLOG = 4 * 1024 * 1024
+# The most of the screen's output the relay holds for one view that is not taking it (a slow link, a terminal whose
+# window is asleep). The relay never waits for a view: if it did, the screen behind it could not write, and the whole
+# run would stop with it. Nor can it drop part of what it holds, since each piece of output only makes sense on top of
+# what came before. So a view that falls this far behind loses all it holds, is sent nothing more, and once it takes
+# output again it is sent the whole screen afresh. It is never closed for being slow.
+MAX_BACKLOG = 256 * 1024
+# Sent to a view that caught up, before the screen is drawn again: ends any control sequence that was cut off when its
+# backlog was thrown away (CAN), and resets the colors.
+RESYNC = b"\x18\x1b[0m"
+
+
+def _note(what: str) -> None:
+    """A line in host.log, where the relay's output goes."""
+    print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {what}", flush=True)
 
 
 def back_already(back: bool, tail: bytes, shown: bytes) -> tuple[bool, bytes]:
@@ -141,6 +151,8 @@ def relay(ws: Path, argv: list[str], command: str, simulate: bool, verb: str = "
     views: dict[socket.socket, bytearray] = {}      # what each view has sent that is not read yet
     unsent: dict[socket.socket, bytearray] = {}     # the screen's output each view has not taken yet
     tail, later = b"", None         # the end of the last output, in case the mark is split; and a size to set in a moment
+    size = (40, 120)                # the screen's size as the views last gave it
+    behind: set[socket.socket] = set()      # views whose backlog was thrown away: sent nothing until they take output
     mouse = False                   # whether the screen has switched the mouse on, for a view that opens later
 
     def drop(view: socket.socket) -> None:
@@ -149,12 +161,20 @@ def relay(ws: Path, argv: list[str], command: str, simulate: bool, verb: str = "
         sel.unregister(view)
         views.pop(view, None)
         unsent.pop(view, None)
+        behind.discard(view)
         view.close()
+
+    def redraw() -> None:
+        """Have the screen draw itself again in full: a size it does not have, then its own size back."""
+        nonlocal later
+        if later is None:
+            _resize(master, size[0], size[1] - 1)
+            later = (time.time() + 0.08, *size)
 
     def send(view: socket.socket, data: bytes) -> None:
         """Give a view the screen's output without ever waiting for it: what it does not take now waits in its backlog,
-        sent as it reads. One whose backlog passes MAX_BACKLOG has stopped reading, and is let go."""
-        if view not in views:
+        sent as it reads. One whose backlog passes MAX_BACKLOG loses it, and is drawn afresh once it reads again."""
+        if view not in views or view in behind:
             return
         box = unsent[view]
         if not box:
@@ -168,12 +188,20 @@ def relay(ws: Path, argv: list[str], command: str, simulate: bool, verb: str = "
             data = data[n:]
         box += data
         if len(box) > MAX_BACKLOG:
-            drop(view)
+            box.clear()
+            behind.add(view)
+            _note(f"a view fell {MAX_BACKLOG // 1024} KB behind: what it had is dropped, and it is drawn afresh when it reads")
+            sel.modify(view, selectors.EVENT_READ | selectors.EVENT_WRITE, "view")
             return
         sel.modify(view, selectors.EVENT_READ | (selectors.EVENT_WRITE if box else 0), "view")
 
     def flush(view: socket.socket) -> None:
         box = unsent[view]
+        if view in behind:          # it takes output again: the whole screen, from a clean start
+            behind.discard(view)
+            box += RESYNC
+            redraw()
+            _note("the view is reading again: the screen is drawn afresh")
         try:
             n = view.send(box)
         except (BlockingIOError, InterruptedError):
@@ -238,6 +266,7 @@ def relay(ws: Path, argv: list[str], command: str, simulate: bool, verb: str = "
                         got = b""
                     if not got:
                         drop(view)
+                        _note("a view closed")
                         if not views:       # the last terminal closed without leaving: the run decides if it goes on
                             with contextlib.suppress(ProcessLookupError):
                                 os.kill(child, signal.SIGUSR1)
@@ -245,17 +274,17 @@ def relay(ws: Path, argv: list[str], command: str, simulate: bool, verb: str = "
                     buf = views[view]
                     buf += got
                     while len(buf) >= 5:    # one letter and a length, then that many bytes
-                        kind, size = chr(buf[0]), int.from_bytes(buf[1:5], "big")
-                        if len(buf) < 5 + size:
+                        kind, length = chr(buf[0]), int.from_bytes(buf[1:5], "big")
+                        if len(buf) < 5 + length:
                             break
-                        body = bytes(buf[5:5 + size])
-                        del buf[:5 + size]
+                        body = bytes(buf[5:5 + length])
+                        del buf[:5 + length]
                         if kind == "I":
                             os.write(master, body)
-                        elif kind == "R" and size == 4:
-                            rows, cols = struct.unpack(">HH", body)
-                            _resize(master, rows, cols - 1)             # a size it does not have makes the screen draw
-                            later = (time.time() + 0.08, rows, cols)    # itself again in full, for a view that just opened
+                        elif kind == "R" and length == 4:
+                            size = struct.unpack(">HH", body)
+                            later = None
+                            redraw()            # in full, for a view that just opened or a terminal that changed size
     except EOFError:
         pass
     finally:

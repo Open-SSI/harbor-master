@@ -1,18 +1,24 @@
-"""The relay never waits for a view: a terminal that stops reading must not stop the run behind it."""
+"""The relay never waits for a view: a terminal that stops reading must not stop the run behind it, nor be closed for it."""
 import os
 import socket
 import subprocess
 import sys
 import textwrap
 import time
+from pathlib import Path
 
 from harbor_master import host
 
 # Stands in for the run: it fills its screen as fast as it can, and notes the time after each write. Were the relay to
-# wait for a view that does not read, its writes would block and the times would stop.
+# wait for a view that does not read, its writes would block and the times would stop. It also counts the times it is
+# told its size changed, which is how the relay has a screen draw itself again in full.
 FLOOD = textwrap.dedent("""
-    import os, sys, time
+    import os, signal, sys, time
     beat, end = sys.argv[1], time.time() + float(sys.argv[2])
+    def resized(*_):
+        with open(beat + ".size", "a") as f:
+            f.write(str(time.time()) + "\\n")
+    signal.signal(signal.SIGWINCH, resized)
     line = b"x" * 65535 + b"\\n"
     while time.time() < end:
         os.write(1, line)
@@ -32,13 +38,13 @@ RELAY = textwrap.dedent("""
 """)
 
 
-def test_a_view_that_stops_reading_is_let_go_and_the_run_never_waits_for_it(tmp_path, monkeypatch):
+def test_a_view_that_stops_reading_drops_what_it_missed_and_is_drawn_afresh_when_it_reads_again(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "run"))
     (tmp_path / "run").mkdir()
     ws, flood, beat = tmp_path / "index", tmp_path / "flood.py", tmp_path / "beat"
     ws.mkdir()
     flood.write_text(FLOOD)
-    seconds = 6.0
+    seconds = 8.0
     relay = subprocess.Popen([sys.executable, "-c", RELAY, str(ws), str(flood), str(beat), str(seconds)],
                              env={**os.environ, "XDG_RUNTIME_DIR": str(tmp_path / "run")})
     try:
@@ -48,9 +54,9 @@ def test_a_view_that_stops_reading_is_let_go_and_the_run_never_waits_for_it(tmp_
                 break
             time.sleep(0.02)
         stalled = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        stalled.connect(view_path)                  # a view whose terminal never reads
+        stalled.connect(view_path)                  # a view whose terminal stops reading
         reading = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        reading.connect(view_path)                  # and one that does
+        reading.connect(view_path)                  # and one that keeps on
         reading.settimeout(0.2)
         got, until = 0, time.time() + 3.0
         while time.time() < until:
@@ -59,12 +65,25 @@ def test_a_view_that_stops_reading_is_let_go_and_the_run_never_waits_for_it(tmp_
             except TimeoutError:
                 pass
         assert time.time() - float(beat.read_text()) < 1.0     # the run is still writing
-        assert got > 2 * host.MAX_BACKLOG                        # the reading view kept getting the screen
-        stalled.settimeout(2.0)
-        taken = 0
-        while chunk := stalled.recv(1 << 20):       # the stalled view was let go: what it had, then the end
+        assert got > 8 * host.MAX_BACKLOG                        # the reading view kept getting the screen
+        redrawn = Path(str(beat) + ".size")
+        before = len(redrawn.read_text().split()) if redrawn.exists() else 0
+        stalled.settimeout(0.5)                     # the stalled view reads again
+        taken, seen = 0, b""
+        until = time.time() + 2.0
+        while time.time() < until:
+            try:
+                chunk = stalled.recv(1 << 20)
+            except TimeoutError:
+                continue
+            assert chunk, "a view is never closed for being slow"
+            if host.RESYNC not in seen:
+                seen = (seen + chunk)[-(1 << 21):]
             taken += len(chunk)
-        assert taken <= host.MAX_BACKLOG + (1 << 20)
+        assert host.RESYNC in seen                  # a clean start, after what it missed was dropped
+        assert taken > host.MAX_BACKLOG             # and it gets the screen again
+        time.sleep(0.3)
+        assert len(redrawn.read_text().split()) >= before + 2      # drawn afresh: a size it does not have, then its own
     finally:
         relay.wait(timeout=seconds + 10)
     assert relay.returncode == 0

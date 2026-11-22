@@ -5,7 +5,7 @@ files under `ledger/`, so a pull never conflicts. A push is refused when someone
 first, and that refusal is what stops two people from claiming the same tasks: the one who
 is refused pulls, sees the other's claim, and gives way.
 
-A run commits nothing but `ledger/`, the reports, and `benchmarks.toml`, the list that the records give. The files that define the index are committed only by the owner's own commands
+A run commits nothing but `ledger/`, the reports, and the two lists that the records give: `benchmarks.toml` and `index.toml`, the accepted tasks. The files that define the index are committed only by the owner's own commands
 (`define`), so an edit anyone else makes to them stays on their machine.
 """
 from __future__ import annotations
@@ -15,7 +15,8 @@ from pathlib import Path
 
 
 from . import benchmarks
-from .store import REPORTS, SHARDS
+from .fold import INDEX_FILE
+from .store import REPORTS, SHARDS, write_index
 
 DEFINITION = ("about.toml", "protocol.toml", "contributors.toml", "skills", "adapters",
               ".gitignore", "README.md", "hm.example.toml", "secrets.env.example")
@@ -61,11 +62,14 @@ class Sync:
         self._git("fetch", "--quiet", "origin")
         if self._remote_has_branch():
             r = self._git("rebase", "--quiet", "--autostash", "origin/main", check=False)   # local edits are kept aside
-            for _ in range(50):     # two people added a benchmark at once: the list is rewritten from the records below,
-                if r.returncode == 0 or self._git("diff", "--name-only", "--diff-filter=U", check=False).stdout.split() != [benchmarks.FILE]:
-                    break           # so either side's copy of that one file will do to go on
-                self._git("checkout", "--theirs", "--", benchmarks.FILE, check=False)
-                self._git("add", "--", benchmarks.FILE)
+            derived = {benchmarks.FILE, INDEX_FILE}
+            for _ in range(50):     # two people changed a list at once: both lists are rewritten from the records below,
+                stuck = set(self._git("diff", "--name-only", "--diff-filter=U", check=False).stdout.split())
+                if r.returncode == 0 or not stuck or not stuck <= derived:
+                    break           # so either side's copy will do to go on
+                for name in stuck:
+                    self._git("checkout", "--theirs", "--", name, check=False)
+                    self._git("add", "--", name)
                 r = self._git("-c", "core.editor=true", "rebase", "--continue", check=False)
             if r.returncode != 0:
                 self._git("rebase", "--abort", check=False)
@@ -74,7 +78,9 @@ class Sync:
             if self._git("diff", "--quiet", "--diff-filter=U", check=False).returncode != 0:
                 raise SyncError("a file of the index that you edited here was also changed by the owner. Put yours "
                                 "back with: git checkout origin/main -- FILE")
-        benchmarks.write_list(self.dir)         # the list is what the records say, also the ones that just came in
+        benchmarks.write_list(self.dir)         # the lists are what the records say, also the ones that just came in
+        if (self.dir / SHARDS).exists():
+            write_index(self.dir)
 
     def _drop_derived(self) -> None:
         """index.toml is rebuilt from the records, so a local copy never stands in the way of a pull."""
@@ -87,7 +93,9 @@ class Sync:
     def _commit(self, message: str) -> bool:
         """Commit this machine's new records and the reports that go with them, and nothing else."""
         benchmarks.write_list(self.dir)
-        found = [name for name in (SHARDS, REPORTS, benchmarks.FILE) if (self.dir / name).exists()]
+        if (self.dir / SHARDS).exists():
+            write_index(self.dir)
+        found = [name for name in (SHARDS, REPORTS, benchmarks.FILE, INDEX_FILE) if (self.dir / name).exists()]
         if found:
             self._git("add", "-A", "--", *found)
         if self._git("diff", "--cached", "--quiet", check=False).returncode == 0:

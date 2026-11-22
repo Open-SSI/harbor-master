@@ -68,3 +68,17 @@ async def test_when_two_people_claim_at_once_the_second_push_loses_and_gives_way
     await real_pull()
     assert not bob.claimed[BENCH] and alice.claimed[BENCH] == [claims.BENCH]
     assert bob.ledger.claims(BENCH, time.time(), me="bob")[claims.BENCH][0] == "alice"
+
+
+async def test_the_accepted_list_is_shared_and_a_pull_never_deletes_it(world):
+    session, act_as = world
+    alice = session("alice", "a1")
+    await alice.run()
+    ws = act_as("alice")["ws"]
+    tracked = subprocess.run(["git", "ls-files", "index.toml"], cwd=ws, capture_output=True, text=True).stdout.strip()
+    assert tracked == "index.toml"                                  # committed with the records, not left on one machine
+    ledger.Sync(ws, "Alice", "alice").pull()
+    assert (ws / "index.toml").exists()                             # a pull keeps it
+    bob_ws = act_as("bob")["ws"]
+    ledger.Sync(bob_ws, "Bob", "bob").pull()
+    assert (bob_ws / "index.toml").read_text() == (ws / "index.toml").read_text()      # and everyone has the same list
