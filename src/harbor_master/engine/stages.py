@@ -405,13 +405,26 @@ async def stage_difficulty(s: Session, cell: CellState, task: Task, rounds: int)
         if result and d.early_stop:     # checked after every trial: once it cannot change, nothing more is run
             settled.set()
 
-    async def agent(entry):
-        """Each agent's tries one after another, its next as soon as its last ends: no agent waits for another."""
-        for r in range(d.trials):
-            if settled.is_set():
-                return
-            await one(entry, r)
-    stopped = await until_settled([agent(entry) for entry in d.suite], settled)
+    taken = [0] * len(d.suite)          # how many of each agent's tries have been started
+
+    def turn(after: int) -> int | None:
+        """The agent to try next after `after`: the next one in the suite that has tries left, `after` itself last."""
+        for k in range(1, len(d.suite) + 1):
+            j = (after + k) % len(d.suite)
+            if taken[j] < d.trials:
+                return j
+        return None
+
+    async def slot(j: int | None):
+        """One trial at a time, as many slots as agents. When a trial ends, its slot starts the other agent's next
+        try, so the agents take turns: Astra ends, Claude Code starts; Claude Code ends, Astra starts."""
+        while j is not None and not settled.is_set():
+            r = taken[j]
+            taken[j] += 1
+            await one(d.suite[j], r)
+            j = turn(j)
+    starts = range(len(d.suite)) if d.trials > 0 else []     # each slot starts with its own agent
+    stopped = await until_settled([slot(j) for j in starts], settled)
     if stopped:
         s.note_recent("checked", task.task_id, f"settled at {passes} of {passes + fails} passed: "
                       f"{stopped} running trial{'s' if stopped > 1 else ''} stopped, not needed")

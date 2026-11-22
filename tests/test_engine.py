@@ -356,14 +356,14 @@ async def test_a_model_that_cannot_be_reached_neither_repairs_nor_drops_the_task
     assert any(e.get("gate") == "coverage" and e.get("task_id", "").endswith("/" + away) for e in again.ledger.events)
 
 
-async def test_trials_stop_once_the_result_cannot_change_and_no_agent_waits_for_another(workspace, session, monkeypatch):
+async def test_the_agents_take_turns_and_trials_stop_once_the_result_cannot_change(workspace, session, monkeypatch):
     import asyncio
     import time
 
     from harbor_master.backends.base import TrialResult
     fable, astra = session.cfg.difficulty.suite                 # claude-code with Fable, codex with Astra
     worker = session.cfg.tiers.worker.model
-    started, finished = [], []
+    started, finished, running, most = [], [], {}, [0]
 
     async def run_trial(task, entry, index, max_hours=0):
         started.append((task.name, entry.model, index))
@@ -371,22 +371,30 @@ async def test_trials_stop_once_the_result_cannot_change_and_no_agent_waits_for_
             if index == 0:
                 return TrialResult(False, 0.0, 0, 0, 0.0, 1.0)
             await asyncio.sleep(60)
-        if entry.model == fable.model:      # Fable's tries take long; Astra's fail at once, three of them settle it
-            await asyncio.sleep(60)
+        running[task.name] = running.get(task.name, 0) + 1
+        most[0] = max(most[0], running[task.name])
+        try:
+            # Astra fails at once. Fable's first fails after a moment; any later try of Fable's would take long
+            await asyncio.sleep(0 if entry.model == astra.model else 0.3 if index == 0 else 60)
+        finally:
+            running[task.name] -= 1
         finished.append((task.name, entry.model, index))
         return TrialResult(False, 0.0, 0, 0, 0.0, 1.0)
     monkeypatch.setattr(session.backend, "run_trial", run_trial)
     t0 = time.monotonic()
     await session.run()
     assert time.monotonic() - t0 < 30                           # no slow try ran to its end
-    assert not any(m == fable.model or (m == worker and i == 1) for _, m, i in finished)
+    assert most[0] == 2                                         # a task runs one trial per agent of the suite at a time
+    for name in {n for n, m, _ in started if m != worker}:
+        order = [(m, i) for n, m, i in started if n == name and m != worker]
+        # Astra ends first, so Fable starts its second; Fable's first ends, so Astra starts its second, and that
+        # third failure keeps the task: Fable's second is stopped
+        assert order == [(fable.model, 0), (astra.model, 0), (fable.model, 1), (astra.model, 1)]
+    assert not any(m == fable.model and i == 1 for _, m, i in finished)
     trials = [e for e in session.ledger.events if e["type"] == "trial"]
-    assert trials and not any(e["model"] == fable.model or (e["purpose"] == "cheap_solve" and e["trial_index"] == 1)
-                              for e in trials)                  # a stopped try is not recorded
+    assert trials and not any(e["model"] == fable.model and e["trial_index"] == 1 for e in trials)   # stopped: not recorded
     rates = [e for e in session.ledger.events if e.get("gate") == "pass_rate"]
     assert rates and all(e["trials"] == 3 and not e.get("passes") and e["stopped_early"] and e["outcome"] == "pass" for e in rates)
-    for name in {n for n, _, _ in started}:                    # Astra ran all three while Fable's first was still going
-        assert sum((n, m) == (name, astra.model) for n, m, _ in started) in (0, 3)
 
 
 async def test_a_task_that_resumes_in_a_later_run_is_reported_with_the_evidence_of_the_earlier_one(workspace, ident, session):
