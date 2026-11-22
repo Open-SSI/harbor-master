@@ -116,7 +116,7 @@ class PickScreen(Fits, ModalScreen[str]):
     def compose(self) -> ComposeResult:
         free = [n for n, st, _ in self.found if st["status"] in OPEN]
         text = t(("Which benchmark?", "bold"), "\n",
-                 (self.note + "\n" if self.note else "", TE),
+                 (self.note + "\n" if self.note else "", AM if "not finished" in self.note else TE),
                  ("Type the name of a listed or dropped one to curate it, or paste a link to add a new one: its repository, paper or page." if free else
                   "None is free: each is being curated, or curated. Paste a link to add a new one: its repository, paper or page.", SE))
         box = Vertical(Static(text, id="text"),

@@ -65,10 +65,10 @@ def finished_note(s: Session) -> str:
                         if why else f"{b.id} is left out of this run.")
         elif stages.bench_stage(s, b)[0] == stages.DONE and b.left:
             which = "; ".join(tid.split("/", 1)[-1] + ", " + why for tid, why in b.left)[:600]
-            said.append(f"{b.id} is not finished: {len(b.left)} task{'s are' if len(b.left) != 1 else ' is'} left for the next run "
-                        f"({which}).")
+            said.append(f"{b.id} is not finished. {stages.standing_line(s, b)}. Left for retry: {which}.")
         elif stages.bench_stage(s, b)[0] == stages.DONE:
-            said.append(f"{b.id} is curated.")
+            counts = stages.standing_line(s, b)
+            said.append(f"{b.id} is curated. {counts}." if b.chosen else f"{b.id} is curated.")
         else:
             said.append(f"{b.id} is let go: it is listed again, and what was done stays.")
     return " ".join(said) + " Pick the next one, or ctrl+z to end."

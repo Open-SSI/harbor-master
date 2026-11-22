@@ -176,25 +176,72 @@ def _names(left: list[tuple[str, str]], most: int = 3) -> str:
     return ", ".join(names[:most]) + (f" and {len(names) - most} more" if len(names) > most else "")
 
 
+_STANDING: dict[tuple, dict[str, int]] = {}
+ORDER = ("working", "waiting", "to review", "accepted", "rejected", "contested", "dropped", "left for retry")
+STANDING_COLOR = {"working": PU, "waiting": MU, "to review": AM, "accepted": TE, "rejected": RD, "contested": AM,
+                  "dropped": RD, "left for retry": AM}
+
+
+def standing(s: Session, b: BenchState) -> dict[str, int]:
+    """Every chosen task in exactly one state, so that they add up to all of them: working in a cell, waiting for one,
+    to review (its report waits for a verdict), accepted, rejected, dropped, or left for retry (this run let it go with no
+    outcome). Outcomes come from the ledger, whichever run reached them. Counted again only when something changed."""
+    working = {c.task.task_id for c in s.cells if c.task is not None and c.task.benchmark == b.id}
+    left = {tid for tid, _ in b.left}
+    key = (id(s), b.id, len(s.ledger.events), tuple(sorted(left)), tuple(sorted(working)), tuple(b.chosen))
+    if key not in _STANDING:
+        from ..ledger import fold
+        states = fold(e for e in s.ledger.events if e.get("benchmark") == b.id)
+        got = dict.fromkeys(ORDER, 0)
+        for tid in b.chosen:
+            status = states[tid].status if tid in states else ""
+            if tid in working:
+                got["working"] += 1
+            elif tid in left:
+                got["left for retry"] += 1
+            else:
+                got[{"accepted": "accepted", "rejected": "rejected", "contested": "contested", "report_ready": "to review",
+                     "dropped": "dropped"}.get(status, "waiting")] += 1
+        _STANDING.clear()
+        _STANDING[key] = {name: n for name, n in got.items() if n}
+    return _STANDING[key]
+
+
+def standing_text(s: Session, b: BenchState) -> Text:
+    """'20 tasks: 4 working · 10 waiting · 1 accepted · 4 dropped · 1 left for retry', nothing that is zero."""
+    out = Text(f"{len(b.chosen)} tasks: ", style=SE)
+    for i, (name, n) in enumerate(standing(s, b).items()):
+        if i:
+            out.append(" · ", style=MU)
+        out.append(f"{n} {name}", style=STANDING_COLOR.get(name, SE))
+    return out
+
+
+def standing_line(s: Session, b: BenchState) -> str:
+    """The same, as plain words, for a box."""
+    return f"{len(b.chosen)} tasks: " + " · ".join(f"{n} {name}" for name, n in standing(s, b).items())
+
+
 def bench_view(s: Session, b: BenchState, width: int, now: float) -> Group:
     index, how = bench_stage(s, b)
     lines: list = [strip(bench_boxes(s, b, index, how), width, now), Text()]
     if index == DONE and b.left:        # this run is through, but not every chosen task has an outcome
-        said = t(("● not finished", f"bold {AM}"), (f"   {b.kept} reported · {b.dropped} dropped · ", SE),
-                 (f"{len(b.left)} left for the next run: {_names(b.left)}", AM))
+        said = t(("● not finished   ", f"bold {AM}"))
+        said.append_text(standing_text(s, b))
+        said.append(f" ({_names(b.left)})", style=AM)
     elif index == DONE:
-        said = t(("✓ curated", f"bold {TE}"), (f"   {b.kept} reported · {b.dropped} dropped", SE))
+        said = t(("✓ curated   ", f"bold {TE}"))
+        said.append_text(standing_text(s, b) if b.chosen else t(("nothing was chosen", MU)))
     else:
         name, what = BENCH_STAGES[index]
         color = {"now": PU, "wait": AM, "fail": RD, "todo": MU}[how]
         verb = {"now": "", "wait": "your turn: ", "fail": "stopped: ", "todo": "waiting to start"}[how]
-        counts = ""
-        if index == CURATE and b.chosen:
-            running = sum(1 for c in s.cells if c.task is not None and c.task.benchmark == b.id)
-            counts = f"{b.settled}/{len(b.chosen)} done · {running} working · {max(0, b.queued - running)} waiting"
-        said = t((f"● {name}", f"bold {color}"), (f" · {what}", SE), ("   " + verb + (counts or b.detail), color if how != "now" else MU))
-        if counts and b.left:
-            said.append(f" · {len(b.left)} left for the next run", style=AM)
+        said = t((f"● {name}", f"bold {color}"), (f" · {what}", SE))
+        if index == CURATE and b.chosen:    # every chosen task, in one state each: they add up to all of them
+            said.append("   ")
+            said.append_text(standing_text(s, b))
+        else:
+            said.append("   " + verb + b.detail, style=color if how != "now" else MU)
     lines.append(said)
     return Group(*lines)
 

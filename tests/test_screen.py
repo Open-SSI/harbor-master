@@ -28,3 +28,13 @@ async def test_a_panel_that_has_not_changed_is_not_redrawn_and_what_moves_moves_
         s.kill()
     assert drawn.get("header", 0) <= 1                          # it says the same thing all along
     assert drawn.get("benchmarks", 0) <= 8                      # its spinner moves twice a second, not ten times
+
+
+async def test_the_curate_line_puts_every_chosen_task_in_one_state_and_they_add_up(workspace, session):
+    from harbor_master.tui import stages
+    await session.run()
+    b = session.benches["demo-bench"]
+    counts = stages.standing(session, b)
+    assert sum(counts.values()) == len(b.chosen) == 20
+    assert counts.get("left for retry", 0) == len(b.left) and "working" not in counts and "waiting" not in counts
+    assert stages.standing_line(session, b).startswith("20 tasks: ")

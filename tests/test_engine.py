@@ -387,3 +387,14 @@ async def test_trials_stop_once_the_result_cannot_change_and_no_agent_waits_for_
     assert rates and all(e["trials"] == 3 and not e.get("passes") and e["stopped_early"] and e["outcome"] == "pass" for e in rates)
     for name in {n for n, _, _ in started}:                    # Astra ran all three while Fable's first was still going
         assert sum((n, m) == (name, astra.model) for n, m, _ in started) in (0, 3)
+
+
+async def test_a_task_that_resumes_in_a_later_run_is_reported_with_the_evidence_of_the_earlier_one(workspace, ident, session):
+    from harbor_master.engine import stages
+    await session.run()
+    kept = next(t for t in session.ready)
+    again = another(workspace, ident, "later")
+    lines = stages._earlier(again, kept, {"report"})
+    assert any(line.startswith("- **difficulty** (pass_rate, an earlier run)") for line in lines)
+    assert any(line.startswith("- **trial** (difficulty, an earlier run)") for line in lines)
+    assert any(line.startswith("- **verify** (solution, an earlier run)") for line in lines)

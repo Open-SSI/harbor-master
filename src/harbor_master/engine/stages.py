@@ -37,10 +37,19 @@ if TYPE_CHECKING:
 STEPS = [("verify", None), ("probe", None), ("worker", None), ("audit", None), ("difficulty", None)]   # filled in below
 
 
+def recall(s: Session, task: Task) -> None:
+    """Hand the backend the trials already recorded for this version of the task, by this run or an earlier one, so that
+    the audits read them even when the stages that ran them are not run again."""
+    for e in s.ledger.by_task.get(task.task_id, []):
+        if e["type"] == "trial" and e.get("digest") == task.digest:
+            s.backend.remember(task, e)
+
+
 async def process(s: Session, cell: CellState, task: Task) -> None:
     bench = s.benches[task.benchmark]
     rounds = 0
     while True:
+        recall(s, task)
         for name, step in STEPS:
             kind, info = await attempt(s, cell, task, name, step, rounds)
             if kind != "ok":
@@ -480,6 +489,7 @@ async def report(s: Session, cell: CellState, task: Task) -> None:
     if any(e["type"] == "report" and e["digest"] == task.digest for e in s.ledger.by_task.get(task.task_id, [])):
         return
     t0 = enter(cell, STAGE_NO["report"], "auditing the failed trials")
+    recall(s, task)
     board = s.board(task)
     recommend, why = "accept", ""
     try:                    # no repair can follow the difficulty run: what the audit finds goes to the reviewer
@@ -509,6 +519,7 @@ async def report(s: Session, cell: CellState, task: Task) -> None:
              task.instruction.strip()[:600] or "(no instruction text)", "", "## Evidence", ""]
     for done in board["stages"]:
         lines.append(f"- **{done['stage']}** ({done['seconds']}s): {_evidence(done)}")
+    lines += _earlier(s, task, {done["stage"] for done in board["stages"]})
     if s.notes.get(task.task_id):
         lines += ["", "## Notes", ""] + [f"- {n}" for n in s.notes[task.task_id]]
     text = "\n".join(lines) + "\n"
@@ -583,6 +594,30 @@ def progress(stage: str, r: dict) -> str:
     if stage == "report":
         return "report written"
     return ""
+
+
+def _earlier(s: Session, task: Task, shown: set[str]) -> list[str]:
+    """The results of the stages this run did not do again for this version of the task, from the ledger: the standing
+    decision of each gate, and every trial. A task that resumed in a later run is reported with all its evidence."""
+    lines, seen = [], set()
+    for e in s.ledger.by_task.get(task.task_id, []):
+        if e.get("digest") != task.digest:
+            continue
+        if e["type"] == "decision" and e.get("stage") not in shown and (e.get("stage"), e.get("gate")) not in seen:
+            standing = s.ledger.decision(task.digest, e.get("stage", ""), e.get("gate", ""), s.protocol)
+            if standing is None or standing.get("outcome") == "escalate" or e.get("gate") == "error":
+                continue
+            seen.add((e.get("stage"), e.get("gate")))
+            value = standing.get("value")
+            value = ", ".join(f"{k} {v.get('value') if isinstance(v, dict) else v}" for k, v in value.items()) if isinstance(value, dict) else value
+            lines.append(f"- **{standing['stage']}** ({standing['gate']}, an earlier run): {value or standing.get('outcome')}"
+                         f", {standing.get('outcome')} ({standing.get('tier')})")
+        elif e["type"] == "trial" and "trial" not in shown:
+            minutes = (e.get("container_seconds") or 0) / 60
+            lines.append(f"- **trial** ({e.get('purpose')}, an earlier run): {e.get('agent')} with {e.get('model')}, "
+                         + ("passed" if e.get("passed") else "failed") + (f" after {minutes:.0f} min" if minutes >= 1 else "")
+                         + (f", {str(e.get('error'))[:80]}" if e.get("error") else ""))
+    return lines
 
 
 def _evidence(done: dict) -> str:

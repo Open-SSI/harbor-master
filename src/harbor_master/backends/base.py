@@ -84,6 +84,9 @@ class Backend(ABC):
         self.on_progress: Callable[[Task, str, str, float], None] | None = None
         self.on_spend: Callable[[str, float | None], None] | None = None    # a running trial's cost so far; None when it ended
 
+    def remember(self, task: Task, trial: dict) -> None:
+        """A trial recorded earlier, perhaps by another run on this machine, for the audits to read. Nothing by default."""
+
     async def stuck(self, task: Task, what: str, log: str, quiet: float) -> str:
         """A trial whose logs stopped moving: the worker agent reads them. "wait" when it judges the trial still working;
         when hung, what the person chose: "retry" or "drop". With nobody to ask, it is run again."""

@@ -423,6 +423,23 @@ class RealBackend(Backend):
         trials = [t for t in self.kept.get(task.digest, []) if t["worker"]][:4]
         return await self._judge("audit/rubric", "frontier", task, trials, AUDIT)
 
+    def remember(self, task: Task, trial: dict) -> None:
+        """A trial in the ledger whose archive is still on this machine (`artifact`, under .hm/), made by an earlier run:
+        the audits read it as they read this run's own. Without this, a task that resumes at the audit or the report
+        is judged with no trajectory at all."""
+        archive = self.run_dir.parents[1] / trial.get("artifact", "") if trial.get("artifact") else None
+        if archive is None or not archive.is_file():
+            return
+        kept = self.kept.setdefault(trial["digest"], [])
+        if any(Path(k["archive"]) == archive for k in kept):
+            return
+        worker = trial.get("purpose") == "cheap_solve"
+        effort = trial.get("reasoning_effort") or ""
+        who = f"{trial.get('agent', '')} with {trial.get('model', '')}" + (f", effort {effort}" if effort else "")
+        kept.append({"label": archive.name.removesuffix(".tar.gz"), "archive": archive, "passed": bool(trial.get("passed")),
+                     "reward": trial.get("reward"), "error": trial.get("error") or "", "worker": worker,
+                     "who": ("the worker agent: " if worker else "a frontier agent: ") + who})
+
     async def final_audit(self, task: Task) -> Decision:
         """After the difficulty run: the failed trials, read for whether the task is hard or broken."""
         if "audit" in self.assumed:
