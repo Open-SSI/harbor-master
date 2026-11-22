@@ -33,8 +33,8 @@ class Tiers(BaseModel):
 
 class Escalation(BaseModel):
     min_confidence: float = 0.85
-    # A gate that a later stage checks for free can accept a less sure answer.
-    # The verify stage measures the verifier's real time, so a wrong "cheap" costs nothing.
+    # A gate whose wrong answer is caught later can accept a less sure one: a verifier over max_verifier_seconds
+    # still fails its trials.
     gate_min_confidence: dict[str, float] = {"verifier_cost": 0.6}
 
 
