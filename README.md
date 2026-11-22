@@ -1,7 +1,7 @@
 <h1 align="center">Harbor-Master</h1>
 
 <p align="center">
-  <strong>Benchmarks saturate fast, and curating hard ones by hand does not scale.</strong> <strong>Harbor-Master</strong> lets agents do the curating: it takes benchmarks in any format and keeps an open, growing <strong>index</strong> of tasks that are sound, verifiable, and still too hard for frontier agents. People only <strong>sign the verdict</strong>.
+  <strong>Benchmarks saturate fast, and curating hard ones by hand does not scale.</strong> <strong>Harbor-Master</strong> lets agents do the curating: it takes benchmarks in any format and keeps an open, growing <strong>index</strong> of tasks that are sound, verifiable, and still too hard for frontier agents. People only <strong>sign the verdict</strong>. And it is designed to <strong>improve itself</strong>: learning from every benchmark it adapts and every verdict, so that it adapts the next one better.
 </p>
 
 <p align="center">
@@ -127,6 +127,10 @@ An index is a git repository; your clone is its folder. Every `hm` command in it
 | | `hm benchmarks` | The benchmarks and where each stands |
 | Owner and leads | `hm view`, `hm cut`, `hm restore` | The dashboard; the final cut |
 | Owner | `hm contributors`, `hm publish` | Who may contribute; ask to be listed |
+
+## Roadmap
+
+**Recursive self-improvement.** Every adapter, repair and audit in the ledger ends in a verifiable outcome: a check passes or fails, a decision is upheld or overturned by a person. Harbor-Master will learn from these outcomes and from human feedback to upgrade its own harness (the skills, prompts and scripts its agents use), keeping a change only if it adapts more benchmarks, at lower cost, on benchmarks it has not seen. The more benchmarks it curates, the more it can curate. [RAS](https://github.com/Open-SSI/RAS) does the same for agents running scientific campaigns.
 
 ## Development
 
