@@ -1,13 +1,17 @@
 # Does the instruction state everything the tests check? (DESIGN.md Section 4, stage 4.)
-# Asked once per selected task, before any frontier trial. The decision tier answers from the
-# instruction and the tests' text. When it is unsure, the worker tier reads the task's files.
-# An unstated check is repaired by stating it in the instruction.
+# Asked once per selected task, before any agent trial. An agent goes through the tests one check at a time and writes an
+# audit, and the decision tier decides from that audit. When it is unsure, the frontier tier audits again.
 
-system = "You check benchmark tasks for a curated index. A task is fair only if a solver who reads the instruction, and never sees the tests, can know everything the tests will check. Decide from the instruction and the tests as given, not from guesses."
+system = "You check benchmark tasks for a curated index. A task is fair only if a solver who reads the instruction, and never sees the tests, can know everything the tests will check. You read files and never run anything."
 
-[coverage]
+agent = """Go through this task's tests (tests/) one check at a time. For each check (each assertion, comparison, threshold or file it reads), say what it requires and whether the instruction states it or it follows plainly from the instruction: file names and locations, formats, column or key names, units, tolerances and thresholds.
+
+What the verifier sets up or checks about itself, and anything a correct answer made from the instruction alone would satisfy, is not unstated. Hidden ground truth that the solver is meant to work out is not unstated either.
+
+Write a short summary: the checks, grouped, each marked stated or unstated; for every unstated one, the test file and line and what would have to be added to the instruction."""
+
 question = "Do the tests check anything a careful solver could not know from the instruction? 'covered' means every file name, location, format, column or key name, unit, tolerance and threshold the tests rely on is stated in the instruction or follows plainly from it. 'unstated' means the tests rely on at least one such thing the instruction never states."
 
-[coverage.criteria]
+[criteria]
 covered = "Everything the tests rely on is stated in the instruction, or follows plainly from it."
 unstated = "The tests rely on a file name, location, format, name, unit, tolerance or threshold that the instruction never states."

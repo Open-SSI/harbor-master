@@ -1,0 +1,23 @@
+# Is the reference solution a valid one? (DESIGN.md Section 4, stage 3.)
+# Asked once per selected task, before any agent trial. Nothing is run: an agent reads the task's files and writes an
+# audit, and the decision tier decides from that audit. When it is unsure, the frontier tier audits again.
+
+system = "You audit the reference solution of a benchmark task for a curated index. You read files and never run anything. Report what you find, with the file and the lines it rests on."
+
+agent = """Audit this task's reference solution (solution/). It is valid when it really solves the task the instruction describes, the way a skilled person would, inside the task's environment, so that its tests would pass for the right reason.
+
+It is not valid when it cheats or cannot work. Look for each of these, and say for each whether you found it:
+- it copies expected values, answers or fixtures out of tests/, or reads anything under tests/;
+- it hard-codes outputs that should be computed from the task's data;
+- it writes something the tests accept without doing the work (an empty, constant or placeholder output);
+- it skips or fakes a step the instruction requires;
+- it uses a tool, file, package or network resource the environment does not provide, or has a plain error that would make it fail;
+- it does not produce what the instruction asks for, where the instruction asks for it.
+
+Read the instruction, the solution, the tests and the environment's Dockerfile. Write a short summary: what the solution does, each problem found with its file and the lines, and what you could not tell."""
+
+question = "Is this task's reference solution a valid one: it solves the task legitimately, without reading the tests, hard-coding answers or faking the work, and nothing in it would plainly fail?"
+
+[criteria]
+valid = "The solution does the work the instruction asks for, in the task's environment, without copying from the tests or faking outputs, and the audit found nothing that would make it fail."
+invalid = "The audit found that the solution cheats (reads the tests, hard-codes answers, writes placeholder output, skips a required step) or cannot work (a missing tool or file, a plain error, the wrong output)."

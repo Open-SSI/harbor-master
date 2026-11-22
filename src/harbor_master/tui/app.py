@@ -46,6 +46,8 @@ def decision(session, request) -> ChoiceBox | None:
         return ChoiceBox(title, request.text, [("ok", "Confirm")])
     if request.kind == "hung":             # a trial was stopped: run it again, or drop its task
         return ChoiceBox(f"a trial is stuck   {request.target}", request.text, [("retry", "Retry it"), ("drop", "Drop the task")])
+    if request.kind == "drop":             # a check decided to reject a task: the person drops it or lets it go on
+        return ChoiceBox(f"drop this task?   {request.target}", request.text, [("drop", "Drop it"), ("continue", "Continue")])
     return None
 
 

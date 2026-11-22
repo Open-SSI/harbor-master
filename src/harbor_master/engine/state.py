@@ -66,7 +66,7 @@ class CellState:
 @dataclass
 class Request:
     id: int
-    kind: str                    # brief | selection | rejected | hung | lock | cells block work; verdict waits without blocking
+    kind: str                    # brief | selection | rejected | hung | drop | lock | cells block work; verdict waits without blocking
     text: str
     target: str = ""
     choices: list[str] = field(default_factory=list)
@@ -74,7 +74,7 @@ class Request:
 
     @property
     def blocking(self) -> bool:
-        return self.kind in ("brief", "selection", "rejected", "hung", "lock", "cells")
+        return self.kind in ("brief", "selection", "rejected", "hung", "drop", "lock", "cells")
 
     def public(self) -> dict:
         return {"id": self.id, "kind": self.kind, "text": self.text, "target": self.target, "choices": self.choices}

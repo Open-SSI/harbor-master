@@ -22,6 +22,15 @@ def do(s, name, *args) -> str:
     return interact.execute(s, Command(name, list(args)))
 
 
+async def drops(s, said="drop"):
+    """The person at the box when a check rejects a task: drops it, each time."""
+    while True:
+        for r in list(s.requests):
+            if r.kind == "drop" and r.answer is not None and not r.answer.done():
+                r.answer.set_result(said)
+        await asyncio.sleep(0.01)
+
+
 async def until(condition, seconds=5.0):
     for _ in range(int(seconds / 0.01)):
         if condition():
@@ -33,6 +42,7 @@ async def until(condition, seconds=5.0):
 async def test_no_trial_is_spent_before_the_lead_approves_the_selection_and_a_new_brief_asks_again(workspace, ident):
     s = interactive(workspace, ident, "r1")
     run = asyncio.create_task(s.run())
+    person = asyncio.create_task(drops(s))
     await until(lambda: any(r.kind == "selection" for r in s.requests))
     await asyncio.sleep(0.1)
     first = s.requests[0]
@@ -56,5 +66,8 @@ async def test_no_trial_is_spent_before_the_lead_approves_the_selection_and_a_ne
     assert s.benches[BENCH].kept + s.benches[BENCH].dropped == 7 and s.benches[BENCH].not_selected == 17 and ledger.verify(workspace) == []
 
     again = interactive(workspace, ident, "r2")                          # an approved selection is not asked twice
+    person.cancel()
+    person = asyncio.create_task(drops(again))
     await again.run()
+    person.cancel()
     assert not any(r.kind == "selection" for r in again.requests)

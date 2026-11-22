@@ -35,6 +35,8 @@ async def test_a_hung_trial_is_run_again_or_its_task_dropped_as_the_person_says(
     boxes = []
 
     async def answer(kind, text, target="", choices=None):     # the person, at the box
+        if kind == "drop":
+            return "continue"           # a check's rejection is let go: these tasks are here for their trials
         if kind != "hung":
             return None
         boxes.append(text)
@@ -47,7 +49,7 @@ async def test_a_hung_trial_is_run_again_or_its_task_dropped_as_the_person_says(
     assert any(e.get("gate") == "hung" and e.get("outcome") == "drop" for e in of(dropped))
     assert not any(e["type"] == "report" for e in of(dropped))                     # dropped: no report
     assert not any(e.get("gate") == "hung" and e.get("outcome") == "drop" for e in of(retried))
-    assert any(e["type"] == "trial" and e.get("purpose") == "oracle" for e in of(retried))   # run again, and recorded
+    assert any(e["type"] == "trial" for e in of(retried))                         # run again, and recorded
 
 
 def test_an_agents_program_is_downloaded_once_and_mounted_into_each_container(tmp_path, monkeypatch):

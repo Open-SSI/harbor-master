@@ -83,35 +83,72 @@ async def test_a_benchmark_of_which_no_task_is_accepted_is_dropped(workspace, id
     assert status() == "dropped" and "no task was accepted" in s.benches["demo-bench"].detail
 
 
-async def test_an_unstated_check_is_the_worker_agents_to_confirm_never_the_small_models_word(workspace, session, monkeypatch):
+def _scripted(session, monkeypatch, decided):
+    """The audits as a script: each agent's audit says which tier wrote it, and the decision model answers `decided`,
+    one (value, probability) for each call, in turn. Returns what each call was given."""
     from harbor_master.backends import Decision
+    seen = {"audit": [], "decide": []}
+
+    async def check_audit(task, check, tier, earlier=None):
+        seen["audit"].append((check, tier, [e.rationale for e in earlier or []]))
+        return Decision("", 0.0, tier, f"{tier}-model", 0.1, 100, f"the {tier} agent's findings")
+
+    async def check_decide(task, check, audits):
+        seen["decide"].append([a.rationale for a in audits])
+        value, prob = decided.pop(0)
+        return Decision(value, prob, "decision", "jev", 0.001, 10)
+    monkeypatch.setattr(session.backend, "check_audit", check_audit)
+    monkeypatch.setattr(session.backend, "check_decide", check_decide)
+    return seen
+
+
+async def test_a_sure_decision_on_the_workers_audit_is_final(workspace, session, monkeypatch):
     from harbor_master.engine import stages
     from harbor_master.engine.state import CellState
     task = tasks.load_benchmark(Path(tasks.read_registry(workspace)["demo-bench"]["path"]), "demo-bench")[0]
-    asked = []
+    seen = _scripted(session, monkeypatch, [("valid", 0.97)])
+    assert await stages.stage_verify(session, CellState(1), task, 0) == ("ok", "")
+    assert [t for _, t, _ in seen["audit"]] == ["worker"] and seen["decide"] == [["the worker agent's findings"]]
+    said = [e for e in session.ledger.events if e.get("gate") == "solution"]
+    assert [(e["tier"], e["outcome"]) for e in said] == [("worker", "pass")]
 
-    async def covers(task, first=None):         # the small model is sure, and wrong; the worker agent reads the files
-        asked.append(first)
-        return (Decision("unstated", 0.95, "decision", "small") if first is None else
-                Decision("covered", 0.9, "worker", "agent", rationale="everything is stated"))
-    monkeypatch.setattr(session.backend, "covers", covers)
-    assert await stages.coverage(session, CellState(1), task) == ("ok", "") and len(asked) == 2
+
+async def test_an_unsure_decision_goes_to_the_frontier_agent_and_is_decided_on_both_audits(workspace, session, monkeypatch):
+    from harbor_master.engine import stages
+    from harbor_master.engine.state import CellState
+    task = tasks.load_benchmark(Path(tasks.read_registry(workspace)["demo-bench"]["path"]), "demo-bench")[0]
+    seen = _scripted(session, monkeypatch, [("unstated", 0.6), ("covered", 0.93)])         # the same logic for coverage
+    assert await stages.stage_probe(session, CellState(1), task, 0) == ("ok", "")
+    assert seen["audit"] == [("coverage", "worker", []), ("coverage", "frontier", ["the worker agent's findings"])]
+    assert seen["decide"][1] == ["the worker agent's findings", "the frontier agent's findings"]
     said = [e for e in session.ledger.events if e.get("gate") == "coverage"]
-    assert [(e["tier"], e["outcome"]) for e in said] == [("decision", "escalate"), ("worker", "pass")]
+    assert [(e["tier"], e["outcome"]) for e in said] == [("worker", "escalate"), ("frontier", "pass")]
 
 
-async def test_a_correct_variant_whose_own_script_fails_counts_for_nothing(workspace, session, monkeypatch):
-    """A probe answer that crashes says nothing about the verifier: it is left out, not counted as a right answer rejected."""
+async def test_a_rejection_is_a_persons_to_confirm_and_continue_lets_the_task_go_on(workspace, session, monkeypatch):
     from harbor_master.engine import stages
     from harbor_master.engine.state import CellState
-    task = tasks.load_benchmark(Path(tasks.read_registry(workspace)["demo-bench"]["path"]), "demo-bench")[0]
+    found = tasks.load_benchmark(Path(tasks.read_registry(workspace)["demo-bench"]["path"]), "demo-bench")
+    _scripted(session, monkeypatch, [("invalid", 0.95), ("invalid", 0.95), ("invalid", 0.95)])
+    boxes = []
 
-    async def run_mutant(task, mutant, stage="probe"):
-        return None if mutant["kind"] == "equivalent" else False      # every right one crashed, every wrong one was refused
-    monkeypatch.setattr(session.backend, "run_mutant", run_mutant)
-    assert await stages.mutants(session, CellState(1), task) == ("ok", "")
-    said = next(e for e in session.ledger.events if e.get("gate") == "verifier")
-    assert said["outcome"] == "pass" and said["broken"] and not said.get("right_rejected")
+    async def person(kind, text, target="", choices=None):
+        boxes.append((kind, target, choices))
+        return "continue" if target == found[0].task_id else "drop"
+    monkeypatch.setattr(session, "ask", person)
+    assert await stages.stage_verify(session, CellState(1), found[0], 0) == ("ok", "")             # the person let it go on
+    assert await stages.stage_verify(session, CellState(1), found[1], 0) == ("drop", "solution_rejected")
+    assert [b[0] for b in boxes] == ["drop", "drop"] and boxes[0][2] == ["drop", "continue"]
+    human = [(e["task_id"], e["outcome"]) for e in session.ledger.events if e.get("tier") == "human"]
+    assert human == [(found[0].task_id, "pass"), (found[1].task_id, "drop")]
+    assert await stages.stage_verify(session, CellState(1), found[0], 0) == ("ok", "") and len(boxes) == 2   # never asked twice
+
+    async def nobody(kind, text, target="", choices=None):
+        return None
+    monkeypatch.setattr(session, "ask", nobody)                 # with nobody to ask it is dropped, and asked again next time
+    assert await stages.stage_verify(session, CellState(1), found[2], 0) == ("drop", "solution_rejected")
+    monkeypatch.setattr(session, "ask", person)
+    assert await stages.stage_verify(session, CellState(1), found[2], 0) == ("drop", "solution_rejected") and len(boxes) == 3
 
 
 async def test_a_costly_verifier_is_the_worker_agents_to_confirm_and_an_old_drop_is_screened_again(workspace, session, monkeypatch):
@@ -215,17 +252,30 @@ async def test_ranking_asks_both_orders_at_once_and_a_restart_asks_nothing_again
     assert len(calls) == 5                       # a new brief is asked afresh
 
 
-async def test_a_task_whose_stage_errors_is_tried_again_later_not_abandoned(workspace, session, monkeypatch):
-    real = session.backend.write_mutants
-    failed = []
+async def test_a_stage_that_errors_goes_to_the_frontier_model_and_runs_again_and_a_second_error_drops_it(workspace, session, monkeypatch):
+    real, repair = session.backend.check_audit, session.backend.repair
+    calls, repairs = {}, []
+    names = sorted({t.name for t in (workspace.parent / "fake" / "demo-bench").iterdir()})
+    broken = names[0]                       # this one errors every time; the rest error once
 
-    async def flaky(task, *a, **k):         # the session writing probe answers does not start, once per task
-        if task.task_id not in failed:
-            failed.append(task.task_id)
+    async def flaky(task, check, *a, **k):  # the coverage audit's session does not start
+        if check != "coverage":
+            return await real(task, check, *a, **k)
+        calls[task.name] = calls.get(task.name, 0) + 1
+        if calls[task.name] == 1 or task.name == broken:
             raise RuntimeError("Claude (worker) did not return a typed result: Exception: Control request timeout: initialize")
-        return await real(task, *a, **k)
-    monkeypatch.setattr(session.backend, "write_mutants", flaky)
+        return await real(task, check, *a, **k)
+
+    async def looked(task, defect, round_no, tier, why=""):
+        repairs.append((task.name, defect, tier, "Control request timeout" in why))
+        return await repair(task, defect, round_no, tier, why)
+    monkeypatch.setattr(session.backend, "check_audit", flaky)
+    monkeypatch.setattr(session.backend, "repair", looked)
     await session.run()
     bench = session.benches["demo-bench"]
-    assert failed and bench.kept + bench.dropped == bench.selected == 20      # every task finished, on its second try
-    assert not any(str(b.get("status", "")).startswith("error") for b in session.boards.values()) if hasattr(session, "boards") else True
+    assert bench.kept + bench.dropped == bench.selected == 20 and bench.done == 20       # never put back in the queue
+    errored = [r for r in repairs if r[1] == "error"]
+    assert errored and all(tier == "frontier" and told for _, _, tier, told in errored)    # the frontier model, given the error
+    assert calls.get(broken) == 2 and sum(r[0] == broken for r in errored) == 1           # one look, one retry, then dropped
+    gone = [e for e in session.ledger.events if e.get("gate") == "error" and e["task_id"].endswith("/" + broken)]
+    assert gone and gone[0]["outcome"] == "drop" and gone[0]["reason"] == "error:probe"

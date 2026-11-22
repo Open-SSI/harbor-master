@@ -175,12 +175,9 @@ def verify(ledger_dir: Path, simulated: bool = False, index_dir: Path | None = N
         if s.status != "accepted":
             continue
         mine = [e for e in events if e.get("task_id") == tid and e.get("digest") == s.digest]
-        has = lambda purpose, passed: any(  # noqa: E731
-            e["type"] == "trial" and e.get("purpose") == purpose and bool(e.get("passed")) == passed for e in mine)
-        if not has("oracle", True):
-            problems.append(f"{tid}: accepted without a passing oracle run")
-        if not has("noop", False):
-            problems.append(f"{tid}: accepted without a failing no-op run")
+        for check in ("solution", "coverage"):      # each audited, and passed or let go on by a person
+            if not any(e["type"] == "decision" and e.get("gate") == check and e.get("outcome") == "pass" for e in mine):
+                problems.append(f"{tid}: accepted without a passing {check} check")
         if any(e.get("assumed") for e in mine):
             problems.append(f"{tid}: accepted on assumed results that were never run")
         if not any(e["type"] == "decision" and e.get("stage") == "difficulty" and e.get("outcome") == "pass"

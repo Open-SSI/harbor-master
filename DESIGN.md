@@ -22,7 +22,7 @@ Frontier trials are spent before any audit, so broken tasks consume most of them
 |---|---|---|
 | D, decision | `typesafe/jev-1.14` through OpenRouter | Every gate and routing choice: a typed value with a probability. It cannot write prose or code |
 | W, worker | `claude-sonnet-5-5`, Claude Agent SDK | Adapters, repairs, audits, reports, drafting a benchmark's entry |
-| F, frontier | `claude-opus-5-5` | Second judge on a contested audit, repair after W failed twice |
+| F, frontier | `claude-opus-5-5` | Second judge on a contested audit, repair after W failed, a look at any stage that errors |
 
 The worker and frontier tiers run on Claude models (provider `claude-agent-sdk`) or on OpenAI models (provider `codex`, through the Codex SDK, with an OpenAI API key or a ChatGPT subscription sign-in). A Codex session is read-only. The decision tier runs on Jev only, because a general model states a confidence, not a probability.
 
@@ -48,8 +48,8 @@ So every hand-off can be cached, compared across tiers, and checked by someone e
 | 0b | Check | Code and a registry | The cheap checks on the whole benchmark (Section 9): asked when it is added, and again before its adapter, once per pinned release | A check fails and a person confirms |
 | 1 | Adapt | W, then F, then a person. Once per benchmark, skipped for Harbor-format input | An adapter that converts every task, with Harbor's own adapter guide, mending what is broken for every task (Section 9) | The person abandons the benchmark |
 | 2 | Triage | D, then W when unsure | The admission gates below. A task with no reference solution passes: one is written if it is selected | A gate fails |
-| 3 | Verify | D, then W or F, then code | Makes the selected task valid: a missing reference solution is written, a failing one repaired, after the decision model says what would make it valid or that nothing would. Then, in one batch side by side and each run once, the reference passes, a no-op fails and trivial submissions fail; the verifier is fast enough | Nothing would make it valid, or still failing after the retry limit |
-| 4 | Probe | W and code, then D, W | Mutants of the solution test the verifier. Then one question: does the instruction state everything the tests check. The decision model's "unstated" is never acted on as it is: the worker agent reads the files, and confirms it, naming what is missing for the repair to add, or overturns it | The verifier or the instruction is wrong and repair fails |
+| 3 | Verify | W, then D; F and D when unsure; then a person | Is the reference solution valid: does it solve the task without reading the tests, hard-coding answers or faking the work? Nothing is run. The worker agent audits the files and the decision model decides from its audit; when that decision is unsure, the frontier agent audits again and the decision model decides from both. A missing reference solution is written first, as a repair | A person confirms the rejection in a box (or lets the task go on) |
+| 4 | Probe | W, then D; F and D when unsure; then a person | Does the instruction state everything the tests check? The same audit and escalation as verify: the worker agent goes through the tests one check at a time, the decision model decides from its audit, and the frontier agent audits again when that decision is unsure | A person confirms the rejection in a box (or lets the task go on) |
 | 5 | Worker tries | The worker agent (Sonnet on Claude Code) | Two tries, side by side, each at most `cheap_agent_hours` | It solves the task both times: too easy |
 | 6 | Audit | W; F when unsure | Reads how the worker agent failed, and says whether it was the task's fault, the agent's, or the infrastructure's | Broken and not repairable |
 | 7 | Fix | W in round 1, F in round 2 | Repairs the task. The new version goes back to stage 3, through every cheap check again | Still asked for a fix after 2 rounds |
@@ -58,6 +58,8 @@ So every hand-off can be cached, compared across tiers, and checked by someone e
 | 10 | Verdict | A person | For a kept task: `accept [why]` or `reject <why>` (a rejection needs a reason), signed and credited | |
 
 **One work cell, one task.** Stages 3 to 7 are the cheap loop: verify, probe, the worker's tries, audit, and a fix that sends the new version back to verify. A task leaves the loop when it passes all of them, is dropped, or runs out of repair rounds. Only then does stage 8, the frontier difficulty run, happen: once, on the version that passed, and nothing loops back from it. So the version that is reported, and accepted, is the version whose difficulty was measured.
+
+**A stage that errors.** When a stage before the difficulty run stops with an error (an image that does not build, a registry that times out, a model session that gives no answer), the frontier model is given the error and the task. It repairs the task if the task's own files cause it, and every check runs on the new version; otherwise it changes nothing. Either way the stage runs again, once. A second error in the same stage drops the task, recorded as `error:<stage>`. A task is never put back in the queue.
 
 **Public environments.** Right after a benchmark is fetched, before any adapter is written or any task screened, the container images its files name (Dockerfiles, compose files, task records) are looked up in their registries, one per repository. When every one is refused, the benchmark is to be rejected. When some are, whoever writes the adapter is told which, and to leave those tasks out.
 
@@ -88,8 +90,7 @@ Measured on the 70 tasks of Terminal-Bench-Science: 468 requests, $0.023, 11 sec
 
 **Cheap checks before the costly one.** Stage 8 is where the money goes, so everything that can fail a task for cents or a few dollars runs before it, in the loop, and stage 8 runs once, last.
 
-- *Trivial submissions* (stage 3, code). Besides the no-op, the task's output files are left empty, filled with a placeholder, and copied from a file that was already there. The output files are those the instruction and the tests both name. A verifier that accepts one goes to repair.
-- *Coverage* (stage 4, one tier-D request, tier W when unsure). If the tests rely on a file name, format, unit or tolerance the instruction never states, the instruction is repaired here, not after the trials.
+- *Audited checks* (stages 3 and 4). Both run the same code (`audited` in `engine/stages.py`, the checks listed in `CHECKS`): an agent reads the files and writes what it found, the decision model decides from that with a probability, an unsure decision (under `escalation.min_confidence`, or no answer) has the frontier agent audit again, shown the worker's audit, and the decision model decides from both. A rejection is never acted on alone: a box asks a person to drop the task or let it continue, and the answer is signed. With nobody to ask, the task is dropped for that run only, and the next run asks again.
 - *Worker tries* (stage 5). The worker agent tries `cheap_trials` times side by side, each for at most `cheap_agent_hours`. If every try passes, the task is dropped as `solved_by_worker` and no frontier trial is spent. One pass among failures is not enough. Its failures are what the audit reads.
 - *Once per task, last.* Stages 3 to 6 loop through repair until they pass. The frontier trials come after the loop and are never run a second time; no repair follows them.
 
@@ -101,7 +102,7 @@ Measured on the 70 tasks of Terminal-Bench-Science: 468 requests, $0.023, 11 sec
 
 ## 5. Where this goes beyond the paper
 
-1. **Verifier probes before frontier trials.** A worker writes three probe answers, each one small edit of the reference solution: two wrong in a way that matters, one right in another form. They run side by side, each under verify's time limit, while the coverage question is asked; the verifier must reject the wrong ones and accept the right one.
+1. **Audited checks before frontier trials.** The reference solution, and the tests against the instruction, are audited by an agent that reads the files and decided by the decision model, with the frontier agent auditing again when that decision is unsure. Nothing is run: a reference solution that cheats can pass its own tests, and a made-up wrong answer can touch what the tests leave ungraded on purpose.
 2. **Calibrated escalation.** Every decision is stored with its probability, and every later overturn is a label. Thresholds can be refit on those labels.
 3. **Sequential difficulty filter**, run once per task after a smaller model has tried, with early stop and reuse of any valid trial in the ledger.
 4. **Content-addressed record.** A repair changes a digest, so the cheap checks that depend on it run again. The frontier trials do not.
@@ -110,7 +111,7 @@ Measured on the 70 tasks of Terminal-Bench-Science: 468 requests, $0.023, 11 sec
 ## 6. Working cells and parallelism
 
 - **Once per benchmark**: fetching, the adapter, triage, the brief, ranking and selection. Triage is one batched pass, so a task that fails a gate never takes a cell.
-- **One working cell per task in flight**: verify, probe, difficulty, audit, fix, report. `cells = 4` means four tasks at once. A cell holds one agent session at a time, and runs containers side by side where runs are independent: the mutants, and the suite's agents within a round.
+- **One working cell per task in flight**: verify, probe, difficulty, audit, fix, report. `cells = 4` means four tasks at once. A cell holds one agent session at a time, and runs containers side by side where runs are independent: the worker's tries, and the suite's agents within a round.
 - **Limits**: `cells`, `max_containers`, and a rate limit per provider. One asyncio process holds a semaphore for each. To scale past one machine, run on more machines against the same ledger: claims (Section 7) keep them apart.
 
 ## 7. Records
@@ -218,7 +219,7 @@ Keys never enter a settings file, the ledger, or anything uploaded. Each clone o
 |---|---|
 | The index's definition, adapters, ledger, reports | The index's repository |
 | The accepted tasks | The task store |
-| Trial archives, mutants, run summaries, statistics | Nowhere: `.hm/` on the machine that made them |
+| Trial archives, run summaries, statistics | Nowhere: `.hm/` on the machine that made them |
 | Identity and keys | Nowhere |
 
 ### The task store
@@ -429,11 +430,11 @@ Modeled, not measured. Per 1,000 tasks entering, with no selection cap, without 
 
 | | Harbor-Index | Ours | Ours, one Opus does everything |
 |---|---|---|---|
-| Agent cost | ~$15 | ~$525 | ~$2,700 |
+| Agent cost | ~$15 | ~$265 | ~$2,700 |
 | Human hours | ~130 | ~15 | ~15 |
-| Total | ~$6,500 | ~$1,300 | ~$3,450 |
+| Total | ~$6,500 | ~$1,015 | ~$3,450 |
 
-Ours spends about $500 more on agents and saves about 100 expert hours. The verifier probe is its largest line (~$260). With the selection cap, at most 24 tasks of a benchmark reach the costly stages, so the cost no longer grows with a benchmark's size.
+Ours spends about $250 more on agents and saves about 100 expert hours. With the selection cap, at most 24 tasks of a benchmark reach the costly stages, so the cost no longer grows with a benchmark's size.
 
 ## 13. Implementation status
 
@@ -467,7 +468,7 @@ src/harbor_master/
 
 **Tried for real, on Terminal-Bench-Science tasks:**
 
-- Harbor in Docker for the reference solution, a no-op and a mutant.
+- Harbor in Docker for the reference solution and a no-op, before verify became an audit.
 - The gates and the ranking on Jev: 40 gate decisions and the comparisons for under $0.001. Escalations to Sonnet cost about 200 times more than everything Jev did.
 - A hand-written adapter in the container, with a reference solution passing through Harbor.
 - `hm clone INDEX`, the listing check and `hm publish` against GitHub.
@@ -477,7 +478,7 @@ src/harbor_master/
 - A model writing an adapter, or drafting a benchmark's entry.
 - Any tier on the `codex` provider.
 - Agent trials for the difficulty filter, the worker model's first tries, and the audit, repair and report on real trajectories.
-- The agent that reads a benchmark's per-task results, the coverage question on a real model, and trivial submissions through Harbor. The trivial submissions are a heuristic, tested on made-up tasks only.
+- The agent that reads a benchmark's per-task results, and the solution and coverage audits on real models.
 - The task store against Hugging Face.
 
 **Not built:** parity runs, the exploit agent, recalibrating thresholds, the site of indexes, and the session commands `/logs`, `/trajectory`, `/restart`, `/retry`, `/escalate`, `/limit`. Task digests still use a stand-in hash, not Harbor's.

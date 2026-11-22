@@ -13,6 +13,16 @@ from typing import Awaitable, Callable
 from ..core.config import Config, SuiteEntry
 from ..tasks import Task
 
+# The checks a task gets before any agent trial. Each is an audit by an agent that reads the files, decided by the
+# decision tier, and audited again by the frontier tier when that decision is unsure. `reject` is the value that would
+# drop the task, which a person confirms.
+CHECKS = {
+    "solution": {"stage": "verify", "skill": "verify/solution", "choices": ["valid", "invalid"], "reject": "invalid",
+                 "doing": "auditing the reference solution", "says": "the reference solution looks invalid"},
+    "coverage": {"stage": "probe", "skill": "probe/coverage", "choices": ["covered", "unstated"], "reject": "unstated",
+                 "doing": "checking the tests against the instruction", "says": "the tests check something the instruction does not state"},
+}
+
 
 @dataclass
 class Decision:
@@ -102,17 +112,19 @@ class Backend(ABC):
     async def confirm(self, gate: str, choices: list[str], task: Task, first: Decision) -> Decision: ...
     @abstractmethod
     async def adapt(self, benchmark: str, n_tasks: int) -> dict: ...
-    @abstractmethod
-    async def write_mutants(self, task: Task, n: int = 3) -> dict: ...
     async def reported(self, benchmark: str, repo: Path, names: list[str]) -> dict:
         """What the benchmark's own results say, task by task: {"tasks": {name: {"pass_rate", "model"}},
         "source", "cost"}. Only tasks with a reported result are named. None reported: an empty "tasks"."""
         return {"tasks": {}, "source": "", "cost": 0.0}
 
     @abstractmethod
-    async def covers(self, task: Task, first: Decision | None = None) -> Decision:
-        """Does the instruction state everything the tests check: "covered" or "unstated". The decision
-        tier answers. Given its unsure answer as `first`, the worker tier reads the task and answers."""
+    async def check_audit(self, task: Task, check: str, tier: str, earlier: list[Decision] | None = None) -> Decision:
+        """An agent of `tier` reads the task's files for one of CHECKS and writes what it found: the rationale of a
+        Decision with no value. `earlier` holds the audits the decision tier was unsure on."""
+        ...
+    @abstractmethod
+    async def check_decide(self, task: Task, check: str, audits: list[Decision]) -> Decision:
+        """The decision tier decides one of CHECKS from the audits, with a probability. Empty when it declined."""
         ...
     @abstractmethod
     async def diagnose(self, task: Task, defect: str, why: str) -> Decision:
@@ -135,14 +147,6 @@ class Backend(ABC):
     async def answer(self, question: str, context: str) -> str: ...
 
     # Harbor: runs of the verifier and of agents
-    @abstractmethod
-    async def run_oracle(self, task: Task) -> TrialResult: ...
-    @abstractmethod
-    async def run_noop(self, task: Task) -> TrialResult: ...
-    @abstractmethod
-    async def run_mutant(self, task: Task, mutant: dict, stage: str = "probe") -> bool:
-        """True when the verifier accepted it. `stage` is the stage that asked: verify or probe."""
-        ...
     @abstractmethod
     async def run_trial(self, task: Task, entry: SuiteEntry, index: int, max_hours: float = 0) -> TrialResult:
         """Run one agent trial. Must report the agent version that actually ran. `max_hours` is the most it

@@ -34,8 +34,8 @@ FETCH, CHECK, ADAPT, SCREEN, RANK, SELECT, CURATE, REVIEW, DONE = range(len(BENC
 
 # A task's stages in a work cell, by their index in STAGES, and what each does.
 TASK_STAGES = [(STAGE_NO[name], name, what) for name, what in (
-    ("verify", "reference passes, no-op fails"),
-    ("probe", "wrong answers must fail"),
+    ("verify", "solution audited: valid?"),
+    ("probe", "tests stated in instruction?"),
     ("worker", "solved twice = too easy"),
     ("audit", "task's fault, or the agent's?"),
     ("fix", "repair, then check again"),

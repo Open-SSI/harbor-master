@@ -1,6 +1,6 @@
 """Answers built from the records: why a task is where it is, and what a question is about.
 
-Reference solutions and probe mutants are never included.
+Reference solutions are never included.
 """
 from __future__ import annotations
 
@@ -51,6 +51,7 @@ def how_to_answer(r) -> str:
             "verdict": "Nothing enters the index until you sign. Start with /review",
             "rejected": "The workflow rejected it: a box says why, and you confirm",
             "hung": "A trial hung and was stopped: a box says why, and you retry it or drop the task",
+            "drop": "A check decided to reject a task: a box says why, and you drop it or let it continue",
             "lock": f"Lock it with /lock {short}"}.get(r.kind, "")
 
 

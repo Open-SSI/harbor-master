@@ -12,7 +12,7 @@ import random
 
 from ..core.config import Config, SuiteEntry
 from ..tasks import Task
-from .base import Backend, Decision, TaskDropped, TrialResult, Usage
+from .base import CHECKS, Backend, Decision, TaskDropped, TrialResult, Usage
 
 
 def _rng(*parts: object) -> random.Random:
@@ -118,26 +118,28 @@ class SimulatedBackend(Backend):
         await self._step()
         return {"adapter": "built", "cost": 0.80, "tokens": 60_000}
 
-    async def write_mutants(self, task: Task, n: int = 3) -> dict:
-        self._spend("worker", 0.15, 12_000)
-        await self._step()
-        return {"mutants": [{"id": f"m{i}", "kind": "wrong" if i < n - 1 else "equivalent"} for i in range(n)],
-                "cost": 0.15, "tokens": 12_000}
+    def _flawed(self, task: Task, check: str) -> bool:
+        return latent(task)["oracle_fails"] if check == "solution" else latent(task)["unstated"]
 
-    async def covers(self, task: Task, first: Decision | None = None) -> Decision:
-        value = "unstated" if latent(task)["unstated"] else "covered"
-        if first is not None:
-            self._spend("worker", 0.05, 6_000)
-            await self._step()
-            return Decision(value, 0.97, "worker", self.cfg.tiers.worker.model, 0.05, 6_000,
-                            "The tests require a tolerance of 1% on each value, and the instruction never states one."
-                            if value == "unstated" else "Everything the tests rely on is in the instruction.")
-        r = _rng("covers", task.digest)
-        tokens = max(400, len(task.instruction) // 2)
-        cost = tokens * 0.042e-6
-        self._spend("decision", cost, tokens)
-        return Decision(value, 0.70 + 0.14 * r.random() if r.random() < 0.08 else 0.90 + 0.099 * r.random(),
-                        "decision", self.cfg.tiers.decision.model, cost, tokens)
+    async def check_audit(self, task: Task, check: str, tier: str, earlier: list[Decision] | None = None) -> Decision:
+        cost, tokens = (0.60, 30_000) if tier == "frontier" else (0.08, 9_000)
+        self._spend(tier, cost, tokens)
+        await self._step()
+        found = {("solution", True): "solution/solve.py reads tests/expected.json at line 12 and writes its values out as the answer.",
+                 ("solution", False): "solution/solve.py computes the output from the task's data; it reads nothing under tests/.",
+                 ("coverage", True): "tests/test_outputs.py line 40 requires a tolerance of 1% on each value; the instruction never states one.",
+                 ("coverage", False): "Every check in tests/ is stated in the instruction or follows plainly from it."}
+        return Decision("", 0.0, tier, self.cfg.tier(tier).model, cost, tokens, found[(check, self._flawed(task, check))],
+                        skill=CHECKS[check]["skill"])
+
+    async def check_decide(self, task: Task, check: str, audits: list[Decision]) -> Decision:
+        c = CHECKS[check]
+        self._spend("decision", 0.0003, 2_000)
+        await self._step(0.2)
+        value = c["reject"] if self._flawed(task, check) else c["choices"][0]
+        r = _rng("check", check, task.digest, len(audits))
+        prob = 0.95 if len(audits) > 1 else (0.6 + 0.2 * r.random() if r.random() < 0.15 else 0.9 + 0.09 * r.random())
+        return Decision(value, prob, "decision", self.cfg.tiers.decision.model, 0.0003, 2_000)
 
     async def diagnose(self, task: Task, defect: str, why: str) -> Decision:
         x = _rng("diagnose", task.digest, defect).random()
@@ -185,7 +187,7 @@ class SimulatedBackend(Backend):
         return Decision(value, 0.6 if value == "unsure" else 0.9, "worker", self.cfg.tiers.worker.model, 0.40, 30_000, notes[value])
 
     async def repair(self, task: Task, defect: str, round_no: int, tier: str, why: str = "") -> dict:
-        ok = latent(task)["fixable"] or tier == "frontier"
+        ok = defect != "error" and (latent(task)["fixable"] or tier == "frontier")
         cost, tokens = (1.50, 50_000) if tier == "frontier" else (0.50, 35_000)
         self._spend(tier, cost, tokens)
         await self._step()
@@ -193,7 +195,8 @@ class SimulatedBackend(Backend):
                 "what": {"solution": "wrote solution/solve.sh from the instruction and the environment",
                          "oracle": "pinned a dependency the reference solution needs",
                          "verifier": "the verifier now rejects wrong-unit output",
-                         "design": "stated the tolerance in the instruction"}.get(defect, defect)}
+                         "design": "stated the tolerance in the instruction",
+                         "error": "nothing in the task caused it"}.get(defect, defect)}
 
     async def write_report(self, task: Task, blackboard: dict) -> dict:
         self._spend("worker", 0.20, 12_000)
@@ -215,30 +218,12 @@ class SimulatedBackend(Backend):
                         "The container has been waiting on a package download that stopped answering; nothing has "
                         "been written since, and nothing will move on its own.")
 
-    async def run_oracle(self, task: Task) -> TrialResult:
-        await self._step()
-        if task.name in self.hangs:         # it hangs once: the person retries it, or drops the task
+    async def run_trial(self, task: Task, entry: SuiteEntry, index: int, max_hours: float = 0) -> TrialResult:
+        if task.name in self.hangs:         # its first trial hangs once: the person retries it, or drops the task
             self.hangs.discard(task.name)
             quiet = self.cfg.run.quiet_minutes * 60
-            if await self.stuck(task, "the reference solution's run", "(simulated: the log stopped)", quiet) == "drop":
+            if await self.stuck(task, f"{entry.agent}'s try", "(simulated: the log stopped)", quiet) == "drop":
                 raise TaskDropped("hung", f"a trial was stuck for {quiet / 60:.0f} minutes, and was dropped")
-            await self._step()
-        return TrialResult(not latent(task)["oracle_fails"], 1.0, 0, 0, 0.0, 40.0)
-
-    async def run_noop(self, task: Task) -> TrialResult:
-        await self._step()
-        return TrialResult(False, 0.0, 0, 0, 0.0, 20.0)
-
-    async def run_mutant(self, task: Task, mutant: dict, stage: str = "probe") -> bool:
-        """True when the verifier accepted the mutant."""
-        await self._step()
-        if mutant["id"].startswith("trivial"):
-            return latent(task)["shortcut"] and mutant["id"] == "trivial-empty"
-        if mutant["kind"] == "equivalent":
-            return True
-        return latent(task)["verifier_broken"] and mutant["id"] == "m1"
-
-    async def run_trial(self, task: Task, entry: SuiteEntry, index: int, max_hours: float = 0) -> TrialResult:
         r = _rng("trial", task.digest, entry.agent, entry.model, index)
         p = 0.08 if latent(task)["hard"] else 0.85
         cheap = all(entry.model != e.model for e in self.cfg.difficulty.suite)     # a smaller model: the cheap first tries

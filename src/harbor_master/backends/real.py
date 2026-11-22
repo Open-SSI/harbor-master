@@ -4,8 +4,8 @@ The decision tier runs on Jev through OpenRouter (provider "openrouter"), and on
 returns real probabilities and answers all of a task's gates in one request. The worker and
 frontier tiers run on Claude, or on OpenAI models through Codex.
 
-Built: the admission gates, pairwise comparison, mutant writing, answers, Harbor runs of the reference
-solution, a no-op, a mutant, and an agent, the audit of the worker agent's trials and its frontier second
+Built: the admission gates, pairwise comparison, answers, the audits of a task's reference solution and of
+its tests against its instruction, Harbor runs of an agent, the audit of the worker agent's trials and its frontier second
 opinion, the repair, and the audit of the frontier trials. The adapter builder lives in adapter.py. The
 report is written by code from the records, with no model.
 """
@@ -27,7 +27,7 @@ from ..curation import gates
 from ..tasks import Task
 from ..tasks.model import digest_dir
 from . import agents, claude, harbor, jev, sessions
-from .base import Backend, Decision, NotImplementedBackend, TrialResult, Usage
+from .base import CHECKS, Backend, Decision, NotImplementedBackend, TrialResult, Usage
 from .simulated import SimulatedBackend
 
 CLAUDE_PROVIDERS = sessions.PROVIDERS       # what an agent session can run on: Claude, or OpenAI models through Codex
@@ -134,20 +134,6 @@ def _choice_schema(choices: list[str], rationale: bool = False) -> dict:
     return {"type": "object", "properties": props, "required": list(props), "additionalProperties": False}
 
 
-MUTANT_SCHEMA = {
-    "type": "object", "additionalProperties": False, "required": ["mutants"],
-    "properties": {"mutants": {"type": "array", "items": {
-        "type": "object", "additionalProperties": False, "required": ["id", "kind", "what", "files"],
-        "properties": {
-            "id": {"type": "string"},
-            "kind": {"type": "string", "enum": ["wrong", "equivalent"]},
-            "what": {"type": "string", "description": "One sentence: what was changed and why the verifier should reject or accept it."},
-            "files": {"type": "array", "description": "Complete replacement files, with paths relative to solution/.",
-                      "items": {"type": "object", "additionalProperties": False, "required": ["path", "content"],
-                                "properties": {"path": {"type": "string"}, "content": {"type": "string"}}}}}}}},
-}
-
-
 def tests_text(task: Task, limit: int = 14000) -> str:
     """The tests' own text, for the question of whether the instruction states what they check."""
     folder, out, left = task.path / "tests", [], limit
@@ -163,7 +149,8 @@ def tests_text(task: Task, limit: int = 14000) -> str:
     return "\n".join(out) or "(no readable tests)"
 
 
-COVERAGE = ["covered", "unstated"]
+AUDIT_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["summary"],
+                "properties": {"summary": {"type": "string", "description": "What was found, each point with the file and lines it rests on."}}}
 DIAGNOSES = ["write_solution", "repair_solution", "repair_verifier", "repair_environment", "drop"]
 REPORTED_SCHEMA = {
     "type": "object", "additionalProperties": False, "required": ["source", "tasks"],
@@ -186,7 +173,11 @@ DEFECTS = {"solution": "The task has no reference solution. Write solution/solve
            "oracle": "The reference solution does not pass its own tests, a no-op run passes, the reference passed once and failed "
                      "once, or a run failed for an infrastructure reason such as an image that does not build.",
            "verifier": "The verifier accepts a wrong answer, or rejects a correct one.",
-           "design": "The tests check something the instruction does not state, or the task fails for a reason other than its difficulty."}
+           "design": "The tests check something the instruction does not state, or the task fails for a reason other than its difficulty.",
+           "error": "A check of the task stopped with an error before it could judge the task. Read the error. If the task's own "
+                    "files cause it (an environment that does not build, a missing file or dependency, a solution that crashes), "
+                    "fix them. If they do not (a network timeout, a registry or service that did not answer, a model session that "
+                    "gave no answer), change nothing and say fixed is false: the check is run again as it is."}
 
 
 class RealBackend(Backend):
@@ -199,7 +190,6 @@ class RealBackend(Backend):
         self.assumed = set(LATER[LATER.index(assume_after) + 1:]) if assume_after else set()
         self.sim = SimulatedBackend(cfg, lambda tier, cost, tokens: None, speed=0)
         self.kept: dict[str, list[dict]] = {}       # each task version's agent trials, by digest: what the audits read
-        self.mutants: dict[str, list[dict]] = {}    # each task version's mutants and what the verifier said of them
         self.ranked = RankCache(run_dir.parents[1] / "cache" / "ranking.jsonl")     # answers kept for a restart
         if cfg.tiers.decision.provider != "openrouter":     # a general model states a confidence, not a probability
             raise NotImplementedBackend(
@@ -324,16 +314,6 @@ class RealBackend(Backend):
 
     # ----- tier W -----
 
-    async def write_mutants(self, task: Task, n: int = 3) -> dict:
-        if "probe" in self.assumed:
-            return {**await self.sim.write_mutants(task), "cost": 0.0}
-        skill = skills.load("probe/write-mutants")
-        r = await self._ask("worker", skill.system, skill.fill(n=n, task=describe(task, 3000)), MUTANT_SCHEMA,
-                            cwd=task.path, max_turns=30)
-        mutants = [{**m, "files": {f["path"]: f["content"] for f in m["files"]}} for m in r.data["mutants"]]
-        self.mutants[task.digest] = mutants        # run_mutant adds what the verifier said: a repair reads it
-        return {"mutants": mutants, "cost": r.cost, "tokens": r.tokens, "skill": skill.tag}
-
     async def reported(self, benchmark: str, repo: Path, names: list[str]) -> dict:
         skill = skills.load("triage/reported-results")
         listed = "\n".join(names[:1500]) + (f"\n(and {len(names) - 1500} more: they are named like these)" if len(names) > 1500 else "")
@@ -342,29 +322,32 @@ class RealBackend(Backend):
         tasks = {t["task"]: {"pass_rate": t["pass_rate"], "model": t.get("model", "")} for t in r.data.get("tasks", [])}
         return {"tasks": tasks, "source": r.data.get("source", ""), "cost": r.cost, "tokens": r.tokens, "skill": skill.tag}
 
-    async def covers(self, task: Task, first: Decision | None = None) -> Decision:
-        if "probe" in self.assumed:
-            d = await self.sim.covers(task, first)
+    async def check_audit(self, task: Task, check: str, tier: str, earlier: list[Decision] | None = None) -> Decision:
+        c = CHECKS[check]
+        if c["stage"] in self.assumed:
+            d = await self.sim.check_audit(task, check, tier, earlier)
             d.cost = 0.0
             return d
-        skill = skills.load("probe/coverage")
-        asked, tests = skill.data["coverage"], tests_text(task)
-        if first is None:
-            state = {"task": describe(task, 6000)[:12000], "tests": tests}
-            answers, cost, tokens = await jev.decisions(self.cfg.tiers.decision.model, state,
-                                                        {"coverage": jev.choice(asked["question"], asked["criteria"])})
-            self.usage("decision", cost, tokens)
-            return self._jev_decision(COVERAGE, answers.get("coverage") or {}, cost, tokens, skill.tag)
-        said = (f"A first check, by a small model that saw only the start of long files, said \"{first.value or '(no answer)'}\" "
-                f"with probability {first.prob:.2f}. It may be wrong: read the instruction and the tests in full before you answer. "
-                "What the verifier sets up or checks about itself, and anything a correct answer made from the instruction "
-                "alone would satisfy, is not unstated. If you answer \"unstated\", name in the rationale each thing the tests "
-                "rely on that the instruction does not state, with the test that relies on it, so that exactly that can be "
-                "added to the instruction.\n\n")
-        r = await self._ask("worker", skill.data["system"], f"{asked['question']}\n\n{said}{describe(task)}\n\nTESTS\n{tests}",
-                            _choice_schema(COVERAGE, rationale=True), cwd=task.path, max_turns=12)
-        return Decision(r.data["value"], float(r.data["confidence"]), "worker", self.cfg.tiers.worker.model, r.cost, r.tokens,
-                        r.data.get("rationale", ""), skill=skill.tag)
+        skill = skills.load(c["skill"])
+        before = "".join(f"\n\nAN EARLIER AUDIT, by the {e.tier} model, which left the decision unsure. Read the files "
+                         f"yourself and take nothing in it on trust:\n{e.rationale}" for e in (earlier or []))
+        prompt = f"{skill.data['agent']}\n\nThe task's files, its solution and tests among them, are in the current directory.{before}\n\n{describe(task)}"
+        r = await self._ask(tier, skill.data["system"], prompt, AUDIT_SCHEMA, cwd=task.path, max_turns=40 if tier == "frontier" else 30)
+        return Decision("", 0.0, tier, self.cfg.tier(tier).model, r.cost, r.tokens, r.data["summary"], skill=skill.tag)
+
+    async def check_decide(self, task: Task, check: str, audits: list[Decision]) -> Decision:
+        c = CHECKS[check]
+        if c["stage"] in self.assumed:
+            d = await self.sim.check_decide(task, check, audits)
+            d.cost = 0.0
+            return d
+        skill = skills.load(c["skill"])
+        state = {"task": describe(task, 4000)[:8000],
+                 "audits": [{"by": f"the {a.tier} model", "found": a.rationale[:8000]} for a in audits]}
+        answers, cost, tokens = await jev.decisions(self.cfg.tiers.decision.model, state,
+                                                    {check: jev.choice(skill.data["question"], skill.data["criteria"])})
+        self.usage("decision", cost, tokens)
+        return self._jev_decision(c["choices"], answers.get(check) or {}, cost, tokens, skill.tag)
 
     async def answer(self, question: str, context: str) -> str:
         skill = skills.load("session/answer")
@@ -453,13 +436,6 @@ class RealBackend(Backend):
         shutil.rmtree(copy.parent, ignore_errors=True)
         shutil.copytree(task.path, copy, ignore=shutil.ignore_patterns("__pycache__", ".git"))
         said = f"{DEFECTS.get(defect, defect)}\n\nWhat was found: {why or defect}"
-        notes = []
-        if defect == "verifier":
-            for m in self.mutants.get(task.digest, []):
-                wrong = (m["kind"] == "wrong") == (float(m.get("reward") or 0) > 0)
-                if wrong:
-                    notes.append(f"Mutant {m['id']} ({m['kind']}): {m.get('what', '')} The verifier gave it reward {m.get('reward')}.\n"
-                                 + "\n".join(f"--- solution/{path}\n{text[:4000]}" for path, text in m["files"].items()))
         trials = [t for t in self.kept.get(task.digest, []) if t["worker"]][:3]
         folder, evidence = self._evidence(task, trials, copy_task=False) if trials else (None, "")
         if folder is not None:
@@ -467,8 +443,6 @@ class RealBackend(Backend):
             shutil.rmtree(folder, ignore_errors=True)
             evidence = evidence.replace("The current directory holds the task under task/ and these trials:",
                                         "The worker agent's trials are unpacked in ../evidence/, read-only for you:").replace("trials/", "../evidence/")
-        if notes:
-            evidence += "\n\nTHE MUTANTS THE VERIFIER GOT WRONG\n" + "\n\n".join(notes)
         before = digest_dir(copy)
         r = await self._ask(tier, skill.system, skill.fill(defect=said, evidence=evidence), REPAIR_SCHEMA, cwd=copy,
                             max_turns=80, write=True)
@@ -505,43 +479,6 @@ class RealBackend(Backend):
     def _settle(self, result: TrialResult, keep: bool, label: str) -> TrialResult:
         return harbor.settle(result, keep, self.run_dir / "trials", re.sub(r"[^A-Za-z0-9._-]+", "-", label),
                              self.run_dir.parents[1])
-
-    def solution_cap(self) -> float:
-        """The most a reference solution, or a probe answer made from it, may run: the protocol's limit on verify."""
-        return self.cfg.triage.max_verify_minutes * 60
-
-    async def run_oracle(self, task: Task) -> TrialResult:
-        r = await harbor.run(task.path, self.jobs, "oracle", max_agent_seconds=self.solution_cap(),
-                             **self.limits(task, "the reference solution's run"))
-        return self._settle(r, keep=not r.passed or bool(r.error), label=f"{task.name}.oracle.{uuid.uuid4().hex[:6]}")
-
-    async def run_noop(self, task: Task) -> TrialResult:
-        r = await harbor.run(task.path, self.jobs, "nop", max_agent_seconds=self.solution_cap(), **self.limits(task, "the no-op run"))
-        return self._settle(r, keep=r.passed or bool(r.error), label=f"{task.name}.noop.{uuid.uuid4().hex[:6]}")
-
-    async def run_mutant(self, task: Task, mutant: dict, stage: str = "probe") -> bool | None:
-        if stage in self.assumed:
-            return await self.sim.run_mutant(task, mutant, stage)
-        copy = harbor.with_solution(task.path, mutant["files"], self.scratch)
-        try:
-            result = await harbor.run(copy, self.jobs, "oracle", max_agent_seconds=self.solution_cap(),
-                                      **self.limits(task, f"the run of probe answer {mutant['id']}"))
-        finally:
-            shutil.rmtree(copy.parent, ignore_errors=True)
-        mutant["reward"], mutant["error"] = result.reward, result.error
-        if result.error and not result.passed:      # it did not run to the end, such as over the time limit: no evidence
-            mutant["broken"] = result.error[:200]
-            self._settle(result, keep=True, label=f"{task.name}.mutant-{mutant['id']}")
-            return None
-        if result.exit_code not in (None, 0) and not result.passed:
-            # The variant's own script failed: its output says nothing about the verifier, either way. A "correct"
-            # variant that crashes is not a right answer the verifier rejected.
-            mutant["broken"] = f"its script exited with {result.exit_code}"
-            self._settle(result, keep=True, label=f"{task.name}.mutant-{mutant['id']}")
-            return None
-        finding = (mutant["kind"] == "wrong") == result.passed      # a wrong one accepted, or a right one rejected
-        self._settle(result, keep=finding or bool(result.error), label=f"{task.name}.mutant-{mutant['id']}")
-        return result.passed
 
     async def _agent_run(self, task: Task, entry: SuiteEntry, max_hours: float, mounts: list[dict], what: str = "") -> TrialResult:
         """One agent trial. While it runs, its cost so far is reported each minute, so that what is spent keeps up with

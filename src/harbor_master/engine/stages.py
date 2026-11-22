@@ -1,9 +1,9 @@
 """The stages a task goes through inside one working cell (DESIGN.md Section 4).
 
-First the task is made a valid one: verify runs its reference solution and a no-op, and a task with no reference
-solution, or one that fails, goes to a repair. Before a repair is paid for, the decision model says what would make it
-valid (write the solution, repair the solution, the verifier or the environment) or that nothing would, and then it is
-dropped at once.
+First the task is checked without running anything: verify audits its reference solution, and probe its tests against
+its instruction, each the same way (`audited`). A task with no reference solution has one written, as a repair. Before
+a repair is paid for, the decision model says what would make it valid (write the solution, repair the solution, the
+verifier or the environment) or that nothing would, and then it is dropped at once.
 
 Every cheap check comes first, and they may loop through a repair: verify, probe, the worker agent's
 tries, and the audit of how it failed. A repair makes a new version of the task, and that version goes
@@ -23,9 +23,9 @@ import time
 from typing import TYPE_CHECKING
 
 from ..backends import NotImplementedBackend
-from ..backends.base import TaskDropped
+from ..backends.base import CHECKS, TaskDropped
 from ..core.config import SuiteEntry
-from ..curation import difficulty, trivial
+from ..curation import difficulty
 from ..tasks import Task
 from ..tasks.model import digest_dir
 from .state import STAGE, STAGE_NO, STAGES, CellState
@@ -42,11 +42,7 @@ async def process(s: Session, cell: CellState, task: Task) -> None:
     rounds = 0
     while True:
         for name, step in STEPS:
-            try:
-                kind, info = await step(s, cell, task, rounds)
-            except TaskDropped as gone:      # a trial hung, and the person chose to drop the task
-                s.board(task)["why"] = gone.why
-                kind, info = "drop", gone.reason
+            kind, info = await attempt(s, cell, task, name, step, rounds)
             if kind != "ok":
                 break
             if name == s.until:          # this run only goes this far
@@ -56,6 +52,8 @@ async def process(s: Session, cell: CellState, task: Task) -> None:
                 return
         if kind == "ok":
             break
+        if kind == "restart":           # a repair after an error made a new version: every check runs on it again
+            continue
         if kind == "fix" and info in ("oracle", "solution"):     # not yet a valid task: is it worth a repair?
             kind, info = await diagnosed(s, task, info)
         if kind == "fix":
@@ -86,6 +84,39 @@ async def process(s: Session, cell: CellState, task: Task) -> None:
     s.report_ready(task)
     board = s.board(task)
     s.note_recent("kept", task.task_id, f"{board.get('difficulty', '')}, report ready, it recommends {board.get('recommendation', 'accept')}")
+
+
+async def attempt(s: Session, cell: CellState, task: Task, name: str, step, rounds: int) -> tuple[str, str]:
+    """One stage. A stage before the difficulty run that errors (an image that does not build, a session that gave no
+    answer) is not left for later: the frontier model reads the error and repairs the task if the task causes it, and the
+    stage runs again. A second error in the same stage drops the task. An error in the difficulty run is the run's own."""
+    try:
+        return await step(s, cell, task, rounds)
+    except TaskDropped as gone:          # a trial hung, and the person chose to drop the task
+        s.board(task)["why"] = gone.why
+        return "drop", gone.reason
+    except NotImplementedBackend:
+        raise
+    except Exception as err:
+        if name == "difficulty":
+            raise
+        said = f"{type(err).__name__}: {str(err)[:600]}"
+        errored = task.meta.setdefault("_errored", [])
+        if name in errored:
+            s.board(task)["why"] = f"the {name} stage failed again after the frontier model looked at it: {said[:160]}"
+            s.record(task.benchmark, "decision", task, stage=name, gate="error", tier="code", value=said[:200],
+                     outcome="drop", reason=f"error:{name}")
+            return "drop", f"error:{name}"
+        errored.append(name)
+        s.note_recent("error", task.task_id, f"{name}: {said[:140]}. The frontier model looks at it, then the stage runs again")
+        s.board(task)["why"] = f"the {name} stage failed with an error: {said}"
+        try:
+            fixed = await fix(s, cell, task, "error", s.cfg.fix.frontier_after_round + 1)     # always the frontier tier
+        except NotImplementedBackend:
+            fixed = False
+        if fixed:
+            return "restart", ""
+        return await attempt(s, cell, task, name, step, rounds)
 
 
 async def diagnosed(s: Session, task: Task, defect: str) -> tuple[str, str]:
@@ -148,138 +179,90 @@ async def trial(s: Session, task: Task, purpose: str, agent: str, model: str, in
 
 
 async def stage_verify(s: Session, cell: CellState, task: Task, rounds: int):
-    """In one batch, side by side: the reference solution must pass, a no-op must fail, and so must trivial answers
-    that did no work (output files left empty, filled with a placeholder, or copied from one already there). The
-    verifier must be fast enough. Each runs once: for a heavy task, the reference solution alone takes as long as the
-    work it does. A task with no reference solution has one written first, as a repair."""
-    t0 = enter(cell, STAGE_NO["verify"], "reference solution, no-op and trivial answers, side by side")
+    """Is the reference solution valid: does it solve the task without reading the tests, hard-coding answers or faking
+    the work? Nothing is run: it is audited (see `audited`). A task with no reference solution has one written first,
+    as a repair."""
     if not task.has_solution:
+        enter(cell, STAGE_NO["verify"], "it has no reference solution")
         s.board(task)["why"] = "it has no reference solution"
         if not s.cfg.triage.require_reference_solution:
             return "drop", "no_reference_solution"
         return "fix", "solution"
-    known = s.ledger.decision(task.digest, "verify", "trivial", s.protocol)
-    tries = [] if known is not None else trivial.submissions(task.path, task.instruction)
-    oracle, noop, *accepted = await asyncio.gather(
-        trial(s, task, "oracle", "oracle", "", 0, lambda: s.backend.run_oracle(task)),
-        trial(s, task, "noop", "nop", "", 0, lambda: s.backend.run_noop(task)),
-        *(s.container(s.backend.run_mutant(task, m, "verify")) for m in tries))
-    slowest = max(float(e.get("verifier_seconds") or 0) for e in (oracle, noop))
-    limit = s.cfg.triage.max_verifier_seconds
-    s.stage_done(task, STAGE_NO["verify"], t0, oracle_passed=oracle["passed"], noop_passed=noop["passed"],
-                 verifier_seconds=slowest, errors=[e["error"] for e in (oracle, noop) if e.get("error")])
-    board = s.board(task)
-    if any(e.get("error") for e in (oracle, noop)):
-        error = next(e["error"] for e in (oracle, noop) if e.get("error"))
-        from .prepare import SLOW, limits_of, slow_build, unpullable
-        if SLOW.search(error):          # over the protocol's limit on building or verifying: dropped, not repaired
-            reason = ("verifier_too_slow" if "Verifier" in error else "solution_too_slow" if "Agent" in error else "environment_too_slow")
-            board["why"] = slow_build(error, limits_of(s.cfg))
-            s.record(task.benchmark, "decision", task, stage="verify",
-                     gate={"environment_too_slow": "build_time", "solution_too_slow": "solution_time"}.get(reason, "verifier_time"),
-                     tier="code", value=error[:120], outcome="drop", reason=reason)
-            return "drop", reason
-        board["why"] = (unpullable(error, task.path) or "a run failed for an infrastructure reason: " + error[:160])
-        return "fix", "oracle"
-    if not oracle["passed"]:
-        board["why"] = "the reference solution fails its own tests"
-        return "fix", "oracle"
-    if noop["passed"]:
-        board["why"] = "a no-op run passes"
-        return "fix", "oracle"
-    if slowest > limit:
-        board["why"] = f"the verifier took {slowest:.0f}s, over the {limit}s limit"
-        s.record(task.benchmark, "decision", task, stage="verify", gate="verifier_time", tier="code",
-                 value=round(slowest, 1), outcome="drop", reason="verifier_too_slow")
-        return "drop", "verifier_too_slow"
-    if known is not None:
-        passed_ok = known["outcome"] == "pass"
-    elif tries:
-        passed = [m for m, a in zip(tries, accepted) if a]
-        s.record(task.benchmark, "decision", task, stage="verify", gate="trivial", tier="code", value=f"{len(tries)} tried",
-                 outcome="fix" if passed else "pass", accepted=[m["id"] for m in passed])
-        s.stage_done(task, STAGE_NO["verify"], t0, trivial_tried=len(tries), trivial_accepted=[m["id"] for m in passed])
-        passed_ok = not passed
-        if passed:
-            board["why"] = f"the verifier accepts a submission that did no work: one that {passed[0]['what']}"
-    else:
-        passed_ok = True                # the task names no output file that its tests also name
-    return ("ok", "") if passed_ok else ("fix", "verifier")
+    return await audited(s, cell, task, "solution")
 
 
 async def stage_probe(s: Session, cell: CellState, task: Task, rounds: int):
-    """The verifier is tested from both sides before any agent trial: by a few probe answers made from the
-    solution, and by asking whether the instruction states everything the tests check. The two do not wait for
-    each other: the question is asked while the answers run."""
-    (kind, info), (c_kind, c_info) = await asyncio.gather(mutants(s, cell, task), coverage(s, cell, task))
-    if kind != "ok":                # a verifier that cannot be trusted is repaired first; its reason is the one shown
-        s.board(task)["why"] = s.board(task).get("mutant_why", "")
-        return kind, info
-    return c_kind, c_info
+    """Does the instruction state everything the tests check? An unstated check is the commonest reason a task that looks
+    hard is only unclear. It is audited (see `audited`)."""
+    return await audited(s, cell, task, "coverage")
 
 
-async def coverage(s: Session, cell: CellState, task: Task):
-    """An unstated check is the commonest reason a task that looks hard is only unclear. Finding it here
-    costs one request. Finding it at the audit costs the frontier trials that came before."""
-    prior = s.ledger.decision(task.digest, "probe", "coverage", s.protocol)
-    if prior is not None and prior["outcome"] == "pass":
-        return "ok", ""
-    if prior is not None and prior["outcome"] == "fix" and prior.get("tier") != "decision" and prior.get("rationale"):
-        s.board(task)["why"] = prior["rationale"]           # confirmed before, with what is missing: the repair is told it
-        return "fix", "design"
-    t0 = enter(cell, STAGE_NO["probe"], "instruction against the tests")
-    d = await s.backend.covers(task)
-    tiers = [d.tier]
-    # The decision model's "unstated" names nothing, however sure it is, and it reads only the start of long tests. So it
-    # is never acted on as it is: the worker agent reads the task's files, and confirms it, saying what is not stated
-    # (which is what the repair is then told to add), or overturns it.
-    if d.prob < s.cfg.escalation.min_confidence or d.value == "unstated":
-        s.record(task.benchmark, "decision", task, stage="probe", gate="coverage", tier=d.tier, model=d.model,
-                 value=d.value, probability=round(d.prob, 3), outcome="escalate", cost=d.cost, skill=d.skill)
-        d = await s.backend.covers(task, d)
-        tiers.append(d.tier)
-    ok = d.value != "unstated"
-    s.record(task.benchmark, "decision", task, stage="probe", gate="coverage", tier=d.tier, model=d.model,
-             value=d.value, probability=round(d.prob, 3), outcome="pass" if ok else "fix", cost=d.cost,
-             rationale=d.rationale, skill=d.skill)
-    s.stage_done(task, STAGE_NO["probe"], t0, coverage=d.value, tiers=tiers, rationale=d.rationale)
+async def audited(s: Session, cell: CellState, task: Task, check: str) -> tuple[str, str]:
+    """One of the checks before any agent trial, the same way for each (CHECKS in backends/base.py):
+
+    1. The worker agent reads the task's files and writes what it found.
+    2. The decision model decides from that, with a probability.
+    3. Unsure (under the escalation threshold, or no answer): the frontier agent audits again, shown the worker's audit,
+       and the decision model decides from both.
+    4. A decision to reject goes to a person in a box, who drops the task or lets it go on.
+
+    Each step is recorded. A decision already made for this version of the task, under this protocol, is used as it is:
+    a person's answer stands, and a rejection nobody answered is asked again."""
+    c = CHECKS[check]
+    stage = c["stage"]
+    prior = s.ledger.decision(task.digest, stage, check, s.protocol)
+    if prior is not None and prior["outcome"] != "escalate":
+        if prior["outcome"] == "pass":
+            return "ok", ""
+        if prior.get("tier") == "human":
+            s.board(task)["why"] = f"{c['says']}, and a person confirmed the drop"
+            return "drop", f"{check}_rejected"
+        return await confirm_drop(s, task, check, prior.get("rationale", ""))
+    t0 = enter(cell, STAGE_NO[stage], c["doing"])
+    first = await s.backend.check_audit(task, check, "worker")
+    audits = [first]
+    d = await s.backend.check_decide(task, check, audits)
+    floor = s.cfg.escalation.gate_min_confidence.get(check, s.cfg.escalation.min_confidence)
+    if not d.value or d.prob < floor:
+        s.record(task.benchmark, "decision", task, stage=stage, gate=check, tier="worker", model=first.model, value=d.value,
+                 probability=round(d.prob, 3), outcome="escalate", cost=first.cost + d.cost, rationale=first.rationale[:2000],
+                 skill=first.skill)
+        cell.detail = "the decision was unsure: the frontier agent audits it"
+        audits.append(await s.backend.check_audit(task, check, "frontier", [first]))
+        d = await s.backend.check_decide(task, check, audits)
+    last = audits[-1]
+    ok = bool(d.value) and d.value != c["reject"]
+    s.record(task.benchmark, "decision", task, stage=stage, gate=check, tier=last.tier, model=last.model, value=d.value,
+             probability=round(d.prob, 3), outcome="pass" if ok else "reject", cost=last.cost + d.cost,
+             rationale=last.rationale[:2000], skill=last.skill)
+    s.stage_done(task, STAGE_NO[stage], t0, check=check, value=d.value or "no answer", probability=round(d.prob, 3),
+                 tiers=[a.tier for a in audits], rationale=last.rationale)
     if ok:
         return "ok", ""
-    s.board(task)["why"] = d.rationale or "the tests check something the instruction does not state"
-    return "fix", "design"
+    return await confirm_drop(s, task, check, last.rationale if d.value else
+                              "The decision model gave no answer, even after the frontier agent's audit. " + last.rationale)
 
 
-async def mutants(s: Session, cell: CellState, task: Task):
-    prior = s.ledger.decision(task.digest, "probe", "verifier", s.protocol)
-    if prior is not None:
-        return ("ok", "") if prior["outcome"] == "pass" else ("fix", "verifier")
-    t0 = enter(cell, STAGE_NO["probe"], "writing mutants")
-    written = await s.backend.write_mutants(task)
-    mutants, wrong_accepted, right_rejected, detail, broken = written["mutants"], [], [], [], []
-    cell.detail = f"{len(mutants)} probe answers running"
-    accepted = await asyncio.gather(*(s.container(s.backend.run_mutant(task, m)) for m in mutants))    # all at once
-    for m, a in zip(mutants, accepted):
-        detail.append({"id": m["id"], "kind": m["kind"], "what": m.get("what", ""), "verifier_accepted": bool(a),
-                       "error": m.get("error", ""), **({"broken": m["broken"]} if m.get("broken") else {})})
-        if a is None:               # the variant itself did not run: it counts for nothing
-            broken.append(m["id"])
-            continue
-        if m["kind"] == "wrong" and a:
-            wrong_accepted.append(m["id"])
-        if m["kind"] == "equivalent" and not a:
-            right_rejected.append(m["id"])
-    ok = not wrong_accepted and not right_rejected
-    s.record(task.benchmark, "decision", task, stage="probe", gate="verifier", tier="worker",
-                model=s.cfg.tiers.worker.model, value=f"{len(mutants)} mutants", cost=written["cost"],
-             skill=written.get("skill", ""),
-                outcome="pass" if ok else "fix", wrong_accepted=wrong_accepted, right_rejected=right_rejected, broken=broken)
-    s.stage_done(task, STAGE_NO["probe"], t0, mutants=len(mutants) - len(broken), wrong_accepted=wrong_accepted,
-                 right_rejected=right_rejected, broken=broken, detail=detail)
-    if ok:
-        return "ok", ""
-    s.board(task)["mutant_why"] = "verifier accepted a wrong mutant" if wrong_accepted else "verifier rejected a correct variant"
-    s.board(task)["why"] = s.board(task)["mutant_why"]
-    return "fix", "verifier"
+async def confirm_drop(s: Session, task: Task, check: str, found: str) -> tuple[str, str]:
+    """A check decided to reject the task. A person says whether it is dropped or goes on. With nobody to ask it is
+    dropped for this run, and nothing is signed: the next run asks again."""
+    c = CHECKS[check]
+    s.board(task)["why"] = c["says"]
+    s.note_recent("to drop", task.task_id, f"{c['says']}: a person decides")
+    text = (f"{task.task_id}: {c['says']}.\n\n{found.strip()[:1800]}\n\n"
+            "Drop drops the task. Continue ignores this, and the task goes on to its next stage.")
+    said = await s.ask("drop", text, task.task_id, ["drop", "continue"])
+    if said is None:                # recorded under the agent's rejection, which stands: the next run asks again
+        s.record(task.benchmark, "decision", task, stage=c["stage"], gate=check, tier="code", value="unconfirmed",
+                 outcome="drop", reason=f"{check}_rejected")
+        return "drop", f"{check}_rejected"
+    s.record(task.benchmark, "decision", task, stage=c["stage"], gate=check, tier="human", value=said,
+             outcome="drop" if said == "drop" else "pass", reason=f"{check}_rejected" if said == "drop" else "")
+    if said == "drop":
+        s.board(task)["why"] = f"{c['says']}, and a person confirmed the drop"
+        return "drop", f"{check}_rejected"
+    s.note_recent("checked", task.task_id, f"{c['says']}, but a person let it go on")
+    return "ok", ""
 
 
 async def cheap_solve(s: Session, cell: CellState, task: Task) -> list[dict] | None:
@@ -479,20 +462,14 @@ def _reasons(board: dict) -> list[str]:
     def last(stage, key):
         return next((d for d in reversed(board["stages"]) if d["stage"] == stage and key in d), None)
     out = []
-    v, trivial = last("verify", "oracle_passed"), last("verify", "trivial_tried")
-    if v and v.get("oracle_passed") and not v.get("noop_passed"):
-        tried = trivial.get("trivial_tried", 0) if trivial and not trivial.get("trivial_accepted") else 0
-        out.append("Its reference solution passes its tests and a no-op fails"
-                   + (f", and none of {tried} trivial answers is accepted." if tried else "."))
+    sol, cov = last("verify", "check"), last("probe", "check")
+    if sol and sol.get("value") == "valid":
+        out.append("An audit found its reference solution valid" + (", and that its instruction states everything its tests check."
+                                                                    if cov and cov.get("value") == "covered" else "."))
     fixes = [d for d in board["stages"] if d["stage"] == "fix" and d.get("fixed")]
     if fixes:
         said = "; ".join(d.get("what") or f"its {d.get('defect', 'files')} was mended" for d in fixes)
         out.append(f"{'One repair was' if len(fixes) == 1 else f'{len(fixes)} repairs were'} made: {said}.")
-    probe = last("probe", "mutants")
-    if probe and probe.get("mutants"):
-        wrong, right = probe.get("wrong_accepted") or [], probe.get("right_rejected") or []
-        out.append(f"The verifier told right from wrong on all {probe['mutants']} probe answers." if not (wrong or right) else
-                   f"On {probe['mutants']} probe answers the verifier still accepts {len(wrong)} wrong and rejects {len(right)} right.")
     worker, hard = last("worker", "cheap_solve"), last("difficulty", "passes")
     cheap = "The cheap worker model failed it" if worker and worker["cheap_solve"] == "failed" else ""
     if hard and hard.get("trials"):
@@ -521,29 +498,20 @@ def _sentences(text: str, most: int = 2, limit: int = 320) -> str:
 def progress(stage: str, r: dict) -> str:
     """One line for the log on what a stage of a task found, as it ends: what a person watching wants to know."""
     n = lambda k: len(r.get(k) or [])  # noqa: E731
-    if stage == "verify" and "oracle_passed" in r:
-        if r.get("errors"):
-            return f"a run failed: {str(r['errors'][0])[:90]}"
-        return ("reference solution passes, a no-op fails" if r["oracle_passed"] and not r.get("noop_passed") else
-                "reference solution fails its own tests" if not r["oracle_passed"] else "a no-op passes: the tests check too little") + \
-               (f", in {r['verifier_seconds']:.0f} s" if r.get("verifier_seconds") else "")
-    if stage == "verify" and "trivial_tried" in r:
-        return (f"none of {r['trivial_tried']} trivial answers is accepted" if not n("trivial_accepted") else
-                f"{n('trivial_accepted')} of {r['trivial_tried']} trivial answers are accepted")
-    if stage == "probe" and "mutants" in r:
-        wrong, right = n("wrong_accepted"), n("right_rejected")
-        left_out = f" ({n('broken')} whose own script failed left out)" if n("broken") else ""
-        return (f"the verifier tells right from wrong on all {r['mutants']} probe answers{left_out}" if not (wrong or right) else
-                f"of {r['mutants']} probe answers, {wrong} wrong accepted and {right} right rejected{left_out}")
-    if stage == "probe" and "coverage" in r:
-        return "the instruction states everything the tests check" if r["coverage"] == "covered" else \
-            "the tests check something the instruction does not state"
+    if stage in ("verify", "probe") and "check" in r:
+        c = CHECKS[r["check"]]
+        by = " and ".join(dict.fromkeys(r.get("tiers") or [])) or "an agent"
+        verdict = c["says"] if r["value"] == c["reject"] else ("no answer: a person decides" if r["value"] == "no answer" else
+                  {"valid": "the reference solution is valid", "covered": "the instruction states everything the tests check"}.get(r["value"], r["value"]))
+        return f"{verdict} (audited by the {by} agent, decided at p={r.get('probability', 0):.2f})"
     if stage == "worker":
         return {"failed": "the worker model failed it: not too easy", "passed": f"the worker model solved it every time: too easy",
                 "off": "the worker model's tries are switched off"}.get(r.get("cheap_solve", ""), "")
     if stage == "audit":
         verdict = str(r.get("verdict", "?")).replace("_", " ")         # what is to be fixed has a line of its own
         return f"audit: {verdict}" + (f". {_sentences(str(r['rationale']))}" if r.get("rationale") and verdict == "accept" else "")
+    if stage == "fix" and r.get("defect") == "error" and not r.get("fixed"):
+        return "the frontier model found nothing in the task to change: the stage runs again"
     if stage == "fix":
         return (f"repaired the {r.get('defect', 'task')}" + (f": {r['what']}" if r.get("what") else "") if r.get("fixed") else
                 f"round {r.get('round', '?')} could not repair the {r.get('defect', 'task')}")

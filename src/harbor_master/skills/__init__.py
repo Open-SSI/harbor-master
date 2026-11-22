@@ -20,7 +20,7 @@ from importlib import resources
 from pathlib import Path
 from string import Template
 
-CURATION = ("adapt", "audit", "probe", "rank", "triage")      # the folders an index keeps its own copies of
+CURATION = ("adapt", "audit", "probe", "rank", "triage", "verify")      # the folders an index keeps its own copies of
 
 
 @dataclass(frozen=True)
