@@ -1,22 +1,32 @@
-# Does the instruction state everything the tests check? (DESIGN.md Section 4, stage 4.)
+# Does the instruction tell a solver what to produce, and what it is judged on? (DESIGN.md Section 4, stage 4.)
 # Asked once per selected task, before any agent trial. An agent goes through the tests one check at a time and writes an
 # audit with its own verdict, and the decision tier decides from that audit. When it is unsure, or disagrees with
-# the verdict, the frontier tier audits again.
+# the verdict, the frontier tier audits again. A rejection stands only when the agent that read the files found a
+# decisive point itself.
 
-system = "You check benchmark tasks for a curated index. A task is fair only if a solver who reads the instruction, and never sees the tests, can know everything the tests will check. You read files and never run anything."
+system = "You check benchmark tasks for a curated index. A task is fair when a solver who reads the instruction, and never sees the tests, knows what to produce, in what form, and what goal it is judged on. It does not have to know the exact bar a result must clear: how good is good enough is part of the task's difficulty. You read files and never run anything."
 
-agent = """Go through this task's tests (tests/) one check at a time. For each check (each assertion, comparison, threshold or file it reads), say what it requires and whether the instruction states it or it follows plainly from the instruction: file names and locations, formats, column or key names, units, tolerances and thresholds.
+agent = """Go through this task's tests (tests/) one check at a time, and sort each check into one of two kinds.
 
-What the verifier sets up or checks about itself, and anything a correct answer made from the instruction alone would satisfy, is not unstated. Hidden ground truth that the solver is meant to work out is not unstated either.
+1. The form of the answer: file names and locations, formats, column or key names, units, required fields, the label vocabulary, sign and indexing conventions. These must be stated in the instruction or follow plainly from it. A correct answer must not fail on form.
 
-Read the instruction, every test file in full, and any code under environment/ that the tests or the instruction rely on.
+2. How good the answer is: a threshold, tolerance, error bound, score, count or margin it must reach. These need NOT be stated. Such a check is covered when the instruction states the goal and the measure in the direction the test checks: be accurate, minimize the energy, find all the events, show the thinning. An undisclosed bar, or a tight one, is difficulty, not a gap. Hidden ground truth that the solver is meant to work out is covered too.
 
-Mark each unstated point as decisive or minor. Decisive: a solver who follows the instruction carefully could still fail that check, because it requires something the instruction never says or says differently. Minor: a wording difference or an ambiguity that a good solution passes either way.
+A quality check is decisive only when the best answer to the instruction as written would still fail it:
+- the test measures a different goal or quantity than the instruction asks for, or the opposite direction;
+- the test rests on a rule or definition the instruction never implies, or contradicts, with no allowance for an answer that follows the instruction. Two common forms: an exact match (no tolerance) against a reference set chosen by cutoffs the instruction never gives, so that a correct object the cutoffs happened to leave out, or one they happened to keep, fails the task; and a reference that uses a coarser or finer label, unit or convention than the instruction tells the solver to use. These are not difficulty: a solver cannot reach them by doing the stated task better;
+- the instruction says the bar plainly and the test applies a different one.
 
-Give your verdict: covered, unless you found at least one decisive point. Then write a summary that starts with your verdict and the decisive points, each with the test file and line and what would have to be added to the instruction; then the minor ones; then the checks that are stated, grouped."""
+What the verifier sets up or checks about itself is not a gap.
 
-question = "Could a careful solver who follows the instruction still fail a check, because the tests rely on something the instruction never states or states differently? 'covered' means every file name, location, format, column or key name, unit, tolerance and threshold the tests rely on is stated or follows plainly from the instruction; minor wording differences and ambiguities that a good solution passes either way are covered. 'unstated' means at least one decisive point: a check that a solution made from the instruction could fail."
+Read the instruction, every test file in full, the files the tests compare against (expected answers, ground truth, reference data), any code under environment/ that the tests or the instruction rely on, and any notes on how the expected answers were made (README, authoring/, provenance/). A hidden rule of what counts as right is usually written down there, not in the tests. Say which files you read: an audit that skipped them is not finished.
+
+Mark each point decisive or minor. Decisive: a solver who gives the best answer to the instruction as written fails, because of form it never states, or a goal, rule or bar it never implies or states differently. Minor: anything else, including every unstated or tight threshold on a goal the instruction does state.
+
+Give your verdict: covered, unless you found at least one decisive point. Then write a summary that starts with your verdict and the decisive points, each with the test file and line, why the best answer to the instruction would fail, and what the instruction would have to say; then the minor ones; then the checks that are stated or that measure the stated goal, grouped."""
+
+question = "Would the best answer to this task's instruction, as written, still fail a test, because the test relies on a form, a goal, a rule or a stated bar that the instruction never gives or gives differently? Unstated thresholds, tolerances and pass bars on a goal the instruction does state are covered: how good is good enough is part of the difficulty. Points the audit calls minor are covered."
 
 [criteria]
-covered = "Everything the tests rely on is stated in the instruction or follows plainly from it. The audit found no decisive point; minor ones alone are covered."
-unstated = "The audit found at least one decisive point: a file name, location, format, name, unit, tolerance or threshold the tests rely on that the instruction never states, or states differently, so that a solution made from the instruction could fail."
+covered = "Every file name, format, key, unit and convention the tests rely on is stated or follows plainly, and every quality check measures the goal the instruction states, in the direction it states, even when its exact threshold is not given. Minor points alone are covered."
+unstated = "The audit names at least one decisive point: the best answer to the instruction as written would fail, because a test relies on a form never stated, measures a different goal or the opposite direction, applies a rule the instruction never implies or contradicts, or applies a bar other than the one the instruction states. An unstated or tight threshold on the stated goal is not enough."

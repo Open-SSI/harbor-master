@@ -45,7 +45,12 @@ def main() -> None:
         console.print(f"hm {typed} works inside an index's folder, and this folder is not in one.\n"
                       "cd into the index's folder first. To get one: hm clone INDEX. To see which exist: hm indexes.", markup=False, highlight=False)
         raise SystemExit(2)
-    app()
+    from ..ledger.store import BrokenRecord
+    try:
+        app()
+    except BrokenRecord as err:     # a ledger file edited by hand: say which line, not a traceback
+        console.print(str(err), markup=False, highlight=False, style="red")
+        raise SystemExit(1) from None
 
 
 __all__ = ["ANYWHERE", "USAGE", "app", "main"]

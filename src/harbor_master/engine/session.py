@@ -506,12 +506,14 @@ class Session:
                 asyncio.current_task().uncancel()
                 self.board(task)["status"] = "incomplete"
                 self.save_board(task)
-                self.note_recent("stopped", task.task_id, f"stopped at {STAGES[cell.stage]}, marked incomplete")
+                bench.left.append((task.task_id, f"stopped at {STAGES[cell.stage]}"))
+                self.note_recent("stopped", task.task_id, f"stopped at {STAGES[cell.stage]}. Left for the next run")
             except Exception as err:      # one task's failure must not take the run down. Before the difficulty run, a
                 # stage's error was already given to the frontier model and retried (stages.attempt): this is the rest
                 said = f"{STAGES[cell.stage]}: {type(err).__name__}: {str(err)[:140]}"
                 self.board(task)["status"] = f"error at {STAGES[cell.stage]}: {type(err).__name__}: {err}"[:400]
                 self.save_board(task)
+                bench.left.append((task.task_id, said))
                 self.note_recent("error", task.task_id, f"{said}. Left for the next run")
             finally:
                 bench.done += 1

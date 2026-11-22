@@ -43,10 +43,18 @@ class BenchState:
     ranking: list[tuple[str, float, bool]] = field(default_factory=list)   # (task id, rating, selected), in the order tasks are taken
     most: int = 0                # the most tasks that may be selected: the cap, and never more than there are
     chosen: list[str] = field(default_factory=list)     # the task ids selected to curate, finished before or not
+    # The tasks this run let go with no outcome (an error, a model that could not be reached, a stop), and why: nothing
+    # is recorded for them, and the next run takes them again. They count in `done`, which is what the cells are through
+    left: list[tuple[str, str]] = field(default_factory=list)
 
     @property
     def queued(self) -> int:
         return max(0, self.selected - self.done)
+
+    @property
+    def settled(self) -> int:
+        """The chosen tasks that have an outcome: from earlier runs, or reached in this one. Not those left over."""
+        return len(self.chosen) - self.selected + self.done - len(self.left)
 
 
 @dataclass

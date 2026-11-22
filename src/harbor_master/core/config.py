@@ -165,8 +165,8 @@ class Config(BaseModel):
     def protocol(self) -> str:
         """Hash of the settings that make results comparable.
 
-        Changing anything hashed here starts a new protocol, under which filled slots are
-        empty again. A shared ledger locks one protocol at a time: see ledger/protocol.py.
+        Every record names the protocol it was made under. Changing anything hashed here starts a new protocol, but
+        what earlier ones decided stands: only what has no outcome yet runs under the new settings.
         """
         return hashlib.sha256(json.dumps(self.protocol_settings(), sort_keys=True).encode()).hexdigest()[:12]
 

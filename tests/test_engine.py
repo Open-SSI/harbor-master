@@ -16,13 +16,16 @@ def another(workspace, ident, run_id, as_real=True):
 async def test_a_simulated_run_is_sound_leaves_a_small_readable_folder_and_a_rerun_is_rejected(workspace, ident, session):
     await session.run()
     bench, events = session.benches["demo-bench"], session.ledger.events
-    assert bench.selected == 20 and bench.kept + bench.dropped == 20
+    # A rejection nobody was there to confirm leaves its task for the next run, with no outcome
+    assert bench.selected == 20 and bench.kept + bench.dropped + len(bench.left) == 20
+    assert bench.left and all("nobody was there to confirm" in why for _, why in bench.left)
+    assert bench.settled == bench.kept + bench.dropped
     assert ledger.verify(workspace) == []
     states = ledger.fold(events)
     assert sum(s.status == "report_ready" for s in states.values()) == bench.kept         # a dropped task gets no report
     assert sum(s.status == "dropped" for s in states.values()) == bench.dropped
     assert sum(s.status == "not_selected" for s in states.values()) == 4
-    assert not any(s.status == "in_progress" for s in states.values())
+    assert {t for t, s in states.items() if s.status == "in_progress"} == {t for t, _ in bench.left}
     trials = sum(e["type"] == "trial" for e in events)
 
     files = sorted(p.relative_to(session.run_dir).as_posix() for p in session.run_dir.rglob("*") if p.is_file())
@@ -43,7 +46,8 @@ async def test_a_simulated_run_is_sound_leaves_a_small_readable_folder_and_a_rer
     again = another(workspace, ident, "second")
     await again.run()
     assert sum(e["type"] == "trial" for e in again.ledger.events) == trials     # nothing ran a second time
-    assert again.trial_cost == 0 and again.benches["demo-bench"].selected == 0
+    assert {t for t, _ in again.benches["demo-bench"].left} == {t for t, _ in bench.left}   # those it left are asked again
+    assert again.trial_cost == 0 and again.benches["demo-bench"].selected == len(bench.left)
     assert any(kind == "rejected" and "already completed" in text for _, kind, _, text in again.recent)
     assert ledger.verify(workspace) == []
 
@@ -147,6 +151,25 @@ async def test_a_sure_decision_against_the_workers_own_verdict_goes_to_the_front
     assert said[1]["verdicts"] == {"worker": "covered", "frontier": "unstated"}
     first = boxes[0].split("\n\n")[1]
     assert first.startswith("The worker agent's verdict: covered. The frontier agent's verdict: unstated. The decision model decided unstated")
+
+
+async def test_the_decision_model_alone_does_not_reject_what_the_agent_that_read_the_files_found_covered(workspace, session, monkeypatch):
+    """Both agents read every file and found nothing decisive; the decision model, which reads only their audits, says
+    unstated. The task goes on, with no box, and the record says the decision was set aside."""
+    from harbor_master.engine import stages
+    from harbor_master.engine.state import CellState
+    task = tasks.load_benchmark(Path(tasks.read_registry(workspace)["demo-bench"]["path"]), "demo-bench")[0]
+    seen = _scripted(session, monkeypatch, [("unstated", 0.9), ("unstated", 0.9)], {"worker": "covered", "frontier": "covered"})
+    boxes = []
+
+    async def person(kind, text, target="", choices=None):
+        boxes.append(text)
+        return "drop"
+    monkeypatch.setattr(session, "ask", person)
+    assert await stages.stage_probe(session, CellState(1), task, 0) == ("ok", "")
+    assert [t for _, t, _ in seen["audit"]] == ["worker", "frontier"] and boxes == []
+    final = [e for e in session.ledger.events if e.get("gate") == "coverage"][-1]
+    assert final["outcome"] == "pass" and final["value"] == "unstated" and final["overruled"] is True
 
 
 async def test_a_rejection_is_a_persons_to_confirm_and_continue_lets_the_task_go_on(workspace, session, monkeypatch):
@@ -297,7 +320,7 @@ async def test_a_stage_that_errors_goes_to_the_frontier_model_and_runs_again_and
     monkeypatch.setattr(session.backend, "repair", looked)
     await session.run()
     bench = session.benches["demo-bench"]
-    assert bench.kept + bench.dropped == bench.selected == 20 and bench.done == 20       # never put back in the queue
+    assert bench.kept + bench.dropped + len(bench.left) == bench.selected == 20 and bench.done == 20   # never put back in the queue
     errored = [r for r in repairs if r[1] == "error"]
     assert errored and all(tier == "frontier" and told for _, _, tier, told in errored)    # the frontier model, given the error
     assert calls.get(broken) == 2 and sum(r[0] == broken for r in errored) == 1           # one look, one retry, then dropped
@@ -326,7 +349,8 @@ async def test_a_model_that_cannot_be_reached_neither_repairs_nor_drops_the_task
     assert not any(e.get("gate") == "error" or e.get("outcome") == "drop" for e in mine)      # not dropped
     assert not any(a[0].name == away and a[1] == "error" for a in repairs)                       # not repaired
     bench = session.benches["demo-bench"]
-    assert bench.done == 20 and bench.kept + bench.dropped == 19           # counted as finished in this run, with no outcome
+    assert bench.done == 20 and f"demo-bench/{away}" in {t for t, _ in bench.left}    # through the cells, with no outcome
+    assert bench.kept + bench.dropped + len(bench.left) == 20
     again = another(workspace, ident, "r2")
     await again.run()
     assert any(e.get("gate") == "coverage" and e.get("task_id", "").endswith("/" + away) for e in again.ledger.events)

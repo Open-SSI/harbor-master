@@ -55,6 +55,30 @@ async def run_shared(s: Session, bench: BenchState) -> None:
 ASK_FIRST = ("fetch_failed", "adapter_failed", "model_error", "not_harbor_format", "no_task_passed")   # rejections a person confirms
 
 
+def approved_before(s: Session, bench: BenchState, kept: list[Task], brief: dict | None):
+    """A selection a person approved earlier for this benchmark and this brief, perhaps under an earlier protocol, whose
+    tasks all still pass the gates: (the tasks it chose, the ranking it was approved on, its digest), or None. Settings
+    that change how tasks are ranked do not ask again for a selection that was approved; a new brief does."""
+    by_name = {t.name: t for t in kept}
+    rankings = {e["digest"]: e for e in s.ledger.events
+                if e["type"] == "decision" and e.get("gate") == "ranking" and e["benchmark"] == bench.id}
+    signoffs = [e for e in s.ledger.events if e["type"] == "decision" and e.get("gate") == "signoff"
+                and e["benchmark"] == bench.id and e.get("outcome") == "pass"]
+    for e in sorted(signoffs, key=lambda e: -e["time"]):
+        listed = (rankings.get(e["digest"]) or {}).get("ranking") or []
+        names = [name for name, _, picked in listed if picked]
+        if not names or any(name not in by_name for name in names):
+            continue
+        ids = sorted(by_name[name].task_id for name in names)
+        if hashlib.sha256("|".join(ids + [brief["id"] if brief else ""]).encode()).hexdigest() != e["digest"]:
+            continue                    # approved on another brief
+        ranked = [(by_name[name], float(r)) for name, r, _ in listed if name in by_name]
+        floor = min((r for _, r in ranked), default=0.0)
+        ranked += [(t, floor - 1.0) for t in kept if t.name not in {name for name, _, _ in listed}]   # new since: below
+        return [by_name[name] for name in names], ranked, e["digest"]
+    return None
+
+
 async def rejected(s: Session, bench: BenchState) -> None:
     """A benchmark turned away before curating: unless a person already decided, a box asks them to confirm, and whether
     that it is dropped (anyone may curate it again) or left out of this run."""
@@ -144,6 +168,14 @@ async def _run_shared(s: Session, bench: BenchState) -> None:
     # Tasks named for this run (--tasks) were chosen by a person: the share of the benchmark is not applied to them.
     limit_n = ranking.cap(len(bench.tasks), s.cfg.select.top_k, 1.0 if s.sandbox or s.only else s.cfg.select.max_fraction)
     while True:
+        reused = approved_before(s, bench, kept, brief)
+        if reused is not None:      # approved before, perhaps under other settings: it stands, and nothing is ranked again
+            chosen, ranked, signoff = reused
+            chosen_ids = {t.task_id for t in chosen}
+            bench.most = len(chosen)
+            bench.ranking = [(t.task_id, round(r, 3), t.task_id in chosen_ids) for t, r in ranked]
+            s.note_recent("checked", bench.id, f"the selection approved before stands: {len(chosen)} tasks, not ranked again")
+            break
         bench.phase, bench.detail = "ranking", f"scoring {len(kept)} tasks, then comparing the top ones"
         s.explain("rank")
         STAGE.set("rank")

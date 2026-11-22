@@ -143,9 +143,9 @@ def recent_line(entry: tuple[float, str, str, str]) -> Text:
 
 def final_table(s: Session) -> Table:
     tb = Table(header_style=MU, border_style=BORDER)
-    for name in ("benchmark", "tasks", "failed a gate", "under the cap", "selected", "kept", "dropped", "cost"):
+    for name in ("benchmark", "tasks", "failed a gate", "under the cap", "selected", "kept", "dropped", "left for next run", "cost"):
         tb.add_column(name, justify="left" if name == "benchmark" else "right")
     for b in s.benches.values():
         tb.add_row(b.id, str(len(b.tasks)), str(b.triaged_out), str(b.not_selected), str(b.selected),
-                   t((str(b.kept), TE)), t((str(b.dropped), RD)), f"${b.cost:.2f}")
+                   t((str(b.kept), TE)), t((str(b.dropped), RD)), t((str(len(b.left)), AM if b.left else MU)), f"${b.cost:.2f}")
     return tb

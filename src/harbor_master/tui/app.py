@@ -63,6 +63,10 @@ def finished_note(s: Session) -> str:
             why = b.detail.removeprefix("dropped: ").rstrip(".")
             said.append(f"{b.id} is {'dropped' if b.detail.startswith('dropped') else 'left out of this run'}: {why}."
                         if why else f"{b.id} is left out of this run.")
+        elif stages.bench_stage(s, b)[0] == stages.DONE and b.left:
+            which = "; ".join(tid.split("/", 1)[-1] + ", " + why for tid, why in b.left)[:600]
+            said.append(f"{b.id} is not finished: {len(b.left)} task{'s are' if len(b.left) != 1 else ' is'} left for the next run "
+                        f"({which}).")
         elif stages.bench_stage(s, b)[0] == stages.DONE:
             said.append(f"{b.id} is curated.")
         else:

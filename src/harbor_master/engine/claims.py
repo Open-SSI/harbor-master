@@ -23,10 +23,10 @@ BENCH = "__benchmark__"     # the one thing a curation claims: the whole benchma
 
 
 def completed(s: Session, benchmark: str) -> dict[str, str]:
-    """Tasks that already have an outcome under this protocol: task id -> status. Assumed results
-    count only in a run that itself assumes."""
-    events = (e for e in s.ledger.events if e.get("benchmark") == benchmark and e["protocol"] == s.protocol
-              and (s.assumed or not e.get("assumed")))
+    """Tasks that already have an outcome: task id -> status. Outcomes reached under an earlier protocol of the index
+    count too, so that a change of settings reruns only what has none. Assumed results count only in a run that itself
+    assumes."""
+    events = (e for e in s.ledger.events if e.get("benchmark") == benchmark and (s.assumed or not e.get("assumed")))
     return {tid: st.status for tid, st in fold(events).items() if st.status in DONE}
 
 
@@ -41,7 +41,7 @@ async def take(s: Session, bench: BenchState, chosen: list[Task]) -> list[Task]:
     finished = [t for t in chosen if t.task_id in done]
     if finished:
         s.note_recent("rejected", bench.id, f"{len(finished)} already completed, not run again: {_names(finished)}")
-        states = fold(e for e in s.ledger.events if e.get("benchmark") == bench.id and e["protocol"] == s.protocol)
+        states = fold(e for e in s.ledger.events if e.get("benchmark") == bench.id)
         for t in finished:              # a report written in an earlier run still waits for this reviewer's verdict
             if done[t.task_id] == "report_ready":
                 t.digest = states[t.task_id].digest or t.digest

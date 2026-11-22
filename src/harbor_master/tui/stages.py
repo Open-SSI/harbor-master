@@ -147,18 +147,20 @@ def bench_boxes(s: Session, b: BenchState, index: int, how: str) -> list[tuple[s
     kept = len(b.tasks) - b.triaged_out
     review = sum(1 for task in s.ready if task.benchmark == b.id)
     running = sum(1 for c in s.cells if c.task is not None and c.task.benchmark == b.id)
-    finished = len(b.chosen) - b.selected + b.done
+    # under a box there are 12 columns: "17/20 3 left", "20/20 done"
+    done = f"{b.settled}/{len(b.chosen)} {len(b.left)} left" if b.left else f"{b.settled}/{len(b.chosen)} done"
     under = [f"{len(b.tasks)} tasks" if b.tasks else "", b.checked, "" if _foreign(b) else "not needed",
              f"{kept} kept" if b.tasks and index > SCREEN else "", f"{len(b.ranking)} ranked" if b.ranking else "",
              f"{len(b.chosen)} chosen" if b.chosen else "",
-             (f"{running} working" if running else f"{finished} of {len(b.chosen)} done") if b.chosen else "",
-             f"{review} to review" if review else "", f"{b.kept} kept" if index == DONE else ""]
+             (f"{running} working" if running else done) if b.chosen else "",
+             f"{review} to review" if review else "",
+             (f"{len(b.left)} left" if b.left else f"{b.kept} kept") if index == DONE else ""]
     boxes = []
     for i, (name, _) in enumerate(BENCH_STAGES):
         if (i == ADAPT and not _foreign(b)) or (i == CHECK and not b.entry):   # in Harbor format; not on the list: made up
             state = "skip"
-        elif i == DONE:
-            state = "done" if index == DONE else "todo"
+        elif i == DONE:         # through, with tasks left for the next run: not curated yet, and it says so in amber
+            state = ("wait" if b.left else "done") if index == DONE else "todo"
         elif index == DONE or i < index:
             state = "done"
         elif i == index:
@@ -169,10 +171,18 @@ def bench_boxes(s: Session, b: BenchState, index: int, how: str) -> list[tuple[s
     return boxes
 
 
+def _names(left: list[tuple[str, str]], most: int = 3) -> str:
+    names = [tid.split("/", 1)[-1] for tid, _ in left]
+    return ", ".join(names[:most]) + (f" and {len(names) - most} more" if len(names) > most else "")
+
+
 def bench_view(s: Session, b: BenchState, width: int, now: float) -> Group:
     index, how = bench_stage(s, b)
     lines: list = [strip(bench_boxes(s, b, index, how), width, now), Text()]
-    if index == DONE:
+    if index == DONE and b.left:        # this run is through, but not every chosen task has an outcome
+        said = t(("● not finished", f"bold {AM}"), (f"   {b.kept} reported · {b.dropped} dropped · ", SE),
+                 (f"{len(b.left)} left for the next run: {_names(b.left)}", AM))
+    elif index == DONE:
         said = t(("✓ curated", f"bold {TE}"), (f"   {b.kept} reported · {b.dropped} dropped", SE))
     else:
         name, what = BENCH_STAGES[index]
@@ -181,8 +191,10 @@ def bench_view(s: Session, b: BenchState, width: int, now: float) -> Group:
         counts = ""
         if index == CURATE and b.chosen:
             running = sum(1 for c in s.cells if c.task is not None and c.task.benchmark == b.id)
-            counts = f"{len(b.chosen) - b.selected + b.done}/{len(b.chosen)} done · {running} working · {max(0, b.queued - running)} waiting"
+            counts = f"{b.settled}/{len(b.chosen)} done · {running} working · {max(0, b.queued - running)} waiting"
         said = t((f"● {name}", f"bold {color}"), (f" · {what}", SE), ("   " + verb + (counts or b.detail), color if how != "now" else MU))
+        if counts and b.left:
+            said.append(f" · {len(b.left)} left for the next run", style=AM)
     lines.append(said)
     return Group(*lines)
 

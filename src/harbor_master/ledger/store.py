@@ -53,8 +53,22 @@ class Shard:
         return event
 
 
+class BrokenRecord(ValueError):
+    """A line of a ledger file that is not a record: the file was edited by hand. Nothing reads around it, since a record
+    left out would change what the ledger says; the file is put back instead."""
+
+
 def read_shard(path: Path) -> list[dict]:
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    records = []
+    for n, line in enumerate(path.read_text().splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            records.append(json.loads(line))
+        except ValueError as err:
+            raise BrokenRecord(f"{path}, line {n}, is not a record ({err.msg}): it begins {line[:24]!r}. Ledger files are "
+                               f"only written by hm. If it was edited by hand, put it back: git checkout -- {path}") from None
+    return records
 
 
 def shard_paths(ledger_dir: Path) -> list[Path]:
@@ -108,7 +122,7 @@ class Ledger:
         if key is not None:
             self.taken.setdefault(key, e)
         if e["type"] == "decision":
-            self._decisions[(e.get("digest") or e.get("benchmark", ""), e.get("stage", ""), e.get("gate", ""), e["protocol"])].append(e)
+            self._decisions[(e.get("digest") or e.get("benchmark", ""), e.get("stage", ""), e.get("gate", ""))].append(e)
 
     def _kinds(self, kind: str) -> tuple[str, ...]:
         return (kind, kind + ":assumed") if self.accept_assumed else (kind,)
@@ -121,12 +135,15 @@ class Ledger:
         return None
 
     def decision(self, digest: str, stage: str, gate: str, protocol: str) -> dict | None:
-        """The standing decision for a gate: the highest tier wins, then one made again over the first, then the latest."""
-        found = [e for e in self._decisions.get((digest, stage, gate, protocol), ())
-                 if self.accept_assumed or not e.get("assumed")]
+        """The standing decision for a gate on this version of a task. One made under `protocol` comes first; when there is
+        none, one made under an earlier protocol of the index stands: a change of settings does not undo what was decided,
+        and only what has no decision yet is decided again. Among them, the highest tier wins, then one made again over
+        the first, then the latest."""
+        found = [e for e in self._decisions.get((digest, stage, gate), ()) if self.accept_assumed or not e.get("assumed")]
         if not found:
             return None
-        return max(found, key=lambda e: (TIER_RANK.get(e.get("tier", ""), 0), int(e.get("redo") or 0), e["time"]))
+        return max(found, key=lambda e: (e["protocol"] == protocol, TIER_RANK.get(e.get("tier", ""), 0),
+                                         int(e.get("redo") or 0), e["time"]))
 
     def brief(self, benchmark: str) -> dict | None:
         briefs = [e for e in self.events if e["type"] == "brief" and e["benchmark"] == benchmark]

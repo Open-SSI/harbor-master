@@ -73,6 +73,10 @@ async def process(s: Session, cell: CellState, task: Task) -> None:
             kind, info = "drop", f"unrepaired:{info}"
             s.record(task.benchmark, "decision", task, stage="fix", gate="repair", tier="code",
                      value=f"{rounds} round{'s' if rounds != 1 else ''}", outcome="drop", reason=info)
+        if any(tid == task.task_id for tid, _ in bench.left):     # left out of this run only, with no outcome
+            s.board(task)["status"] = "left for the next run"
+            s.save_board(task)
+            return
         bench.dropped += 1                  # dropped by the workflow: no report, no box, and the cell takes the next task
         s.board(task)["status"] = "dropped"
         s.board(task)["reason"] = info
@@ -206,9 +210,10 @@ async def audited(s: Session, cell: CellState, task: Task, check: str) -> tuple[
     2. The decision model decides from that, with a probability.
     3. Unsure (under the escalation threshold, or no answer), or against the worker's own verdict, however sure: the
        frontier agent audits again, shown the worker's audit, and the decision model decides from both.
-    4. A decision to reject goes to a person in a box, who drops the task or lets it go on.
+    4. A decision to reject goes to a person in a box, who drops the task or lets it go on, but only when the last agent
+       to audit gave the same verdict: one that found nothing decisive is not overruled by the decision model alone.
 
-    Each step is recorded. A decision already made for this version of the task, under this protocol, is used as it is:
+    Each step is recorded. A decision already made for this version of the task, under this protocol or an earlier one, is used as it is:
     a person's answer stands, and a rejection nobody answered is asked again."""
     c = CHECKS[check]
     stage = c["stage"]
@@ -237,10 +242,17 @@ async def audited(s: Session, cell: CellState, task: Task, check: str) -> tuple[
         d = await s.backend.check_decide(task, check, audits)
     last = audits[-1]
     ok = bool(d.value) and d.value != c["reject"]
+    # A rejection rests on a decisive point the agent that read the files found itself. The decision model reads only its
+    # audit: rejecting against that agent's own verdict, or giving no answer, does not put the task in front of a person.
+    overruled = not ok and bool(last.value) and last.value != c["reject"]
+    ok = ok or overruled
     verdicts = {a.tier: a.value for a in audits}
     s.record(task.benchmark, "decision", task, stage=stage, gate=check, tier=last.tier, model=last.model, value=d.value,
              probability=round(d.prob, 3), outcome="pass" if ok else "reject", cost=last.cost + d.cost,
-             rationale=last.rationale[:2000], skill=last.skill, verdicts=verdicts)
+             rationale=last.rationale[:2000], skill=last.skill, verdicts=verdicts, overruled=overruled)
+    if overruled:
+        s.note_recent("checked", task.task_id, f"the decision model said {d.value or 'nothing'}, but the {last.tier} agent, "
+                      f"which read the files, found nothing decisive: it goes on")
     s.stage_done(task, STAGE_NO[stage], t0, check=check, value=d.value or "no answer", probability=round(d.prob, 3),
                  tiers=[a.tier for a in audits], rationale=last.rationale)
     if ok:
@@ -260,9 +272,12 @@ async def confirm_drop(s: Session, task: Task, check: str, found: str) -> tuple[
     text = (f"{task.task_id}: {c['says']}.\n\n{found.strip()[:2400]}\n\n"
             "Drop drops the task. Continue ignores this, and the task goes on to its next stage.")
     said = await s.ask("drop", text, task.task_id, ["drop", "continue"])
-    if said is None:                # recorded under the agent's rejection, which stands: the next run asks again
-        s.record(task.benchmark, "decision", task, stage=c["stage"], gate=check, tier="code", value="unconfirmed",
-                 outcome="drop", reason=f"{check}_rejected")
+    if said is None:                # nobody to ask: left out of this run only. The agent's rejection stands, and with no
+        # outcome recorded the next run takes the task again and asks
+        if ("decision", task.digest, c["stage"], check, s.protocol, "code") not in s.ledger.taken:   # once: asked again later
+            s.record(task.benchmark, "decision", task, stage=c["stage"], gate=check, tier="code", value="unconfirmed",
+                     outcome="unconfirmed", reason=f"{check}_rejected")
+        s.benches[task.benchmark].left.append((task.task_id, f"{c['says']}: nobody was there to confirm the drop"))
         return "drop", f"{check}_rejected"
     s.record(task.benchmark, "decision", task, stage=c["stage"], gate=check, tier="human", value=said,
              outcome="drop" if said == "drop" else "pass", reason=f"{check}_rejected" if said == "drop" else "")

@@ -71,3 +71,41 @@ async def test_no_trial_is_spent_before_the_lead_approves_the_selection_and_a_ne
     await again.run()
     person.cancel()
     assert not any(r.kind == "selection" for r in again.requests)
+
+
+async def test_after_a_protocol_change_the_approved_selection_and_every_outcome_stand_and_only_the_rest_runs(workspace, ident):
+    import tomllib
+
+    import tomli_w
+    s = interactive(workspace, ident, "r1")
+    run = asyncio.create_task(s.run())
+    person = asyncio.create_task(drops(s))
+    await until(lambda: any(r.kind == "selection" for r in s.requests))
+    assert "7 of 24" in do(s, "approve", BENCH, "1-7")
+    await run
+    person.cancel()
+    first = s.protocol
+    done = {t: st for t, st in ledger.fold(s.ledger.events).items() if st.status in ("dropped", "report_ready")}
+    assert len(done) == 7
+
+    # One of them is left with no outcome, as a task whose session could not be had is: its records are taken out
+    shard = next((workspace / "ledger" / BENCH).glob("*-r1.jsonl"))
+    lines = shard.read_text().splitlines()
+    left = sorted(done)[0]
+    kept = [line for line in lines if f'"task_id":"{left}"' not in line or '"gate":"gates"' in line]
+    shard.write_text("\n".join(kept) + "\n")
+
+    protocol = tomllib.loads((workspace / "protocol.toml").read_text())
+    protocol["select"]["comparisons_per_task"], protocol["select"]["pool_factor"] = 8, 2   # how tasks are ranked
+    (workspace / "protocol.toml").write_text(tomli_w.dumps(protocol))
+    again = interactive(workspace, ident, "r2")
+    assert again.protocol != first
+    person = asyncio.create_task(drops(again))
+    await again.run()
+    person.cancel()
+    assert not any(r.kind == "selection" for r in again.requests)       # the approval stands: nothing ranked or asked
+    mine = [e for e in again.ledger.events if e["protocol"] == again.protocol and e.get("task_id")]
+    assert mine and {e["task_id"] for e in mine} == {left}               # only the task with no outcome ran again
+    assert not any(e.get("stage") == "triage" for e in mine)            # its gates, passed before, were not asked again
+    states = ledger.fold(again.ledger.events)
+    assert all(states[t].status in ("dropped", "report_ready") for t in done)
