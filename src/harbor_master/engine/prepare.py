@@ -109,7 +109,9 @@ async def oracle_problems(out: Path, n: int, jobs: Path, limits: dict | None = N
     for task_dir in picked:                                                                  # tasks sorted by name group by source
         if not (task_dir / "solution").is_dir():
             continue
-        result = await harbor.run(task_dir, jobs, "oracle", **(limits or {}))
+        caps = dict(limits or {})
+        minutes = caps.pop("max_verify_minutes", 0)     # Harbor caps a reference solution's run as the agent's time
+        result = await harbor.run(task_dir, jobs, "oracle", max_agent_seconds=minutes * 60, **caps)
         if not result.passed:
             found.append(f"{task_dir.name}: " + (unpullable(result.error, task_dir) or slow_build(result.error, limits) or
                          "its reference solution does not pass its own test" + (f" ({result.error[:500]})" if result.error else
