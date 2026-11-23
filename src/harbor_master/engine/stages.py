@@ -23,7 +23,7 @@ import time
 from typing import TYPE_CHECKING
 
 from ..backends import NotImplementedBackend
-from ..backends.base import CHECKS, TaskDropped, Unreachable
+from ..backends.base import CHECKS, Decision, TaskDropped, Unreachable
 from ..core.config import SuiteEntry
 from ..curation import difficulty
 from ..tasks import Task
@@ -237,16 +237,25 @@ async def audited(s: Session, cell: CellState, task: Task, check: str) -> tuple[
         return await confirm_drop(s, task, check, f"{verdicts} The decision model decided {prior.get('value') or 'nothing'}."
                                   f"\n\nThe {prior.get('tier', 'last')} agent found:\n{prior.get('rationale', '')}")
     t0 = enter(cell, STAGE_NO[stage], c["doing"])
-    first = await s.backend.check_audit(task, check, "worker")
-    audits = [first]
-    d = await s.backend.check_decide(task, check, audits)
     floor = s.cfg.escalation.gate_min_confidence.get(check, s.cfg.escalation.min_confidence)
-    if not d.value or d.prob < floor or d.value != first.value:
-        s.record(task.benchmark, "decision", task, stage=stage, gate=check, tier="worker", model=first.model, value=d.value,
-                 probability=round(d.prob, 3), outcome="escalate", cost=first.cost + d.cost, rationale=first.rationale[:2000],
-                 skill=first.skill, verdict=first.value)
-        cell.detail = ("the decision went against the worker's verdict" if d.value and d.value != first.value else
-                       "the decision was unsure") + ": the frontier agent audits it"
+    if prior is not None and prior.get("tier") == "worker":     # run again after an error: the worker escalated it already
+        first = Decision(value=prior.get("verdict") or "", prob=0.0, tier="worker", model=prior.get("model", ""),
+                         rationale=prior.get("rationale", ""), skill=prior.get("skill", ""))
+        audits = [first]
+        escalate = True
+        cell.detail = "run again: the frontier agent audits what the worker found"
+    else:
+        first = await s.backend.check_audit(task, check, "worker")
+        audits = [first]
+        d = await s.backend.check_decide(task, check, audits)
+        escalate = not d.value or d.prob < floor or d.value != first.value
+        if escalate:
+            s.record(task.benchmark, "decision", task, stage=stage, gate=check, tier="worker", model=first.model, value=d.value,
+                     probability=round(d.prob, 3), outcome="escalate", cost=first.cost + d.cost,
+                     rationale=first.rationale[:2000], skill=first.skill, verdict=first.value)
+            cell.detail = ("the decision went against the worker's verdict" if d.value and d.value != first.value else
+                           "the decision was unsure") + ": the frontier agent audits it"
+    if escalate:
         audits.append(await s.backend.check_audit(task, check, "frontier", [first]))
         d = await s.backend.check_decide(task, check, audits)
     last = audits[-1]

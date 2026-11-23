@@ -45,8 +45,8 @@ def duplicate_key(e: dict) -> tuple | None:
     kind = t + ":assumed" if e.get("assumed") else t        # an assumed record never fills a real slot
     if t == "trial":
         return (kind, *trial_slot(e))
-    if t == "decision":
-        return (kind, *decision_key(e))
+    if t == "decision":         # an escalation is a step on the way, not an outcome: a stage run again may record it again
+        return None if e.get("outcome") == "escalate" else (kind, *decision_key(e))
     if t == "verdict":
         return ("verdict", e["digest"], e["runner"], e.get("value", ""))
     if t == "report":
