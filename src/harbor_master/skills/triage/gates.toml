@@ -12,11 +12,11 @@ question_answering = "The solver answers a question in free text, with no work t
 short_answer = "The solver gives one short fact, number or name from recall."
 
 [verifier]
-question = "How is a submission graded? 'programmatic' means a script or test suite decides, with no model or person in the loop. 'llm_judge' means a language model grades. 'rubric' means a person or a rubric grades. 'none' means there is no verifier."
+question = "How is a submission graded? Read the TEST CODE, not only the file names. 'programmatic' means a script or test suite decides, with no model or person in the loop. 'llm_judge' means a language model grades, even only for answers a script cannot match: code that calls a model API (OpenAI, Anthropic, a chat-completions endpoint) to judge an answer is a model grader. 'rubric' means a person or a rubric grades. 'none' means there is no verifier."
 
 [verifier.criteria]
 programmatic = "A script or test suite decides, with no model or person in the loop."
-llm_judge = "A language model grades the submission."
+llm_judge = "A language model grades the submission, in whole or for the answers a script cannot match."
 rubric = "A person, or a rubric applied by hand, grades the submission."
 none = "There is no verifier."
 

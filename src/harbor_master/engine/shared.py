@@ -376,6 +376,7 @@ RANK_AT_ONCE = 32        # ranking's requests to the decision model in flight at
 # task's files. On verifier_cost, the decision model reads only the start of long tests and calls many cheap verifiers
 # costly; a wrong "cheap" costs one measured run in verify, a wrong "costly" loses the task for good.
 CONFIRM_DROP = {"verifier_cost"}
+GRADING = {"verifier", "verifier_cost"}         # the gates that need the test code to answer
 
 
 def unconfirmed_drop(prior: dict) -> bool:
@@ -395,19 +396,24 @@ async def triage(s: Session, task: Task) -> bool:
     because that pair is the label the thresholds are tuned on.
     """
     prior = s.ledger.decision(task.digest, "triage", "gates", s.protocol)
-    if prior is not None and not unconfirmed_drop(prior):
+    # A pass decided before the gates read the task's test code is screened again on how it is graded: a grader that
+    # calls a model passed as "programmatic" when only the test files' names were shown.
+    stale = prior is not None and prior.get("outcome") == "pass" and not prior.get("read_tests")
+    if prior is not None and not unconfirmed_drop(prior) and not stale:
         return prior["outcome"] == "pass"
     # A drop the decision model made alone on a gate that needs the worker's word is screened again, keeping the
     # answers it had: that gate goes to the worker, and the gates after it are asked.
-    kept = {g: a for g, a in (prior or {}).get("value", {}).items() if g in gates.D_GATES and g not in CONFIRM_DROP}
+    again_on = GRADING if stale else CONFIRM_DROP
+    kept = {g: a for g, a in (prior or {}).get("value", {}).items() if g in gates.D_GATES and g not in again_on}
     answers: dict[str, dict] = {}
     cost, skill = 0.0, ""
-    redo, more = prior is not None, {}
+    redo, more = prior is not None, {"read_tests": True}
+    level = int((prior or {}).get("redo") or 1) + 1     # each screening again beside the ones before, under its own key
 
     def done(failed: str = "") -> bool:
         tier = "worker" if any(a.get("tier") == "worker" for a in answers.values()) else "decision"
         if redo:
-            more["redo"] = 2             # beside the first screening's record, which keeps its own key
+            more["redo"] = level         # beside the earlier screening's record, which keeps its own key
         s.record(task.benchmark, "decision", task, stage="triage", gate="gates", tier=tier, **more,
                  model=s.cfg.tiers.decision.model, value=answers, outcome="drop" if failed else "pass",
                  reason=f"{failed}:{answers[failed]['value']}" if failed else "", cost=cost, skill=skill)
@@ -423,9 +429,10 @@ async def triage(s: Session, task: Task) -> bool:
     answers["reference_solution"] = {"value": "present" if task.has_solution else "missing: written if selected", "tier": "code"}
     wanted = {g: choices for g, (choices, _) in gates.D_GATES.items()}
     if redo:
-        first = prior["value"].get("verifier_cost") or {}
         decided = {g: Decision(a["value"], float(a.get("p", 1.0)), a.get("tier", "decision"), "", 0.0, 0) for g, a in kept.items()}
-        decided["verifier_cost"] = Decision(first.get("value", ""), float(first.get("p", 0.0)), "decision", "", 0.0, 0)
+        if not stale:               # the unconfirmed drop: its first answer goes to the worker
+            first = prior["value"].get("verifier_cost") or {}
+            decided["verifier_cost"] = Decision(first.get("value", ""), float(first.get("p", 0.0)), "decision", "", 0.0, 0)
         rest = {g: c for g, c in wanted.items() if g not in decided}
         decided.update(await s.backend.decide_gates(task, rest) if rest else {})
     else:
@@ -443,7 +450,7 @@ async def triage(s: Session, task: Task) -> bool:
         if drop_alone or d.prob < s.cfg.escalation.gate_min_confidence.get(gate, s.cfg.escalation.min_confidence):
             first = d
             d = await s.backend.confirm(gate, choices, task, first)
-            again = {"redo": 2} if redo else {}      # screened again: beside the first screening's records
+            again = {"redo": level} if redo else {}      # screened again: beside the earlier screenings' records
             if not redo:                # a screening again starts from the first answer, which is recorded already
                 s.record(task.benchmark, "decision", task, stage="triage", gate=gate, tier=first.tier, value=first.value,
                          probability=round(first.prob, 3), outcome="escalate", skill=first.skill)

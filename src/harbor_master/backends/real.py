@@ -33,8 +33,24 @@ from .simulated import SimulatedBackend
 CLAUDE_PROVIDERS = sessions.PROVIDERS       # what an agent session can run on: Claude, or OpenAI models through Codex
 
 
-def describe(task: Task, limit: int = 6000) -> str:
-    """What a model is shown about a task: its instruction, its metadata, its files. Never the solution."""
+TEST_CODE = (".sh", ".py", ".js", ".ts", ".r", ".jl", ".pl", ".rb")
+
+
+def test_code(task: Task, limit: int = 6000, each: int = 3000) -> str:
+    """The code of the task's tests, so that how it is graded is read, not guessed from file names: a grader that
+    calls a model API is a model grader. Data files beside the tests are left out."""
+    folder, parts = task.path / "tests", []
+    files = sorted(p for p in folder.rglob("*") if p.is_file() and p.suffix.lower() in TEST_CODE) if folder.is_dir() else []
+    for f in sorted(files, key=lambda p: (p.name != "test.sh", str(p))):     # the entry point first
+        text = f.read_text(errors="replace")
+        parts.append(f"--- {f.relative_to(task.path)}\n" + (text if len(text) <= each else text[:each] + "\n[cut here]"))
+    joined = "\n".join(parts)
+    return joined if len(joined) <= limit else joined[:limit] + "\n[test code cut here]"
+
+
+def describe(task: Task, limit: int = 6000, tests: bool = False) -> str:
+    """What a model is shown about a task: its instruction, its metadata, its files, and with `tests` the code of its
+    tests. Never the solution."""
     files = sorted(str(p.relative_to(task.path)) for p in task.path.rglob("*")
                    if p.is_file() and "solution" not in p.relative_to(task.path).parts and ".git" not in p.parts)
     meta = {**task.meta.get("task", {}), **task.meta.get("metadata", {})}
@@ -44,7 +60,8 @@ def describe(task: Task, limit: int = 6000) -> str:
     return (f"TASK {task.task_id}\n\nINSTRUCTION\n{text}\n\nMETADATA\n{json.dumps(meta, indent=1, default=str)[:2000]}\n\n"
             f"VERIFIER SETTINGS\n{json.dumps(task.meta.get('verifier', {}), default=str)}\n\n"
             f"FILES ({len(files)}, solution left out)\n" + "\n".join(files[:80]) +
-            f"\n\nHas a reference solution: {task.has_solution}. Has tests: {task.has_tests}.")
+            f"\n\nHas a reference solution: {task.has_solution}. Has tests: {task.has_tests}." +
+            (f"\n\nTEST CODE\n{test_code(task)}" if tests and task.has_tests else ""))
 
 
 def card(task: Task, limit: int = 1200) -> str:
@@ -216,7 +233,7 @@ class RealBackend(Backend):
 
     def _state(self, task: Task) -> dict:
         """What Jev is shown. Kept under its 32,000-byte fast path."""
-        return {"task": describe(task, 6000)[:24000]}
+        return {"task": describe(task, 6000, tests=True)[:24000]}
 
     def _jev_decision(self, choices: list[str], answer: dict, cost: float, tokens: int, tag: str) -> Decision:
         if answer.get("type") != "choice" or answer.get("choice") not in choices:
