@@ -105,11 +105,15 @@ async def oracle_problems(out: Path, n: int, jobs: Path, limits: dict | None = N
     """Run the reference solution of `n` generated tasks, spread over the set, through Harbor. Each must pass its own test.
     The first few by name would often all come from one source, and say nothing of the others."""
     from ..backends import harbor
-    found, made = [], tasks_mod.find_tasks(out)
-    picked = sorted({made[i * len(made) // n] for i in range(n)}) if made and n else []     # spread over the set, not its first few:
-    for i, task_dir in enumerate(picked, 1):                                                 # tasks sorted by name group by source
-        if not (task_dir / "solution").is_dir():
-            continue
+    found = []
+    # Only tasks that ship a reference solution: an empty solution folder has nothing to run, and a task with none gets
+    # one written in its work cell if it is selected.
+    made = [d for d in tasks_mod.find_tasks(out) if (d / "solution").is_dir() and any((d / "solution").iterdir())]
+    if not made:
+        say("no task ships a reference solution, so none is run here: one is written for each task selected")
+        return []
+    picked = sorted({made[i * len(made) // n] for i in range(n)}) if n else []     # spread over the set, not its first few:
+    for i, task_dir in enumerate(picked, 1):                                        # tasks sorted by name group by source
         say(f"running {task_dir.name}'s reference solution in Harbor ({i} of {len(picked)}): its environment is built "
             "first, which can take minutes for a large image")
         caps = dict(limits or {})

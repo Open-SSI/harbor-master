@@ -247,7 +247,8 @@ def inspect(out_dir: Path, expected: int | None = None) -> tuple[list[str], list
         notes.append(f"{fixed} of {len(tasks)} reference solutions write a fixed answer and read no input")
     without = sum(1 for d in tasks if not ((d / "solution").is_dir() and any((d / "solution").iterdir())))
     if without:
-        notes.append(f"{without} of {len(tasks)} tasks have no reference solution, so the admission gates will drop them")
+        notes.append(f"{without} of {len(tasks)} tasks ship no reference solution: one is written for each task selected, "
+                     "unless the protocol requires one to ship")
     return problems, notes
 
 
