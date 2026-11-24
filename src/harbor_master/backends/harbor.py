@@ -350,7 +350,8 @@ async def _run_once(task_dir, jobs_dir, agent, model, agent_kwargs, with_keys, t
     """One try. None when it hung and is to be run again."""
     name = f"{agent}-{uuid.uuid4().hex[:8]}"
     jobs_dir.mkdir(parents=True, exist_ok=True)
-    cmd = [binary(), "run", "-p", str(task_dir), "-a", agent, "-o", str(jobs_dir), "--job-name", name, "-q"]
+    # --yes: nobody can answer Harbor here (it would wait unseen, as it does for a task that reads host variables)
+    cmd = [binary(), "run", "-p", str(task_dir), "-a", agent, "-o", str(jobs_dir), "--job-name", name, "-q", "--yes"]
     if model:
         cmd += ["-m", model]
     for k, v in (agent_kwargs or {}).items():
@@ -376,8 +377,8 @@ async def _run_once(task_dir, jobs_dir, agent, model, agent_kwargs, with_keys, t
     env = dict(os.environ)
     if with_keys:      # only an agent trial gets keys, and only through the process environment
         env.update(keys.agent_env(agent))
-    proc = await asyncio.create_subprocess_exec(*cmd, env=env, stdout=asyncio.subprocess.PIPE,
-                                                stderr=asyncio.subprocess.STDOUT)
+    proc = await asyncio.create_subprocess_exec(*cmd, env=env, stdin=asyncio.subprocess.DEVNULL,   # a question ends, never waits
+                                                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
     job = jobs_dir / name
     printed = bytearray()
 

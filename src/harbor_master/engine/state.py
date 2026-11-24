@@ -52,11 +52,11 @@ class BenchState:
 
     def __setattr__(self, name: str, value) -> None:
         """A new step of the benchmark's own stages (fetch, checks, adapt, triage, brief, ranking) goes to the log, not
-        only to its status line, which the next step overwrites. A counter moving on ("triage 12 of 296") is not a step."""
+        only to its status line, which the next step overwrites. A counter moving on ("triage 12 of 296", "340 MB so far") is not a step."""
         before = self.__dict__.get(name)
         object.__setattr__(self, name, value)
         if name == "detail" and value and value != before and self.on_step is not None:
-            shape = re.sub(r"[\d.,$]+", "#", str(value))
+            shape = re.sub(r"\$[\d.,]+|\d[\d.,]*\s*(of\s+[\d,]+|MB|GB|%|min)", "#", str(value))
             if shape != self.__dict__.get("_last_step"):
                 object.__setattr__(self, "_last_step", shape)
                 self.on_step(self, str(value))

@@ -100,18 +100,22 @@ def work_dir(ws: Path, benchmark: str) -> Path:
     return config_mod.local(ws) / "adapted" / benchmark
 
 
-async def oracle_problems(out: Path, n: int, jobs: Path, limits: dict | None = None) -> list[str]:
+async def oracle_problems(out: Path, n: int, jobs: Path, limits: dict | None = None,
+                          say: Callable[[str], None] = lambda text: None) -> list[str]:
     """Run the reference solution of `n` generated tasks, spread over the set, through Harbor. Each must pass its own test.
     The first few by name would often all come from one source, and say nothing of the others."""
     from ..backends import harbor
     found, made = [], tasks_mod.find_tasks(out)
     picked = sorted({made[i * len(made) // n] for i in range(n)}) if made and n else []     # spread over the set, not its first few:
-    for task_dir in picked:                                                                  # tasks sorted by name group by source
+    for i, task_dir in enumerate(picked, 1):                                                 # tasks sorted by name group by source
         if not (task_dir / "solution").is_dir():
             continue
+        say(f"running {task_dir.name}'s reference solution in Harbor ({i} of {len(picked)}): its environment is built "
+            "first, which can take minutes for a large image")
         caps = dict(limits or {})
         minutes = caps.pop("max_verify_minutes", 0)     # Harbor caps a reference solution's run as the agent's time
         result = await harbor.run(task_dir, jobs, "oracle", max_agent_seconds=minutes * 60, **caps)
+        say(f"{task_dir.name}'s reference solution " + ("passed its test" if result.passed else "did not pass its test"))
         if not result.passed:
             found.append(f"{task_dir.name}: " + (unpullable(result.error, task_dir) or slow_build(result.error, limits) or
                          "its reference solution does not pass its own test" + (f" ({result.error[:500]})" if result.error else
@@ -181,18 +185,24 @@ def limits_of(cfg: Config) -> dict:
 
 async def check(adapter_dir: Path, source: Path, work: Path, entry: dict, sandbox: bool, oracle: int,
                 limits: dict | None = None, cfg: Config | None = None,
-                usage: Callable[[str, float, int], None] = lambda *a: None) -> tuple[list[str], list[str], Path]:
+                usage: Callable[[str, float, int], None] = lambda *a: None,
+                say: Callable[[str], None] = lambda text: None) -> tuple[list[str], list[str], Path]:
     """The checks: the layout, a run, the tasks, a second run, and a few reference solutions, all by code. Then, with
     `cfg` in a real run, the worker tier reads the benchmark and a few tasks: tasks that run but are not the
     benchmark's own (its data left out, a zero-shot or multiple-choice variant in place of its agentic setting) fail."""
+    say("running the adapter, checking the tasks it writes, and running it again to see it writes the same ones")
     problems, notes, out = await asyncio.to_thread(adapter_mod.check, adapter_dir, source, work, entry.get("task_count"), sandbox)
+    say(f"the adapter's code checks failed: {problems[0][:200]}" if problems else
+        f"the adapter wrote {len(adapter_mod.find_tasks(out))} tasks, the same on a second run" + "".join(f"; {n}" for n in notes))
     if not problems and oracle:
-        problems = await oracle_problems(out, oracle, work / "harbor", limits)
+        problems = await oracle_problems(out, oracle, work / "harbor", limits, say)
     if not problems and oracle and cfg is not None:
+        say("the worker model reads the benchmark and a few tasks, to check they are the benchmark's own")
         try:
             unfaithful, cost, tokens = await writer.fidelity(cfg, entry, source, out, notes)
             usage("worker", cost, tokens)
             problems = [unfaithful] if unfaithful else []
+            say(f"not the benchmark's own: {unfaithful[:200]}" if unfaithful else "the tasks are the benchmark's own")
         except (RuntimeError, NotImplementedBackend) as err:
             notes.append(f"whether the tasks are the benchmark's own was not checked: {str(err)[:160]}")
     return problems, notes, out
@@ -215,7 +225,7 @@ async def write_and_check(cfg: Config, adapter_dir: Path, entry: dict, source: P
         writer.write_files(pkg, data["files"])
         say(f"round {round_no}: checking the adapter")
         built.problems, built.notes, built.out = await check(adapter_dir, source, work, entry, sandbox, oracle, limits_of(cfg),
-                                                             cfg, usage)
+                                                             cfg, usage, say)
         if not built.problems:
             break
         feedback = "\n".join(built.problems)
@@ -373,7 +383,7 @@ async def _build_and_share(s: Session, bench: BenchState, entry: dict, source: P
             say("checking the adapter that is there")
             built = Built()
             built.problems, built.notes, built.out = await check(adapter_dir, source, work, entry, sandbox, oracle,
-                                                                 limits_of(s.cfg), s.cfg, usage)
+                                                                 limits_of(s.cfg), s.cfg, usage, say)
             feedback = "\n".join(built.problems)
         if not have or built.problems:
             built = await write_and_check(s.cfg, adapter_dir, entry, source, work, sandbox=sandbox, oracle=oracle, say=say, usage=usage,
