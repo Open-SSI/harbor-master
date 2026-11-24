@@ -135,7 +135,9 @@ def structure(adapter_dir: Path) -> list[str]:
     if (pkg / "main.py").exists():
         text = (pkg / "main.py").read_text()
         found += [f"main.py does not take {flag}" for flag in FLAGS if f'"{flag}"' not in text and f"'{flag}'" not in text]
-    for f in sorted(pkg.rglob("*.py")):
+    # Only the adapter's own code runs with the standard library alone. What it copies into each task (a script its
+    # Dockerfile runs, a grader under tests/) runs in that task's image, which installs what it needs.
+    for f in sorted(p for p in pkg.rglob("*.py") if "task-template" not in p.relative_to(pkg).parts):
         try:
             tree = ast.parse(f.read_text())
         except SyntaxError as err:
