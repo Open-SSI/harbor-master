@@ -156,7 +156,7 @@ async def _run_shared(s: Session, bench: BenchState) -> None:
     brief = s.ledger.brief(bench.id)
     if brief is None and s.cfg.select.require_brief and kept:
         bench.phase, bench.detail = "brief", "waiting for a brief"
-        text = await s.ask("brief", f"{about(bench, kept)}\n\nWhat counts as important in this benchmark? The ranking follows "
+        text = await s.ask("brief", f"{about(bench, kept, dropped_by(s, bench, kept))}\n\nWhat counts as important in this benchmark? The ranking follows "
                               "your answer. Any contributor may give it.", bench.id)
         if not text:
             bench.phase, bench.detail, bench.skip = "skipped", "no brief, skipped (hm curate in a terminal asks for one in a box)", "no_brief"
@@ -270,7 +270,30 @@ def described(bench: BenchState) -> dict:
         return {}
 
 
-def about(bench: BenchState, kept: list[Task]) -> str:
+WHY_DROPPED = {
+    "reported": "already solved: its own published results show a model passing over {cap:.0%}",
+    "format": "not an agent task: {value}",
+    "verifier": "not graded by code: {value}",
+    "verifier_cost": "too costly to grade",
+    "duplicate": "a duplicate of another task",
+}
+
+
+def dropped_by(s: Session, bench: BenchState, kept: list[Task]) -> dict[str, int]:
+    """Why the tasks that did not pass the gates were left out, as reasons a person can read, with how many each."""
+    passed, why = {t.task_id for t in kept}, {}
+    for t in bench.tasks:
+        if t.task_id in passed:
+            continue
+        d = s.ledger.decision(t.digest, "triage", "gates", s.protocol)
+        gate, _, value = (d or {}).get("reason", "").partition(":")
+        said = WHY_DROPPED.get(gate, "{gate}").format(cap=s.cfg.triage.max_reported_pass_rate, gate=gate or "no record",
+                                                     value=value.replace("_", " "))
+        why[said] = why.get(said, 0) + 1
+    return why
+
+
+def about(bench: BenchState, kept: list[Task], dropped: dict[str, int] | None = None) -> str:
     """A benchmark for the person asked to say what matters in it, as a few lines to read: what it is, then the
     categories its tasks fall into, with how many in each and, where the benchmark says, what each is about.
     Read from its own description and its tasks, with no model."""
@@ -283,8 +306,13 @@ def about(bench: BenchState, kept: list[Task]) -> str:
         areas[t.subarea] = areas.get(t.subarea, 0) + 1
     top = sorted(areas.items(), key=lambda a: (-a[1], a[0]))
     passed = f"{len(kept)} of its {len(bench.tasks)} tasks passed the gates"
+    left = []
+    if dropped:
+        width = max(len(str(n)) for n in dropped.values())
+        left = ["", f"{sum(dropped.values())} were left out:",
+                *(f"  {n:>{width}}  {why}" for why, n in sorted(dropped.items(), key=lambda w: -w[1]))]
     if len(top) < 2:
-        return "\n".join([*lines, "", passed + "."])
+        return "\n".join([*lines, "", passed + ".", *left])
     lines += ["", f"{passed}, in {len(top)} categories:"]
     notes, width = said.get("categories") or {}, max(len(a) for a, _ in top[:8])
     import textwrap
@@ -294,7 +322,7 @@ def about(bench: BenchState, kept: list[Task]) -> str:
         lines.append(textwrap.fill(row, width=94, subsequent_indent=" " * indent, break_on_hyphens=False))
     if len(top) > 8:
         lines.append(f"  and {len(top) - 8} more categories")
-    return "\n".join(lines)
+    return "\n".join([*lines, *left])
 
 
 def repository(path: Path) -> Path:

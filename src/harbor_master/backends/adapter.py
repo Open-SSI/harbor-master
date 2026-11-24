@@ -77,6 +77,42 @@ async def write_adapter(cfg: Config, entry: dict, source_dir: Path, feedback: st
     return reply.data, reply.cost, reply.tokens, skill.tag
 
 
+FIDELITY = "adapt/check-fidelity"
+FIDELITY_SCHEMA = {
+    "type": "object", "additionalProperties": False, "required": ["verdict", "found"],
+    "properties": {"verdict": {"type": "string", "enum": ["faithful", "inputs_missing", "setting_changed"]},
+                   "found": {"type": "string", "description": "The files read, what the benchmark gives and asks, what the tasks do."}},
+}
+
+
+def sample(out_dir: Path, n: int = 3, limit: int = 1500) -> str:
+    """A few generated tasks, spread over the set, as text: each one's instruction, environment and reference solution."""
+    from ..tasks.intake import find_tasks
+    made = find_tasks(out_dir)
+    picked = sorted({made[i * len(made) // n] for i in range(n)}) if made else []
+    parts = []
+    for d in picked:
+        parts.append(f"### {d.name}")
+        for rel in ("instruction.md", "environment/Dockerfile", "solution/solve.sh"):
+            f = d / rel
+            parts.append(f"--- {rel}\n" + (f.read_text(errors="replace")[:limit] if f.is_file() else "(none)"))
+        parts.append("--- files: " + ", ".join(sorted(str(p.relative_to(d)) for p in d.rglob("*") if p.is_file())[:30]))
+    return "\n".join(parts)
+
+
+async def fidelity(cfg: Config, entry: dict, source_dir: Path, out_dir: Path, notes: list[str]) -> tuple[str, float, int]:
+    """The worker tier reads the benchmark and a few of the tasks, and says whether the tasks are the benchmark's own.
+    Returns a problem ("" when they are), the cost and the tokens."""
+    skill = skills.load(FIDELITY)
+    reply = await sessions.ask(cfg.tier("worker"), skill.system,
+                               skill.fill(benchmark=about(entry), notes="\n".join(notes) or "nothing", tasks=sample(out_dir)),
+                               FIDELITY_SCHEMA, cwd=source_dir, max_turns=20)
+    verdict, found = reply.data.get("verdict", ""), reply.data.get("found", "")
+    said = {"inputs_missing": "the tasks do not give the solver the data, files or tools the benchmark gives it",
+            "setting_changed": "the tasks ask something other than the benchmark's own setting"}.get(verdict, "")
+    return (f"{said}: {found[:1200]}" if said else ""), reply.cost, reply.tokens
+
+
 JUDGE = "adapt/judge"
 
 

@@ -180,11 +180,21 @@ def limits_of(cfg: Config) -> dict:
 
 
 async def check(adapter_dir: Path, source: Path, work: Path, entry: dict, sandbox: bool, oracle: int,
-                limits: dict | None = None) -> tuple[list[str], list[str], Path]:
-    """Every check that needs no model: the layout, a run, the tasks, a second run, and a few reference solutions."""
+                limits: dict | None = None, cfg: Config | None = None,
+                usage: Callable[[str, float, int], None] = lambda *a: None) -> tuple[list[str], list[str], Path]:
+    """The checks: the layout, a run, the tasks, a second run, and a few reference solutions, all by code. Then, with
+    `cfg` in a real run, the worker tier reads the benchmark and a few tasks: tasks that run but are not the
+    benchmark's own (its data left out, a zero-shot or multiple-choice variant in place of its agentic setting) fail."""
     problems, notes, out = await asyncio.to_thread(adapter_mod.check, adapter_dir, source, work, entry.get("task_count"), sandbox)
     if not problems and oracle:
         problems = await oracle_problems(out, oracle, work / "harbor", limits)
+    if not problems and oracle and cfg is not None:
+        try:
+            unfaithful, cost, tokens = await writer.fidelity(cfg, entry, source, out, notes)
+            usage("worker", cost, tokens)
+            problems = [unfaithful] if unfaithful else []
+        except (RuntimeError, NotImplementedBackend) as err:
+            notes.append(f"whether the tasks are the benchmark's own was not checked: {str(err)[:160]}")
     return problems, notes, out
 
 
@@ -204,7 +214,8 @@ async def write_and_check(cfg: Config, adapter_dir: Path, entry: dict, source: P
         built.cost, built.tokens, built.said = built.cost + cost, built.tokens + tokens, data.get("notes", "")
         writer.write_files(pkg, data["files"])
         say(f"round {round_no}: checking the adapter")
-        built.problems, built.notes, built.out = await check(adapter_dir, source, work, entry, sandbox, oracle, limits_of(cfg))
+        built.problems, built.notes, built.out = await check(adapter_dir, source, work, entry, sandbox, oracle, limits_of(cfg),
+                                                             cfg, usage)
         if not built.problems:
             break
         feedback = "\n".join(built.problems)
@@ -361,7 +372,8 @@ async def _build_and_share(s: Session, bench: BenchState, entry: dict, source: P
         if have:        # someone wrote or changed it: check what is there before spending on a model
             say("checking the adapter that is there")
             built = Built()
-            built.problems, built.notes, built.out = await check(adapter_dir, source, work, entry, sandbox, oracle, limits_of(s.cfg))
+            built.problems, built.notes, built.out = await check(adapter_dir, source, work, entry, sandbox, oracle,
+                                                                 limits_of(s.cfg), s.cfg, usage)
             feedback = "\n".join(built.problems)
         if not have or built.problems:
             built = await write_and_check(s.cfg, adapter_dir, entry, source, work, sandbox=sandbox, oracle=oracle, say=say, usage=usage,
@@ -408,8 +420,9 @@ async def _build_and_share(s: Session, bench: BenchState, entry: dict, source: P
                      if built.tier != "human" else ""))
     if s.cfg.adapt.require_review:
         bench.phase, bench.detail = "review", "its adapter waits for your go-ahead"
+        noticed = "".join(f"\n  - {n}" for n in built.notes)
         answer = await s.ask("lock", f"The adapter for {bench.id} passes its checks: {built.tasks} tasks. It is in {adapter_dir}. "
-                             "Read it, then let its tasks be used.", bench.id)
+                             + (f"\nWorth checking:{noticed}\n" if noticed else "") + "Read it, then let its tasks be used.", bench.id)
         if answer != "lock":
             return _skip(bench, f"its adapter passes and waits for your go-ahead: /lock {bench.id} in a run", "adapter_not_locked")
     record(lambda *a, **k: s.record(bench.id, a[0], digest_override=k.pop("digest"), **k), s.cfg, adapter_dir, built, oracle)

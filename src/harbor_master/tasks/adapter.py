@@ -194,6 +194,25 @@ def digests(out_dir: Path) -> dict[str, str]:
     return {d.name: digest_dir(d) for d in find_tasks(out_dir)} if out_dir.is_dir() else {}
 
 
+def bare_image(dockerfile: Path) -> bool:
+    """An environment that is a base image and nothing more: no file copied in, nothing installed or fetched."""
+    if not dockerfile.is_file():
+        return False
+    lines = [ln.strip().split(None, 1)[0].upper() for ln in dockerfile.read_text(errors="replace").splitlines()
+             if ln.strip() and not ln.strip().startswith("#")]
+    return bool(lines) and all(word in ("FROM", "WORKDIR", "ENV", "ARG", "LABEL", "USER", "SHELL", "CMD", "ENTRYPOINT")
+                               for word in lines)
+
+
+def fixed_answer(solve: Path) -> bool:
+    """A reference solution that only writes a fixed answer: every line that does something is an echo or a printf."""
+    if not solve.is_file():
+        return False
+    acts = [ln.strip() for ln in solve.read_text(errors="replace").splitlines()
+            if ln.strip() and not ln.strip().startswith("#") and not ln.strip().startswith(("set ", "mkdir "))]
+    return bool(acts) and all(ln.startswith(("echo ", "printf ")) for ln in acts)
+
+
 def inspect(out_dir: Path, expected: int | None = None) -> tuple[list[str], list[str]]:
     """What is wrong with the generated tasks, and what is only worth knowing."""
     tasks = find_tasks(out_dir) if out_dir.is_dir() else []
@@ -218,6 +237,12 @@ def inspect(out_dir: Path, expected: int | None = None) -> tuple[list[str], list
         problems.append("two tasks have the same folder name")
     if expected and len(tasks) != expected:
         problems.append(f"it generated {len(tasks)} tasks, and the benchmark list says {expected}")
+    bare = sum(1 for d in tasks if bare_image(d / "environment" / "Dockerfile"))
+    fixed = sum(1 for d in tasks if fixed_answer(d / "solution" / "solve.sh"))
+    if bare:
+        notes.append(f"{bare} of {len(tasks)} tasks run in a bare base image that adds no file and installs nothing")
+    if fixed:
+        notes.append(f"{fixed} of {len(tasks)} reference solutions write a fixed answer and read no input")
     without = sum(1 for d in tasks if not ((d / "solution").is_dir() and any((d / "solution").iterdir())))
     if without:
         notes.append(f"{without} of {len(tasks)} tasks have no reference solution, so the admission gates will drop them")
