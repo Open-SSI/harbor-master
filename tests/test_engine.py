@@ -30,7 +30,7 @@ async def test_a_simulated_run_is_sound_leaves_a_small_readable_folder_and_a_rer
 
     files = sorted(p.relative_to(session.run_dir).as_posix() for p in session.run_dir.rglob("*") if p.is_file())
     # no copy of the ledger, no folder per task, no reports. requests.json is there because reports wait for a verdict
-    assert files == ["requests.json", "run.json", "tasks.jsonl"]
+    assert files == ["requests.json", "run.json", "session.log", "tasks.jsonl"]
     reports = sorted((workspace / "reports" / "demo-bench").glob("*.md"))    # a report is beside the ledger, where a reviewer
     assert len(reports) == bench.kept                                        # on another machine gets it. One per kept task
     written = {e["location"]: e["report_digest"] for e in events if e["type"] == "report"}

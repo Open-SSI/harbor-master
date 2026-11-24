@@ -67,7 +67,7 @@ class Session:
         self._sync_lock = asyncio.Lock()
         self.simulate = simulate
         self.benches = {b: BenchState(b, Path(info["path"]) if info.get("path") else Path(),
-                                   info.get("released", ""), info.get("license", ""), entry=info.get("entry"))
+                                   info.get("released", ""), info.get("license", ""), entry=info.get("entry"), on_step=self.bench_step)
                         for b, info in benchmarks.items()}
         self.cells = [CellState(i + 1, on_stage=self.explain) for i in range(MAX_CELLS)]       # at most 8; active_cells take tasks
         self.walk: list[tuple[str, str]] = []       # a simulated run: each stage reached so far, with what it does
@@ -192,9 +192,15 @@ class Session:
         if self.simulate and stage in told and all(name != stage for name, _ in self.walk):
             self.walk.append((stage, told[stage]))           # kept with the run: the screen's own stage boxes say the rest
 
+    def bench_step(self, bench: BenchState, text: str) -> None:
+        """A benchmark's own stages say what they are doing in the log, under the stage's name."""
+        self.note_recent(bench.phase, bench.id, text)
+
     def note_recent(self, kind: str, task_id: str, text: str) -> None:
         entry = (time.time(), kind, task_id, text)
         self.recent.appendleft(entry)
+        with contextlib.suppress(OSError):          # kept with the run, so what happened can be read after it ends
+            self.log(f"{kind} {task_id}: {text}")
         if self.on_recent is not None:
             self.on_recent(entry)
 
@@ -379,7 +385,8 @@ class Session:
         if self.quitting:
             return "This run is ending, so it takes nothing more."
         self.benches[benchmark] = BenchState(benchmark, Path(info["path"]) if info.get("path") else Path(),
-                                             info.get("released", ""), info.get("license", ""), entry=info.get("entry"))
+                                             info.get("released", ""), info.get("license", ""), entry=info.get("entry"),
+                                             on_step=self.bench_step)
         if not getattr(self, "_started", False):       # the run has not begun: it starts this one with the others
             return f"{benchmark} is added to this run."
         self._shared_tasks.append(asyncio.create_task(shared.run_shared(self, self.benches[benchmark])))

@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 from ..tasks import Task
 
@@ -46,6 +48,18 @@ class BenchState:
     # The tasks this run let go with no outcome (an error, a model that could not be reached, a stop), and why: nothing
     # is recorded for them, and the next run takes them again. They count in `done`, which is what the cells are through
     left: list[tuple[str, str]] = field(default_factory=list)
+    on_step: Callable[[BenchState, str], None] | None = field(default=None, repr=False, compare=False)
+
+    def __setattr__(self, name: str, value) -> None:
+        """A new step of the benchmark's own stages (fetch, checks, adapt, triage, brief, ranking) goes to the log, not
+        only to its status line, which the next step overwrites. A counter moving on ("triage 12 of 296") is not a step."""
+        before = self.__dict__.get(name)
+        object.__setattr__(self, name, value)
+        if name == "detail" and value and value != before and self.on_step is not None:
+            shape = re.sub(r"[\d.,$]+", "#", str(value))
+            if shape != self.__dict__.get("_last_step"):
+                object.__setattr__(self, "_last_step", shape)
+                self.on_step(self, str(value))
 
     @property
     def queued(self) -> int:
