@@ -426,7 +426,7 @@ async def triage(s: Session, task: Task) -> bool:
         if seen["pass_rate"] > s.cfg.triage.max_reported_pass_rate:
             return done("reported")
     # A task with no reference solution goes on: if it is selected, its work cell writes one (engine/stages.py).
-    answers["reference_solution"] = {"value": "present" if task.has_solution else "missing: written if selected", "tier": "code"}
+    answers["reference_solution"] = {"value": "present" if task.has_solution else "missing: a frontier trial must pass it", "tier": "code"}
     wanted = {g: choices for g, (choices, _) in gates.D_GATES.items()}
     if redo:
         decided = {g: Decision(a["value"], float(a.get("p", 1.0)), a.get("tier", "decision"), "", 0.0, 0) for g, a in kept.items()}

@@ -195,6 +195,7 @@ class SimulatedBackend(Backend):
         await self._step()
         return {"fixed": ok, "cost": cost, "tokens": tokens,
                 "what": {"solution": "wrote solution/solve.sh from the instruction and the environment",
+                         "from_trial": "wrote solution/solve.sh from the passing frontier trial's steps",
                          "oracle": "pinned a dependency the reference solution needs",
                          "verifier": "the verifier now rejects wrong-unit output",
                          "design": "stated the tolerance in the instruction",

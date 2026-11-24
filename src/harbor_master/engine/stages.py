@@ -202,14 +202,15 @@ async def trial(s: Session, task: Task, purpose: str, agent: str, model: str, in
 
 async def stage_verify(s: Session, cell: CellState, task: Task, rounds: int):
     """Is the reference solution valid: does it solve the task without reading the tests, hard-coding answers or faking
-    the work? Nothing is run: it is audited (see `audited`). A task with no reference solution has one written first,
-    as a repair."""
+    the work? Nothing is run: it is audited (see `audited`). A task with no reference solution goes on without one: a
+    frontier trial must pass it in the difficulty run, and that trial's work is then written as its reference solution
+    and audited here (see `adopt`)."""
     if not task.has_solution:
-        enter(cell, STAGE_NO["verify"], "it has no reference solution")
-        s.board(task)["why"] = "it has no reference solution"
         if not s.cfg.triage.require_reference_solution:
+            enter(cell, STAGE_NO["verify"], "it has no reference solution")
+            s.board(task)["why"] = "it has no reference solution"
             return "drop", "no_reference_solution"
-        return "fix", "solution"
+        return "ok", ""             # a frontier trial must pass it instead, and its work becomes the reference (adopt)
     return await audited(s, cell, task, "solution")
 
 
@@ -428,7 +429,10 @@ async def stage_difficulty(s: Session, cell: CellState, task: Task, rounds: int)
         return "drop", "no_environment"
     if prior is not None:
         s.board(task)["difficulty"] = prior["value"]
+        if prior["outcome"] == "pass" and not task.has_solution:
+            return await adopt(s, cell, task)
         return ("ok", "") if prior["outcome"] == "pass" else ("drop", prior.get("reason") or "too_easy")
+    need = not task.has_solution        # no reference solution: a frontier pass must show it can be solved
     t0 = enter(cell, STAGE_NO["difficulty"], f"0 of {n_total} trials run")
     passes = fails = 0
     result = None
@@ -451,7 +455,7 @@ async def stage_difficulty(s: Session, cell: CellState, task: Task, rounds: int)
         s.note_recent("checked", task.task_id, f"difficulty try {r + 1} of {d.trials} by {entry.agent} ({entry.model}): "
                       + ("passed" if e["passed"] else "failed") + (f" after {minutes:.0f} min" if minutes >= 1 else "")
                       + (f", {e['error'][:80]}" if e.get("error") else ""))
-        result = difficulty.outcome(passes, fails, n_total, d.max_pass_rate)
+        result = difficulty.outcome(passes, fails, n_total, d.max_pass_rate, need)
         if result and d.early_stop:     # checked after every trial: once it cannot change, nothing more is run
             settled.set()
 
@@ -484,18 +488,67 @@ async def stage_difficulty(s: Session, cell: CellState, task: Task, rounds: int)
         s.stage_done(task, STAGE_NO["difficulty"], t0, passes=passes, trials=passes + fails, stopped_early=True)
         s.board(task)["why"] = broken
         return "drop", "no_environment"
-    result = result or ("drop" if passes > difficulty.max_passes(n_total, d.max_pass_rate) else "keep")
+    result = result or ("drop" if passes > difficulty.max_passes(n_total, d.max_pass_rate) else
+                        "unsolved" if need and passes == 0 else "keep")
+    reason = {"keep": "", "unsolved": "unsolved"}.get(result, "too_easy")
     value = f"{passes} of {passes + fails} passed"
     early = passes + fails < n_total
     s.record(task.benchmark, "decision", task, stage="difficulty", gate="pass_rate", tier="code",
                 value=value, outcome="pass" if result == "keep" else "drop", passes=passes,
-                trials=passes + fails, stopped_early=early, reason="" if result == "keep" else "too_easy")
+                trials=passes + fails, stopped_early=early, reason=reason)
     s.stage_done(task, STAGE_NO["difficulty"], t0, passes=passes, trials=passes + fails, stopped_early=early)
     s.board(task)["difficulty"] = value
     if result == "keep":
+        return await adopt(s, cell, task) if need else ("ok", "")
+    s.board(task)["why"] = (f"it has no reference solution, and none of its {passes + fails} frontier trials passed, so "
+                            "nothing shows it can be solved" if reason == "unsolved" else f"{value}{', stopped early' if early else ''}")
+    return "drop", reason
+
+
+CARRIED = (("probe", "coverage"), ("worker", "worker_solve"), ("audit", "quality"), ("difficulty", "pass_rate"))
+
+
+def agent_side(path) -> str:
+    """The digest of what an agent's side of a task is made of: every file but the reference solution."""
+    h = hashlib.sha256()
+    for f in sorted(p for p in path.rglob("*") if p.is_file() and "__pycache__" not in p.parts):
+        rel = f.relative_to(path)
+        if rel.parts[0] != "solution":
+            h.update(str(rel).encode())
+            h.update(hashlib.sha256(f.read_bytes()).digest())
+    return h.hexdigest()
+
+
+def carry_over(s: Session, task: Task, old: str) -> None:
+    """A new version of a task that differs from `old` only in solution/, a folder no agent sees: what was decided from
+    the agent's side (the instruction's coverage, the worker's and the frontier's trials, the audit of the worker's
+    failures) stands for it too, recorded again under its digest at no cost. Its solution is still checked."""
+    for stage, gate in CARRIED:
+        d = s.ledger.decision(old, stage, gate, s.protocol)
+        if d is not None and d["outcome"] != "escalate":
+            keep = {k: v for k, v in d.items() if k not in ("id", "sig", "prev", "time", "runner", "machine", "type", "v",
+                                                            "benchmark", "task_id", "digest", "protocol", "stage")}
+            s.record(task.benchmark, "decision", task, stage=stage, **{**keep, "cost": 0.0}, carried_from=old)
+    s.backend.carry(old, task.digest)
+
+
+async def adopt(s: Session, cell: CellState, task: Task) -> tuple[str, str]:
+    """A task with no reference solution that a frontier trial passed, and the difficulty run kept. The frontier model
+    writes the passing trial's work as its reference solution. That is a new version of the task, which differs only in
+    solution/: what was decided from the agent's side carries over to it (see `carry_over`), and every check runs on it
+    again, so the verify stage audits the new solution as it would one the benchmark shipped. When no solution could be
+    written, the task is kept as it is: the passing trial shows it can be solved, and the next run tries again."""
+    s.board(task)["why"] = "a frontier trial passed it: its work becomes the reference solution"
+    s.note_recent("checked", task.task_id, "no reference solution, and a frontier trial passed: writing its work as one")
+    try:
+        written = await fix(s, cell, task, "from_trial", s.cfg.fix.frontier_after_round + 1)    # always the frontier tier
+    except NotImplementedBackend:
+        written = False
+    if not written:
+        s.note_recent("checked", task.task_id, "no reference solution could be written from the passing trial: "
+                      "kept on the trial alone, and the next run tries again")
         return "ok", ""
-    s.board(task)["why"] = f"{value}{', stopped early' if early else ''}"
-    return "drop", "too_easy"
+    return "restart", ""
 
 
 async def stage_audit(s: Session, cell: CellState, task: Task, rounds: int):
@@ -534,8 +587,10 @@ async def fix(s: Session, cell: CellState, task: Task, defect: str, round_no: in
         old = task.digest
         task.meta.setdefault("_fixed", []).append(defect)
         if result.get("path"):          # a real repair: a new copy of the task, and its own digest
+            side = agent_side(task.path)
             task.path = result["path"]
             task.digest = digest_dir(task.path)
+            only_solution = agent_side(task.path) == side
             if (task.path / "instruction.md").is_file():
                 task.instruction = (task.path / "instruction.md").read_text()
             solution, tests = task.path / "solution", task.path / "tests"
@@ -543,9 +598,12 @@ async def fix(s: Session, cell: CellState, task: Task, defect: str, round_no: in
             task.has_tests = tests.is_dir() and any(tests.iterdir())
         else:
             task.digest = hashlib.sha256(f"{old}|{defect}|{round_no}".encode()).hexdigest()
-            task.has_solution = task.has_solution or defect == "solution"      # a simulated repair writes no file
+            task.has_solution = task.has_solution or defect in ("solution", "from_trial")   # a simulated repair writes no file
+            only_solution = defect in ("solution", "from_trial")
         s.record(task.benchmark, "repair", task, old_digest=old, new_digest=task.digest, tier=tier,
                     what=result["what"], round=round_no, cost=result["cost"], notes=notes)
+        if only_solution:
+            carry_over(s, task, old)
     s.stage_done(task, STAGE_NO["fix"], t0, round=round_no, defect=defect, tier=tier, fixed=result["fixed"],
                      what=result["what"])
     cell.attention = False

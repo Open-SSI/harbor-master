@@ -87,6 +87,10 @@ class Backend(ABC):
     def remember(self, task: Task, trial: dict) -> None:
         """A trial recorded earlier, perhaps by another run on this machine, for the audits to read. Nothing by default."""
 
+    def carry(self, old: str, new: str) -> None:
+        """A new version of a task that differs from `old` only in its reference solution: the trials of the old one count
+        for it too, for the audits to read. Nothing by default."""
+
     async def stuck(self, task: Task, what: str, log: str, quiet: float) -> str:
         """A trial whose logs stopped moving: the worker agent reads them. "wait" when it judges the trial still working;
         when hung, what the person chose: "retry" or "drop". With nobody to ask, it is run again."""

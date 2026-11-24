@@ -55,9 +55,9 @@ async def test_a_simulated_run_is_sound_leaves_a_small_readable_folder_and_a_rer
     assert any("its report was changed after it was recorded" in p for p in ledger.verify(workspace))     # and cannot be edited unseen
 
 
-async def test_a_selected_task_with_no_reference_solution_has_one_written(workspace, ident):
-    """It passes the screen. In its work cell the decision model says what would make it valid, before any repair is
-    paid for, and then the solution is written as a repair, and the task goes on."""
+async def test_a_task_with_no_reference_solution_needs_a_frontier_pass(workspace, ident):
+    """It passes the screen and goes on with no solution written. Kept by the difficulty run only once a frontier
+    trial passed, whose work becomes its reference solution; with no pass, it is dropped as unsolved."""
     import shutil
     task_dir = sorted((workspace.parent / "fake" / "demo-bench").iterdir())[0]
     shutil.rmtree(task_dir / "solution", ignore_errors=True)
@@ -66,10 +66,12 @@ async def test_a_selected_task_with_no_reference_solution_has_one_written(worksp
     await s.run()
     events = [e for e in s.ledger.events if e.get("task_id", "").endswith("/" + task_dir.name)]
     assert next(e for e in events if e.get("gate") == "gates")["outcome"] == "pass"      # no solution: not dropped at the screen
-    diagnosis = next(e for e in events if e.get("gate") == "diagnose")
-    assert diagnosis["tier"] == "decision" and diagnosis["value"] in ("write_solution", "drop")
-    if diagnosis["value"] == "write_solution":
-        assert any(e["type"] == "repair" for e in events)                                  # written, as a repair
+    assert not any(e.get("gate") == "diagnose" for e in events)                          # nothing written before the trials
+    for d in (e for e in events if e.get("gate") == "pass_rate" and not e.get("carried_from")):
+        if d["passes"] == 0:
+            assert d["outcome"] == "drop" and d["reason"] == "unsolved"
+        elif d["outcome"] == "pass":            # its work is written as the solution, and the trials count for that version
+            assert any(e["type"] == "repair" for e in events) and any(e.get("carried_from") == d["digest"] for e in events)
 
 
 async def test_a_benchmark_of_which_no_task_is_accepted_is_dropped(workspace, ident):

@@ -40,7 +40,7 @@ class Escalation(BaseModel):
 
 class Triage(BaseModel):
     released_after: str = "2025-06-01"
-    require_reference_solution: bool = True   # a selected task with none gets one written in its work cell; off, it is dropped
+    require_reference_solution: bool = True   # a task with none must be passed by a frontier trial, whose work becomes its solution; off, it is dropped
     exclude_formats: list[str] = ["multiple_choice", "question_answering", "short_answer"]
     allow_llm_judge_verifier: bool = False
     max_verifier_seconds: int = 300   # a verifier that takes longer fails, and its task is dropped

@@ -191,6 +191,11 @@ REPAIR_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["
                                 "what": {"type": "string", "description": "What was changed, in which files. Or why nothing could be."}}}
 DEFECTS = {"solution": "The task has no reference solution. Write solution/solve.sh that solves the task as its instruction asks, in its "
                        "environment, so that its tests pass. Solve it as a person would: never copy expected values out of the tests.",
+           "from_trial": "The task has no reference solution, and a frontier agent passed it: its trial is in the evidence. "
+                         "Write solution/solve.sh that does what that agent did, from its steps in the trajectory: the same "
+                         "commands, and the files it wrote, written out by the script, so that the tests pass in the task's "
+                         "environment. Port the agent's own work. Never copy expected values out of the tests, and change "
+                         "nothing outside solution/.",
            "oracle": "The reference solution does not pass its own tests, a no-op run passes, the reference passed once and failed "
                      "once, or a run failed for an infrastructure reason such as an image that does not build.",
            "verifier": "The verifier accepts a wrong answer, or rejects a correct one.",
@@ -440,6 +445,9 @@ class RealBackend(Backend):
         trials = [t for t in self.kept.get(task.digest, []) if t["worker"]][:4]
         return await self._judge("audit/rubric", "frontier", task, trials, AUDIT)
 
+    def carry(self, old: str, new: str) -> None:
+        self.kept[new] = list(self.kept.get(old, [])) + [k for k in self.kept.get(new, []) if k not in self.kept.get(old, [])]
+
     def remember(self, task: Task, trial: dict) -> None:
         """A trial in the ledger whose archive is still on this machine (`artifact`, under .hm/), made by an earlier run:
         the audits read it as they read this run's own. Without this, a task that resumes at the audit or the report
@@ -476,13 +484,19 @@ class RealBackend(Backend):
         shutil.rmtree(copy.parent, ignore_errors=True)
         shutil.copytree(task.path, copy, ignore=shutil.ignore_patterns("__pycache__", ".git"))
         said = f"{DEFECTS.get(defect, defect)}\n\nWhat was found: {why or defect}"
-        trials = [t for t in self.kept.get(task.digest, []) if t["worker"]][:3]
+        trials = ([t for t in self.kept.get(task.digest, []) if not t["worker"] and t["passed"]][:1] if defect == "from_trial"
+                  else [t for t in self.kept.get(task.digest, []) if t["worker"]][:3])
         folder, evidence = self._evidence(task, trials, copy_task=False) if trials else (None, "")
         if folder is not None:
             shutil.move(str(folder / "trials"), str(copy.parent / "evidence"))
             shutil.rmtree(folder, ignore_errors=True)
             evidence = evidence.replace("The current directory holds the task under task/ and these trials:",
+                                        "The passing trial is unpacked in ../evidence/, read-only for you:" if defect == "from_trial" else
                                         "The worker agent's trials are unpacked in ../evidence/, read-only for you:").replace("trials/", "../evidence/")
+        if defect == "from_trial" and not trials:      # its archive is not on this machine: nothing to port
+            shutil.rmtree(copy.parent, ignore_errors=True)
+            return {"fixed": False, "what": "the passing trial's files are not on this machine", "cost": 0.0, "tokens": 0,
+                    "skill": skill.tag}
         before = digest_dir(copy)
         r = await self._ask(tier, skill.system, skill.fill(defect=said, evidence=evidence), REPAIR_SCHEMA, cwd=copy,
                             max_turns=80, write=True)

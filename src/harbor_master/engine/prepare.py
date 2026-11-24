@@ -110,7 +110,7 @@ async def oracle_problems(out: Path, n: int, jobs: Path, limits: dict | None = N
     # one written in its work cell if it is selected.
     made = [d for d in tasks_mod.find_tasks(out) if (d / "solution").is_dir() and any((d / "solution").iterdir())]
     if not made:
-        say("no task ships a reference solution, so none is run here: one is written for each task selected")
+        say("no task ships a reference solution, so none is run here: for each task selected, a frontier trial must pass it instead")
         return []
     picked = sorted({made[i * len(made) // n] for i in range(n)}) if n else []     # spread over the set, not its first few:
     for i, task_dir in enumerate(picked, 1):                                        # tasks sorted by name group by source

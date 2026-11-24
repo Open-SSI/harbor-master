@@ -111,9 +111,9 @@ def solutions(entry: dict, source, cfg: Config) -> tuple[str, str]:
         tasks = _sample(root)
         have = sum(t.has_solution for t in tasks)
         if tasks and not have:
-            return WARN, f"none of the {len(tasks)} tasks read has a reference solution: one is written for each selected task"
+            return WARN, f"none of the {len(tasks)} tasks read has a reference solution: for each selected task, a frontier trial must pass it, and that trial's work becomes its reference solution"
         if tasks and have < len(tasks):
-            return WARN, f"{have} of the {len(tasks)} tasks read have a reference solution: one is written for each selected task that has none"
+            return WARN, f"{have} of the {len(tasks)} tasks read have a reference solution: for each selected task that has none, a frontier trial must pass it, and that trial's work becomes its reference solution"
         if tasks:
             return PASS, f"every one of the {len(tasks)} tasks read has one"
     if value == "all":
@@ -121,7 +121,7 @@ def solutions(entry: dict, source, cfg: Config) -> tuple[str, str]:
     if value == "some":
         return WARN, "only some of its tasks ship reference solutions"
     if value == "none":
-        return WARN, "the agent read that its tasks ship no reference solution: one is written for each selected task"
+        return WARN, "the agent read that its tasks ship no reference solution: for each selected task, a frontier trial must pass it, and that trial's work becomes its reference solution"
     return UNKNOWN, "no source said whether its tasks have reference solutions"
 
 
