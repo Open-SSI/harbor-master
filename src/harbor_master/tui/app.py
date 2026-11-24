@@ -332,7 +332,10 @@ class SessionApp(App[None]):
         if said.startswith("added:"):
             self.picked("pick:" + said.removeprefix("added:"))
         elif said.startswith("rejected:"):
-            self.push_screen(PickScreen(self.session, f"{said.removeprefix('rejected:')} was not added: its checks reject it."), self.picked)
+            name, _, trouble = said.removeprefix("rejected:").partition(":")
+            told = f"{name} was not added: its checks reject it, and {trouble}." if trouble else \
+                f"{name} is on the list as dropped: its checks reject it."
+            self.push_screen(PickScreen(self.session, told), self.picked)
         else:
             self.push_screen(PickScreen(self.session), self.picked)
 

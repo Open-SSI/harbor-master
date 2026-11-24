@@ -385,6 +385,22 @@ def add(s, entry: dict, checked: list) -> dict:
     return entry
 
 
+def add_dropped(s, entry: dict, checked: list) -> dict:
+    """A benchmark whose checks reject it, confirmed by the person: signed onto the list and dropped at once, with why,
+    so that it shows as dropped and nobody spends on it again. Anyone may still curate it later."""
+    from .. import ledger as ledger_mod
+    from ..tasks import adding
+    from ..tasks import checks as checks_mod
+    entry = adding.add_made_up(s.ws, entry) if entry.get("made_up") else adding.confirm(s.ws, s.ident, entry)
+    record_checks(s, entry, checked, "reject")
+    why = checks_mod.why(checked)
+    s.record(entry["id"], "decision", stage="benchmark", gate="checks", tier="human", value=why[:200], outcome="drop",
+             reason=(why[:1].lower() + why[1:]).splitlines()[0][:160], digest_override=checks_mod.key(entry))
+    if not entry.get("made_up"):
+        ledger_mod.benchmarks.write_list(s.ws)
+    return entry
+
+
 def record_checks(s, entry: dict, checked: list, outcome: str) -> None:
     from ..tasks import checks as checks_mod
     s.record(entry["id"], "decision", stage="benchmark", gate="checks", tier="code", value=checks_mod.summary(checked),
@@ -394,7 +410,7 @@ def record_checks(s, entry: dict, checked: list, outcome: str) -> None:
 class ChecksScreen(Fits, ModalScreen[str]):
     """The benchmark-level checks of a benchmark being added (tasks/checks.py), asked one by one in a list that scrolls
     inside the box, each with what it found. Passed, the person continues: it is added and curated. Failed, the box says
-    why it is rejected, and the person confirms: it is not added. Either way, back goes to the draft."""
+    why it is rejected, and the person confirms: it is listed as dropped. Either way, back goes to the draft."""
     DEFAULT_CSS = CSS.format(name="ChecksScreen") + f"""
     ChecksScreen > Vertical {{ max-height: 94%; }}
     ChecksScreen #list {{ height: auto; border: round {BORDER}; border-title-color: {MU}; padding: 0 0 0 1; margin: 0 0 1 0; }}
@@ -450,7 +466,7 @@ class ChecksScreen(Fits, ModalScreen[str]):
         go = self.query_one("#go", Button)
         if self.failed:
             self.query_one("#verdict", Static).update(t(("Rejected. ", f"bold {RD}"), (checks_mod.why(self.checks), RD), "\n",
-                                                         ("Confirm, and it is not added.", SE)))
+                                                         ("Confirm, and it is listed as dropped: nobody spends on it, and anyone may curate it later.", SE)))
             go.label = "Confirm"
         else:
             self.query_one("#verdict", Static).update(t((f"No check rejects it ({checks_mod.summary(self.checks)}). ", f"bold {TE}"),
@@ -491,7 +507,12 @@ class ChecksScreen(Fits, ModalScreen[str]):
         if event.button.id == "back":
             self.action_back()
         elif event.button.id == "go" and self.done and self.failed:
-            record_checks(self.s, self.entry, self.checks, "reject")      # not added: not dropped for good either
+            try:
+                add_dropped(self.s, self.entry, self.checks)        # on the list as dropped, with why
+            except adding.AddError as err:
+                record_checks(self.s, self.entry, self.checks, "reject")
+                self.dismiss(f"rejected:{self.entry['id']}:it could not be listed as dropped ({err})")
+                return
             self.dismiss(f"rejected:{self.entry['id']}")
         elif event.button.id == "go" and self.done:
             try:

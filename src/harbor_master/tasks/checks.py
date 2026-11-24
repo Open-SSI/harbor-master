@@ -4,7 +4,7 @@ agent found on the web when the benchmark was added, or the files of its pinned 
 image is public.
 
 They are asked twice. When a benchmark is added, the curate screen shows them, one by one, in a box: a failed one says
-why it is rejected, and the person confirms that it is not added. When a run takes a benchmark from the list, the same
+why it is rejected, and the person confirms that it is listed as dropped. When a run takes a benchmark from the list, the same
 checks are asked before its adapter is built, so that an unfit benchmark never costs an adapter.
 
 A check passes, warns, fails, or cannot tell. Only a failure rejects. A benchmark is rejected when its tasks are not for
