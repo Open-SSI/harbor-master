@@ -44,7 +44,7 @@ class Triage(BaseModel):
     exclude_formats: list[str] = ["multiple_choice", "question_answering", "short_answer"]
     allow_llm_judge_verifier: bool = False
     max_verifier_seconds: int = 300   # a verifier that takes longer fails, and its task is dropped
-    max_build_seconds: int = 300      # building a task's environment: one that takes longer fails, and its task is dropped
+    max_build_seconds: int = 600      # building a task's environment: one that takes longer fails, and its task is dropped
     max_verify_minutes: float = 30.0  # a reference solution run by the adapter check: longer fails the check
     max_reported_pass_rate: float = 0.4   # a task that a model is already reported to solve more often than this is dropped
 

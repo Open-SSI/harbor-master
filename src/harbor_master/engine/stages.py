@@ -177,8 +177,8 @@ async def trial(s: Session, task: Task, purpose: str, agent: str, model: str, in
         return prior
     result = await s.container(run())
     s.trial_cost += result.cost
-    from .prepare import PULL, SLOW
-    while result.error and not PULL.search(result.error) and not SLOW.search(result.error) and await s.failed(
+    from .prepare import NO_START, PULL, SLOW
+    while result.error and not any(r.search(result.error) for r in (PULL, SLOW, NO_START)) and await s.failed(
             task.name, f"{purpose} trial {index + 1}" + (f" of {agent} with {model}" if model else ""), result.error):
         result = await s.container(run())       # the person chose to try it again
         s.trial_cost += result.cost
@@ -330,17 +330,33 @@ async def until_settled(chains, stop: asyncio.Event) -> int:
         await asyncio.gather(*running, return_exceptions=True)
 
 
-async def cheap_solve(s: Session, cell: CellState, task: Task) -> list[dict] | None:
+def no_environment(s: Session, task: Task, events: list[dict]) -> str:
+    """Why a task's trials never reached the agent: its environment did not build within the protocol's limit, or the
+    image it starts from cannot be pulled. Such a trial says nothing about the task, and the task is dropped, as the
+    protocol says. "" when every trial started."""
+    from .prepare import NO_START, PULL, limits_of, slow_build, unpullable
+    for e in events:
+        error = e.get("error") or ""
+        if "Argument list too long" in error:
+            size = (task.path / "instruction.md").stat().st_size if (task.path / "instruction.md").is_file() else 0
+            return (f"its instruction, {size // 1024} KB, is longer than an agent's command line can carry (128 KB), "
+                    "so no agent could start on it")
+        if NO_START.search(error) or PULL.search(error):
+            return unpullable(error, task.path) or slow_build(error, limits_of(s.cfg))
+    return ""
+
+
+async def cheap_solve(s: Session, cell: CellState, task: Task) -> tuple[list[dict], bool]:
     """The worker tier's model tries first, `cheap_trials` times side by side, before any frontier agent runs.
-    Returns its trials when every one passed: a task a smaller model solves each time is too easy, and the
+    Returns its trials, and whether every one passed: a task a smaller model solves each time is too easy, and the
     suite's trials are never spent on it. One pass among failures is not enough to say so."""
     d = s.cfg.difficulty
     if not d.cheap_solve or d.cheap_trials < 1:
-        return None
+        return [], False
     version = next((e.version for e in d.suite if e.agent == d.cheap_agent), "")
     entry = SuiteEntry(agent=d.cheap_agent, model=s.cfg.tiers.worker.model, version=version)
     if any((e.agent, e.model, e.reasoning_effort) == (entry.agent, entry.model, entry.reasoning_effort) for e in d.suite):
-        return None                 # the very configuration the suite runs: there is no cheaper try to make
+        return [], False            # the very configuration the suite runs: there is no cheaper try to make
     cell.detail = f"{d.cheap_trials} tries by {entry.model}"
     got, failed = [], asyncio.Event()
 
@@ -353,7 +369,7 @@ async def cheap_solve(s: Session, cell: CellState, task: Task) -> list[dict] | N
     stopped = await until_settled([one(i) for i in range(d.cheap_trials)], failed)
     if stopped:
         s.note_recent("checked", task.task_id, f"the worker agent failed a try: its other {stopped} stopped, not needed")
-    return sorted(got, key=lambda e: e["trial_index"]) if not failed.is_set() else None
+    return sorted(got, key=lambda e: e["trial_index"]), not failed.is_set()
 
 
 async def stage_worker(s: Session, cell: CellState, task: Task, rounds: int):
@@ -362,14 +378,24 @@ async def stage_worker(s: Session, cell: CellState, task: Task, rounds: int):
     of the loop: a repaired task is tried again. How it failed is what the audit reads next."""
     prior = s.ledger.decision(task.digest, "worker", "worker_solve", s.protocol)
     if prior is not None:
+        if prior.get("reason") == "no_environment":
+            s.board(task)["why"] = prior.get("rationale") or prior["value"]
+            return "drop", "no_environment"
         if prior["outcome"] == "drop":
             s.board(task)["difficulty"] = prior["value"]
             return "drop", "solved_by_worker"
         return "ok", ""
     d = s.cfg.difficulty
     t0 = enter(cell, STAGE_NO["worker"], "the worker agent tries it")
-    solved = await cheap_solve(s, cell, task)
-    if solved is None:
+    solved, every = await cheap_solve(s, cell, task)
+    why = no_environment(s, task, solved)
+    if why:
+        s.record(task.benchmark, "decision", task, stage="worker", gate="worker_solve", tier="code",
+                 value="its environment did not start", outcome="drop", rationale=why, reason="no_environment")
+        s.stage_done(task, STAGE_NO["worker"], t0, cheap_solve="no environment")
+        s.board(task)["why"] = why
+        return "drop", "no_environment"
+    if not every:
         s.record(task.benchmark, "decision", task, stage="worker", gate="worker_solve", tier="code",
                  value="not solved every time", outcome="pass")
         s.stage_done(task, STAGE_NO["worker"], t0, cheap_solve="failed" if d.cheap_solve else "off")
@@ -390,20 +416,28 @@ async def stage_difficulty(s: Session, cell: CellState, task: Task, rounds: int)
     d = s.cfg.difficulty
     n_total = len(d.suite) * s.cfg.difficulty.trials
     prior = s.ledger.decision(task.digest, "difficulty", "pass_rate", s.protocol)
+    if prior is not None and prior.get("reason") == "no_environment":
+        s.board(task)["why"] = prior.get("rationale") or prior["value"]
+        return "drop", "no_environment"
     if prior is not None:
         s.board(task)["difficulty"] = prior["value"]
         return ("ok", "") if prior["outcome"] == "pass" else ("drop", prior.get("reason") or "too_easy")
     t0 = enter(cell, STAGE_NO["difficulty"], f"0 of {n_total} trials run")
     passes = fails = 0
     result = None
+    broken = ""
     settled = asyncio.Event()
     cell.detail = f"0 of {n_total} trials run · 0 passed"
 
     async def one(entry, r):
         """One trial, counted on the screen and told in the log the moment it ends."""
-        nonlocal passes, fails, result
+        nonlocal passes, fails, result, broken
         e = await trial(s, task, "difficulty", entry.agent, entry.model, r,
                         lambda: s.backend.run_trial(task, entry, r), version=entry.version, effort=entry.reasoning_effort)
+        broken = broken or no_environment(s, task, [e])
+        if broken:                      # no agent ran: not a failure, and the task is dropped
+            settled.set()
+            return
         passes, fails = passes + bool(e["passed"]), fails + (not e["passed"])
         cell.detail = f"{passes + fails} of {n_total} trials run · {passes} passed"
         minutes = (e.get("container_seconds") or 0) / 60
@@ -437,6 +471,12 @@ async def stage_difficulty(s: Session, cell: CellState, task: Task, rounds: int)
     if stopped:
         s.note_recent("checked", task.task_id, f"settled at {passes} of {passes + fails} passed: "
                       f"{stopped} running trial{'s' if stopped > 1 else ''} stopped, not needed")
+    if broken:
+        s.record(task.benchmark, "decision", task, stage="difficulty", gate="pass_rate", tier="code",
+                 value="its environment did not start", outcome="drop", rationale=broken, reason="no_environment")
+        s.stage_done(task, STAGE_NO["difficulty"], t0, passes=passes, trials=passes + fails, stopped_early=True)
+        s.board(task)["why"] = broken
+        return "drop", "no_environment"
     result = result or ("drop" if passes > difficulty.max_passes(n_total, d.max_pass_rate) else "keep")
     value = f"{passes} of {passes + fails} passed"
     early = passes + fails < n_total

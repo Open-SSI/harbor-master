@@ -159,10 +159,11 @@ def unpullable(error: str, task_dir: Path) -> str:
     return (f"the image it starts from, {base}, cannot be pulled: it is private or does not exist, so the task never ran and its "
             "reference solution was never tried. Every task that uses such an image fails the same way. Build the environment "
             "from public sources instead: a public base image, the project's source at the pinned commit, and its dependencies, "
-            "installed in the Dockerfile. It must build within the protocol's limit, 300 seconds by default: prefer prebuilt "
+            "installed in the Dockerfile. It must build within the protocol's limit, 600 seconds by default: prefer prebuilt "
             "packages to compiling from source.")
 
 
+NO_START = re.compile(r"EnvironmentStartTimeoutError|Environment start timed out|Argument list too long", re.I)
 SLOW = re.compile(r"EnvironmentStartTimeoutError|Environment start timed out|VerifierTimeoutError|AgentTimeoutError|Agent execution timed out", re.I)
 
 
@@ -176,7 +177,7 @@ def slow_build(error: str, limits: dict | None = None) -> str:
         return f"its verifier did not finish within {int(limits.get('max_verifier_seconds') or 300)} seconds, the protocol's limit"
     if "Agent" in error:
         return f"its reference solution did not finish within {limits.get('max_verify_minutes') or 30:g} minutes, the protocol's limit"
-    return (f"its environment did not build within {int(limits.get('max_build_seconds') or 300)} seconds, the protocol's limit. "
+    return (f"its environment did not build within {int(limits.get('max_build_seconds') or 600)} seconds, the protocol's limit. "
             "Use a lighter environment: a base image that already has what the task needs, prebuilt packages instead of "
             "compiling from source, and only what the task uses")
 
