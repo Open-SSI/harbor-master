@@ -392,7 +392,9 @@ def add_dropped(s, entry: dict, checked: list) -> dict:
     from ..tasks import adding
     from ..tasks import checks as checks_mod
     entry = adding.add_made_up(s.ws, entry) if entry.get("made_up") else adding.confirm(s.ws, s.ident, entry)
-    record_checks(s, entry, checked, "reject")
+    before = s.ledger.decision(checks_mod.key(entry), "benchmark", "checks", s.protocol)
+    if not (before and before.get("tier") == "code" and before.get("outcome") == "reject"):     # said once is enough
+        record_checks(s, entry, checked, "reject")
     why = checks_mod.why(checked)
     s.record(entry["id"], "decision", stage="benchmark", gate="checks", tier="human", value=why[:200], outcome="drop",
              reason=(why[:1].lower() + why[1:]).splitlines()[0][:160], digest_override=checks_mod.key(entry))
