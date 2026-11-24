@@ -174,7 +174,7 @@ async def test_a_benchmark_no_model_can_adapt_is_dropped_and_may_be_tried_again(
         s = run_of(ws, f"r{n}")
         run = await start(s)
         assert s.requests[0].kind == "rejected" and s.requests[0].choices == ["ok"]   # the decision model is sure: the person only confirms
-        assert "anyone may curate it again" in s.requests[0].text
+        assert "is not curated again" in s.requests[0].text
         s.answer_request(s.requests[0], "ok")
         await asyncio.wait_for(run, 10)
         assert s.benches["toy"].phase == "skipped" and "judges it cannot be adapted" in s.benches["toy"].detail

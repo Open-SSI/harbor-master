@@ -81,7 +81,7 @@ def approved_before(s: Session, bench: BenchState, kept: list[Task], brief: dict
 
 async def rejected(s: Session, bench: BenchState) -> None:
     """A benchmark turned away before curating: unless a person already decided, a box asks them to confirm, and whether
-    that it is dropped (anyone may curate it again) or left out of this run."""
+    that it is dropped (not taken again) or left out of this run."""
     if bench.skip in ASK_FIRST and not bench.confirmed:
         why, code = bench.detail, bench.skip
         if await prepare.confirm_drop(s, bench, why[:1].upper() + why[1:], code) == "drop":

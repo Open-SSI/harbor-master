@@ -69,12 +69,12 @@ async def confirm_drop(s: Session, bench: BenchState, why: str, gate: str, recor
     """A benchmark is rejected before curating. The workflow decides what follows from what rejected it: a lasting reason
     (no public image, no adapter any model could write, no task that passes the gates) drops it, and a passing one (a fetch
     or a model that failed) leaves it out of this run, listed for the next. A box says so, and the person only confirms.
-    A dropped benchmark may be curated again by anyone. With nobody there, nothing is dropped. Returns "drop" or "keep"."""
+    A dropped benchmark is not taken again. With nobody there, nothing is dropped. Returns "drop" or "keep"."""
     if s.no_input:
         return "keep"
     lasting = gate in PERMANENT
     bench.phase, bench.detail, bench.confirmed = "review", "a box asks you to confirm", "asked"
-    what = ("dropped: it stays on the index's list as dropped, and anyone may curate it again" if lasting else
+    what = ("dropped: it stays on the index's list as dropped, and is not curated again" if lasting else
             "left out of this run: it stays listed, and the next run tries it again")
     answer = await s.ask("rejected", f"{bench.id} is rejected. {why.rstrip('.')}.\n\nConfirm, and it is {what}.", bench.id, ["ok"])
     if answer is None:

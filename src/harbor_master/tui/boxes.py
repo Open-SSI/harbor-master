@@ -51,7 +51,7 @@ def candidates(s) -> list[tuple[str, dict, str]]:
     return sorted(out, key=lambda x: (x[1]["status"] not in OPEN, x[1]["status"] != "listed", x[0] != "demo-bench", x[0]))
 
 
-OPEN = ("listed", "dropped")        # what a run may take: nobody holds it, and it is not finished. A dropped one may be tried again
+OPEN = ("listed",)        # what a run may take: nobody holds it, it is not finished, and it was not dropped
 
 
 def _until(when: str) -> str:
@@ -67,19 +67,21 @@ def taken_words(st: dict, why: str = "") -> str:
     return {"listed": "listed · nobody has started it",
             "curating": f"curating · @{st.get('by', '?')} until {_until(st.get('until', '?'))}",
             "curated": "curated · nothing is left to curate in it",
-            "dropped": "dropped" + (f" · {why}" if why else "") + " · it may be curated again"}[st["status"]]
+            "dropped": "dropped" + (f" · {why}" if why else "")}[st["status"]]
 
 
 def refusal(st: dict, why: str = "") -> str:
     """What follows "Refused: that is NAME" for a link to a benchmark that is on the list and cannot be taken."""
     return {"curating": f", on the list already. @{st.get('by', '?')} is curating it until {_until(st.get('until', '?'))}.",
-            "curated": ", on the list already, and curated: nothing is left to curate in it."}[st["status"]]
+            "curated": ", on the list already, and curated: nothing is left to curate in it.",
+            "dropped": ", on the list already, and dropped" + (f": {why}." if why else ".")}[st["status"]]
 
 
 def cannot_take(st: dict, why: str = "") -> str:
     """What follows "Refused: NAME" for a name typed of a benchmark that is not listed."""
     return {"curating": f" cannot be taken: @{st.get('by', '?')} is curating it until {_until(st.get('until', '?'))}.",
-            "curated": " cannot be taken: it is curated, and nothing is left to curate in it."}[st["status"]]
+            "curated": " cannot be taken: it is curated, and nothing is left to curate in it.",
+            "dropped": " cannot be taken: it is dropped" + (f": {why}." if why else ".")}[st["status"]]
 
 
 class PickScreen(Fits, ModalScreen[str]):
@@ -117,8 +119,9 @@ class PickScreen(Fits, ModalScreen[str]):
         free = [n for n, st, _ in self.found if st["status"] in OPEN]
         text = t(("Which benchmark?", "bold"), "\n",
                  (self.note + "\n" if self.note else "", AM if "not finished" in self.note else TE),
-                 ("Type the name of a listed or dropped one to curate it, or paste a link to add a new one: its repository, paper or page." if free else
-                  "None is free: each is being curated, or curated. Paste a link to add a new one: its repository, paper or page.", SE))
+                 ("Type the name of a listed one to curate it, or paste a link to add a new one: its repository, paper or page." if free else
+                  "None is free: each is being curated, curated or dropped. Paste a link to add a new one: its repository, paper or "
+                  "page.", SE))
         box = Vertical(Static(text, id="text"),
                        *([Vertical(Static(id="head"), VerticalScroll(Static(id="rows"), id="scroll", can_focus=False), id="list")]
                          if self.found else []),
@@ -200,7 +203,7 @@ class PickScreen(Fits, ModalScreen[str]):
         typed = event.value.strip()
         said = self.query_one("#said", Static)
         if not typed:
-            said.update("Type the name of a listed or dropped benchmark, or paste a link to a new one.")
+            said.update("Type the name of a listed benchmark, or paste a link to a new one.")
             return
         if "/" in typed:                    # a link: a new benchmark, unless it is one on the list already
             name = adding.on_the_list(self.s.ws, typed, made_up=self.s.simulate)
@@ -387,7 +390,7 @@ def add(s, entry: dict, checked: list) -> dict:
 
 def add_dropped(s, entry: dict, checked: list) -> dict:
     """A benchmark whose checks reject it, confirmed by the person: signed onto the list and dropped at once, with why,
-    so that it shows as dropped and nobody spends on it again. Anyone may still curate it later."""
+    so that it shows as dropped and nobody spends on it again."""
     from .. import ledger as ledger_mod
     from ..tasks import adding
     from ..tasks import checks as checks_mod
@@ -468,7 +471,7 @@ class ChecksScreen(Fits, ModalScreen[str]):
         go = self.query_one("#go", Button)
         if self.failed:
             self.query_one("#verdict", Static).update(t(("Rejected. ", f"bold {RD}"), (checks_mod.why(self.checks), RD), "\n",
-                                                         ("Confirm, and it is listed as dropped: nobody spends on it, and anyone may curate it later.", SE)))
+                                                         ("Confirm, and it is listed as dropped: nobody spends on it again.", SE)))
             go.label = "Confirm"
         else:
             self.query_one("#verdict", Static).update(t((f"No check rejects it ({checks_mod.summary(self.checks)}). ", f"bold {TE}"),

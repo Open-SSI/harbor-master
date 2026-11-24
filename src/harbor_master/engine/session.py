@@ -447,7 +447,7 @@ class Session:
         bench.phase, bench.detail, bench.skip = "skipped", f"dropped: no task was accepted, as {why}", "none_accepted"
         self.note_recent("dropped", bench.id, f"no task was accepted: {why}")
         self.tell("rejected", f"{bench.id} is dropped. No task of it was accepted: {why}.\n\nConfirm. It stays on the "
-                  "index's list as dropped, and anyone may curate it again.", bench.id)
+                  "index's list as dropped, and is not curated again.", bench.id)
 
     def tell(self, kind: str, text: str, target: str = "") -> None:
         """A box that only confirms what was decided, raised at once from code that does not wait for it."""
