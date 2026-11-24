@@ -138,13 +138,20 @@ async def diagnosed(s: Session, task: Task, defect: str) -> tuple[str, str]:
     """The decision model's answer on a task that is not yet valid, before a repair is paid for: ("drop", why) when it
     is sure nothing would make the task valid, else ("fix", defect), with what it judged added for the repair."""
     board = s.board(task)
-    try:
-        d = await s.backend.diagnose(task, defect, board.get("why", defect))
-    except NotImplementedBackend:
-        return "fix", defect
-    s.record(task.benchmark, "decision", task, stage="verify", gate="diagnose", tier=d.tier, model=d.model, value=d.value or "declined",
-             probability=round(d.prob, 3), outcome="drop" if d.value == "drop" else "pass", cost=d.cost, rationale=d.rationale[:400],
-             skill=d.skill)
+    prior = s.ledger.decision(task.digest, "verify", "diagnose", s.protocol)
+    if prior is not None:           # this version was diagnosed before, by this run or an earlier one: its answer stands
+        value = "" if prior.get("value") == "declined" else prior.get("value") or ""
+        d = Decision(value=value, prob=float(prior.get("probability") or 0.0), tier=prior.get("tier", ""),
+                     model=prior.get("model", ""), rationale=prior.get("rationale") or "")
+    else:
+        try:
+            d = await s.backend.diagnose(task, defect, board.get("why", defect))
+        except NotImplementedBackend:
+            return "fix", defect
+    if prior is None:
+        s.record(task.benchmark, "decision", task, stage="verify", gate="diagnose", tier=d.tier, model=d.model,
+                 value=d.value or "declined", probability=round(d.prob, 3), outcome="drop" if d.value == "drop" else "pass", cost=d.cost,
+                 rationale=d.rationale[:400], skill=d.skill)
     if d.value == "drop" and d.prob >= s.cfg.escalation.min_confidence:
         board["why"] = f"{board.get('why', defect)}; the decision model judges nothing would make it valid: {d.rationale}"
         return "drop", "not_valid"
