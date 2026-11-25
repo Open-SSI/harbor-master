@@ -97,7 +97,8 @@ def draft(ws: Path, ident, url: str, ref: str = "", id_: str = "") -> dict:
         entry = supported.describe(url.strip(), ref, commit, config_mod.local(ws) / "sources", id_)
     except (ValueError, subprocess.CalledProcessError, ledger_mod.SyncError) as err:
         raise AddError(str(getattr(err, "stderr", "") or err).strip()) from None
-    entry["pinned_on"] = entry["released"]          # until someone says when it came out, the pinned commit's date stands in
+    entry["pinned_on"] = entry.get("released", "")  # until someone says when it came out, the pinned commit's date stands in
+    # (a Harbor Hub version has no date that Harbor's client gives: the agent's, or the person's, is needed)
     describe.merge(entry, describe.guess(config_mod.local(ws) / "sources" / entry["id"]))
     return keep(ws, entry)
 
