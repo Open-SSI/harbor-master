@@ -58,16 +58,27 @@ def _hub(url: str) -> tuple[str, str] | None:
     return (m.group(1), m.group(2)) if m else None
 
 
-def _hub_version(org: str, name: str, ref: str) -> str:
-    """The content hash of a Hub dataset's version: `ref` is a revision number, a tag (latest, the default) or
-    sha256:HASH. Read through Harbor's public registry client, which its releases keep, where its database code moves."""
-    import asyncio
+HUB_API = "https://api.harborframework.com/functions/v1/api/v1/packages/"
+HUB_API_VERSION = "2026-09-10.preview"      # the Hub's API is versioned by date: an older version keeps answering
 
-    from harbor.registry.client.package import PackageDatasetClient
+
+def _hub_version(org: str, name: str, ref: str) -> dict:
+    """A Hub dataset's version, from the Hub's public API: its revision, content_hash and published_at. `ref` is a
+    revision number, a tag (latest, the default) or sha256:HASH. Raises ValueError when it cannot be read."""
+    import urllib.error
+    import urllib.parse
+    url = f"{HUB_API}{org}/{name}/versions/{urllib.parse.quote(ref or 'latest', safe=':')}"
     try:
-        meta = asyncio.run(PackageDatasetClient().get_dataset_metadata(f"{org}/{name}@{ref or 'latest'}"))
-        return (meta.dataset_version_content_hash or meta.version or "").removeprefix("sha256:")
-    except Exception as err:            # the registry's client raises its own kinds, for a missing dataset or no network
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"Harbor-API-Version": HUB_API_VERSION}),
+                                    timeout=60) as r:
+            version = json.load(r)
+        if not version.get("content_hash"):
+            raise ValueError("the Hub gave no content hash")
+        return version
+    except urllib.error.HTTPError as err:
+        why = (json.loads(err.read() or b"{}").get("detail") if err.code < 500 else "") or f"HTTP {err.code}"
+        raise ValueError(f"Could not read {HUB}{org}/{name} at {ref or 'latest'}: {why}") from None
+    except (OSError, ValueError) as err:
         raise ValueError(f"Could not read {HUB}{org}/{name} at {ref or 'latest'}: {str(err)[:200]}") from None
 
 
@@ -303,6 +314,11 @@ def committed(entry: dict, repo: Path) -> str:
     """The date of the pinned commit, as YYYY-MM-DD: from the clone, or from GitHub for an archive. "" when unknown."""
     if (repo / ".git").exists():
         return subprocess.run(["git", "log", "-1", "--format=%cs"], cwd=repo, capture_output=True, text=True).stdout.strip()
+    if _hub(entry["github"]):          # the date the pinned version was published on the Hub
+        try:
+            return str(_hub_version(*_hub(entry["github"]), f"sha256:{entry['commit']}").get("published_at") or "")[:10]
+        except ValueError:
+            return ""
     where, dataset = _github(entry["github"]), _huggingface(entry["github"])
     url = (f"https://api.github.com/repos/{where[0]}/{where[1]}/commits/{entry['commit']}" if where else
            f"https://huggingface.co/api/datasets/{dataset}/revision/{entry['commit']}" if dataset else "")
@@ -327,7 +343,8 @@ def pin(url: str, ref: str = "") -> tuple[str, str]:
     """The release to pin, and its commit: the tag or branch that was named, else the newest tag, else the main branch.
     For a Harbor Hub dataset: the revision named (or latest), and that version's content hash."""
     if _hub(url):
-        return ref or "latest", _hub_version(*_hub(url), ref)
+        version = _hub_version(*_hub(url), ref)
+        return str(version.get("revision") or ref or "latest"), version["content_hash"]
     try:
         out = subprocess.run(["git", "ls-remote", "--symref", url], capture_output=True, text=True, timeout=120)
     except subprocess.TimeoutExpired:

@@ -98,7 +98,6 @@ def draft(ws: Path, ident, url: str, ref: str = "", id_: str = "") -> dict:
     except (ValueError, subprocess.CalledProcessError, ledger_mod.SyncError) as err:
         raise AddError(str(getattr(err, "stderr", "") or err).strip()) from None
     entry["pinned_on"] = entry.get("released", "")  # until someone says when it came out, the pinned commit's date stands in
-    # (a Harbor Hub version has no date that Harbor's client gives: the agent's, or the person's, is needed)
     describe.merge(entry, describe.guess(config_mod.local(ws) / "sources" / entry["id"]))
     return keep(ws, entry)
 
@@ -212,6 +211,8 @@ def direct(ws: Path, entry: dict, text: str) -> bool:
 
 
 def keep(ws: Path, entry: dict) -> dict:
+    if not entry.get("paper") and entry.get("homepage"):      # with no paper, its own page describes it
+        entry["paper"] = entry["homepage"]
     path = config_mod.local(ws) / DRAFT
     path.parent.mkdir(exist_ok=True)
     path.write_text(json.dumps(entry, indent=2) + "\n")
