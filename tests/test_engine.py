@@ -422,3 +422,11 @@ async def test_trials_that_need_a_gpu_wait_for_one_of_the_gpu_places(session):
 
     await asyncio.gather(*(session.container(trial(), gpu=True) for _ in range(3)), session.container(trial()))
     assert session.cfg.run.max_gpu_containers == 1 and most[0] == 2      # one GPU trial, beside the CPU one
+
+
+def test_a_harbor_hub_dataset_is_named_by_its_page_or_a_harbor_command():
+    from harbor_master.tasks.supported import hub_address
+    hub = "https://hub.harborframework.com/datasets/org/data"
+    assert {hub_address(s) for s in ("hub.harborframework.com/datasets/org/data/tasks", "harbor dataset download org/data@7",
+                                     "harbor run -a oracle -d org/data")} == {hub}
+    assert hub_address("org/data") == ""        # a bare ORG/NAME stays a GitHub repository

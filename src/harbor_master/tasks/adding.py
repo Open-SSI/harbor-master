@@ -39,7 +39,8 @@ def repo_key(link: str) -> str:
     parts = [x for x in s.split("/") if x]
     if parts and parts[-1].endswith(".git"):
         parts[-1] = parts[-1].removesuffix(".git")
-    keep = {"github.com": 3, "huggingface.co": 4 if parts[1:2] == ["datasets"] else 3}.get(parts[0] if parts else "", len(parts))
+    keep = {"github.com": 3, "huggingface.co": 4 if parts[1:2] == ["datasets"] else 3,
+            "hub.harborframework.com": 4}.get(parts[0] if parts else "", len(parts))
     return "/".join(p.removesuffix(".git") for p in parts[:keep])
 
 
@@ -85,6 +86,7 @@ def draft(ws: Path, ident, url: str, ref: str = "", id_: str = "") -> dict:
     """The entry as the code can read it from the repository: pinned, with its tasks found and its licence read."""
     from ..backends import describe
     may_add(ws, ident)
+    url = supported.hub_address(url) or url
     github = url.strip().rstrip("/").removesuffix(".git")
     sync = ledger_mod.Sync(ws, ident.name, ident.github)
     try:
@@ -106,10 +108,13 @@ async def find(ws: Path, ident, given: str, entry: dict | None = None, note: str
     from ..backends import NotImplementedBackend, describe
     may_add(ws, ident)
     repo = config_mod.local(ws) / "sources" / entry["id"] if entry else None
+    hub = supported.hub_address(given) or supported.hub_address((entry or {}).get("github", ""))
     try:
-        data, cost = await describe.find(config_mod.load(ws), given, entry, repo, note)
+        data, cost = await describe.find(config_mod.load(ws), hub or given, entry, repo, note)
     except (RuntimeError, NotImplementedBackend) as err:
         raise AddError(f"The agent could not search for it: {str(err)[:200]}") from None
+    if hub:         # a Harbor Hub dataset is downloaded from the Hub, at its latest revision: the agent only describes it
+        data["repository"], data["release"] = hub, ""
     if not str(data.get("repository", "")).strip():
         read = ", ".join(data.get("sources") or []) or "nothing it could use"
         raise AddError(f"The agent found no repository that holds this benchmark's tasks (it read {read}). Give the link to "

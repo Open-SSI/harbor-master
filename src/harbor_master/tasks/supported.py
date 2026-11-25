@@ -38,6 +38,52 @@ def _huggingface(url: str) -> str | None:
     return m.group(1) if m else None
 
 
+HUB = "https://hub.harborframework.com/datasets/"
+
+
+def hub_address(given: str) -> str:
+    """The Harbor Hub address of a dataset, from its page's link or from a command that names it, such as
+    `harbor dataset download ORG/NAME` or `harbor run -d ORG/NAME`. "" when `given` names none. A bare ORG/NAME stays a
+    GitHub repository, as it always was."""
+    s = given.strip()
+    m = (re.match(r"(?:https?://)?hub\.harborframework\.com/datasets/([\w.-]+)/([\w.-]+)", s) or
+         re.match(r"harbor\s+datasets?\s+download\s+(?:\S+\s+)*?([\w.-]+)/([\w.-]+?)(?:@\S*)?(?:\s|$)", s) or
+         re.match(r"harbor\s+run\s+(?:.*\s)?(?:-d|--dataset)[\s=]+([\w.-]+)/([\w.-]+?)(?:@\S*)?(?:\s|$)", s))
+    return f"{HUB}{m.group(1)}/{m.group(2)}" if m else ""
+
+
+def _hub(url: str) -> tuple[str, str] | None:
+    """(ORG, NAME) for a Harbor Hub dataset's address, else None."""
+    m = re.fullmatch(re.escape(HUB) + r"([\w.-]+)/([\w.-]+)/?", url.strip())
+    return (m.group(1), m.group(2)) if m else None
+
+
+def _hub_version(org: str, name: str, ref: str) -> dict:
+    """A Hub dataset's version row: `ref` is a revision number, a tag (latest, the default) or sha256:HASH."""
+    import asyncio
+
+    from harbor.db.client import RegistryDB
+    try:
+        return asyncio.run(RegistryDB().resolve_dataset_version(org, name, ref or "latest"))[1]
+    except Exception as err:            # the registry's client raises its own kinds, for a missing dataset or no network
+        raise ValueError(f"Could not read {HUB}{org}/{name} at {ref or 'latest'}: {str(err)[:200]}") from None
+
+
+def _hub_download(org: str, name: str, commit: str, repo: Path) -> bool:
+    """A Hub dataset's tasks at one version, its content hash, as Harbor itself downloads them."""
+    from ..backends.harbor import binary
+    try:
+        with tempfile.TemporaryDirectory(dir=repo.parent) as tmp:
+            subprocess.run([binary(), "datasets", "download", f"{org}/{name}@sha256:{commit}", "--export", "-o", tmp],
+                           check=True, capture_output=True, timeout=3600)
+            shutil.move(str(Path(tmp) / name), str(repo))
+        (repo / PINNED).write_text(commit + "\n")
+        return True
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        shutil.rmtree(repo, ignore_errors=True)
+        return False
+
+
 def _dataset(name: str, commit: str, repo: Path) -> bool:
     """A Hugging Face dataset's files at one revision: each file as it is, not the pointer git keeps for a large one."""
     try:
@@ -146,7 +192,7 @@ def preview(entry: dict, sources: Path) -> Path:
     downloads the rest (fetch). A folder on this machine, or a Hugging Face dataset, is fetched in full. A fetch whose
     connection stalls is started again. Returns the tasks folder; raises ValueError when it could not be read."""
     repo, url, commit = sources / entry["id"], entry["github"], entry["commit"]
-    if Path(url).exists() or _huggingface(url):
+    if Path(url).exists() or _huggingface(url) or _hub(url):
         return fetch(entry, sources)
     if repo.exists() and _at(repo) == commit:
         return repo / entry["tasks"]
@@ -219,7 +265,8 @@ def _at(repo: Path) -> str:
 
 def fetch(entry: dict, sources: Path) -> Path:
     """The benchmark at its pinned commit, or a check that an existing copy is at it. Returns the tasks folder.
-    A GitHub repository is fetched as an archive of the commit, and a Hugging Face dataset file by file at its revision.
+    A GitHub repository is fetched as an archive of the commit, a Hugging Face dataset file by file at its revision, and
+    a Harbor Hub dataset by Harbor at its version's content hash, which stands for the commit.
     Anything else, or a download that cannot be had, is cloned."""
     repo = sources / entry["id"]
     git = lambda *a, cwd=repo: subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True, text=True)  # noqa: E731
@@ -227,11 +274,14 @@ def fetch(entry: dict, sources: Path) -> Path:
         shutil.rmtree(repo)
     if not repo.exists():
         sources.mkdir(parents=True, exist_ok=True)
-        where, dataset = _github(entry["github"]), _huggingface(entry["github"])
+        where, dataset, hub = _github(entry["github"]), _huggingface(entry["github"]), _hub(entry["github"])
         got = ((_shallow(entry["github"], entry["commit"], repo) or _archive(*where, entry["commit"], repo)) if where else
-               _dataset(dataset, entry["commit"], repo) if dataset else False)
+               _dataset(dataset, entry["commit"], repo) if dataset else
+               _hub_download(*hub, entry["commit"], repo) if hub else False)
         if not got and dataset:
             raise ValueError(f"Could not download the dataset {dataset} at {entry['commit'][:10]} from Hugging Face.")
+        if not got and hub:
+            raise ValueError(f"Could not download {entry['github']} at {entry['commit'][:10]} from the Harbor Hub.")
         if not got:
             address = entry["github"] if Path(entry["github"]).exists() else entry["github"] + ".git"      # a folder is cloned as it is
             git("clone", "--quiet", "--depth", "1", "--branch", entry["ref"], address, str(repo), cwd=sources)
@@ -251,6 +301,11 @@ def committed(entry: dict, repo: Path) -> str:
     """The date of the pinned commit, as YYYY-MM-DD: from the clone, or from GitHub for an archive. "" when unknown."""
     if (repo / ".git").exists():
         return subprocess.run(["git", "log", "-1", "--format=%cs"], cwd=repo, capture_output=True, text=True).stdout.strip()
+    if _hub(entry["github"]):
+        try:
+            return str(_hub_version(*_hub(entry["github"]), f"sha256:{entry['commit']}").get("published_at") or "")[:10]
+        except ValueError:
+            return ""
     where, dataset = _github(entry["github"]), _huggingface(entry["github"])
     url = (f"https://api.github.com/repos/{where[0]}/{where[1]}/commits/{entry['commit']}" if where else
            f"https://huggingface.co/api/datasets/{dataset}/revision/{entry['commit']}" if dataset else "")
@@ -272,7 +327,11 @@ LICENSES = (("Apache License", "Apache-2.0"), ("MIT License", "MIT"), ("BSD 3-Cl
 
 
 def pin(url: str, ref: str = "") -> tuple[str, str]:
-    """The release to pin, and its commit: the tag or branch that was named, else the newest tag, else the main branch."""
+    """The release to pin, and its commit: the tag or branch that was named, else the newest tag, else the main branch.
+    For a Harbor Hub dataset: the revision named (or its latest), and that version's content hash."""
+    if _hub(url):
+        version = _hub_version(*_hub(url), ref)
+        return str(version["revision"]), version["content_hash"]
     try:
         out = subprocess.run(["git", "ls-remote", "--symref", url], capture_output=True, text=True, timeout=120)
     except subprocess.TimeoutExpired:
