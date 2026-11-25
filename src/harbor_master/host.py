@@ -15,6 +15,7 @@ import json
 import contextlib
 import os
 import pty
+import select
 import selectors
 import signal
 import socket
@@ -51,8 +52,8 @@ OTHER, BACK = b"\x1b[?1049h", b"\x1b[?1049l"
 # output again it is sent the whole screen afresh. It is never closed for being slow.
 MAX_BACKLOG = 256 * 1024
 # Sent to a view that caught up, before the screen is drawn again: ends any control sequence that was cut off when its
-# backlog was thrown away (CAN), and resets the colors.
-RESYNC = b"\x18\x1b[0m"
+# backlog was thrown away (CAN), resets the colors, and clears what was left on it.
+RESYNC = b"\x18\x1b[0m\x1b[H\x1b[2J"
 
 
 def _note(what: str) -> None:
@@ -329,6 +330,18 @@ def _size() -> bytes:
     return struct.pack(">HH", rows or 40, cols or 120)
 
 
+def _write_all(fd: int, data: bytes) -> None:
+    """Write all of it to the terminal. One write can take only part: a signal (the terminal changing size, as it does
+    when its pane is shown again) cuts short a write to a terminal that reads slowly, and the rest would be lost: a
+    whole screen drawn afresh then shows only what changes after it."""
+    view = memoryview(data)
+    while view:
+        try:
+            view = view[os.write(fd, view):]
+        except BlockingIOError:             # a terminal left non-blocking: wait until it takes more
+            select.select([], [fd], [], 1)
+
+
 def attach(ws: Path) -> str:
     """Show the run that is going in this terminal until the user leaves it or it ends.
     Returns "going" when the run is still there afterwards, and "ended" when it is not."""
@@ -366,7 +379,7 @@ def attach(ws: Path) -> str:
                     if not shown:
                         return "going" if active(ws) else "ended"
                     back, tail = back_already(back, tail, shown)
-                    os.write(stdout, shown)
+                    _write_all(stdout, shown)
     except OSError:
         return "going" if active(ws) else "ended"
     finally:
