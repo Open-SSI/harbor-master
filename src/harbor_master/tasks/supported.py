@@ -58,13 +58,15 @@ def _hub(url: str) -> tuple[str, str] | None:
     return (m.group(1), m.group(2)) if m else None
 
 
-def _hub_version(org: str, name: str, ref: str) -> dict:
-    """A Hub dataset's version row: `ref` is a revision number, a tag (latest, the default) or sha256:HASH."""
+def _hub_version(org: str, name: str, ref: str) -> str:
+    """The content hash of a Hub dataset's version: `ref` is a revision number, a tag (latest, the default) or
+    sha256:HASH. Read through Harbor's public registry client, which its releases keep, where its database code moves."""
     import asyncio
 
-    from harbor.db.client import RegistryDB
+    from harbor.registry.client.package import PackageDatasetClient
     try:
-        return asyncio.run(RegistryDB().resolve_dataset_version(org, name, ref or "latest"))[1]
+        meta = asyncio.run(PackageDatasetClient().get_dataset_metadata(f"{org}/{name}@{ref or 'latest'}"))
+        return (meta.dataset_version_content_hash or meta.version or "").removeprefix("sha256:")
     except Exception as err:            # the registry's client raises its own kinds, for a missing dataset or no network
         raise ValueError(f"Could not read {HUB}{org}/{name} at {ref or 'latest'}: {str(err)[:200]}") from None
 
@@ -301,11 +303,6 @@ def committed(entry: dict, repo: Path) -> str:
     """The date of the pinned commit, as YYYY-MM-DD: from the clone, or from GitHub for an archive. "" when unknown."""
     if (repo / ".git").exists():
         return subprocess.run(["git", "log", "-1", "--format=%cs"], cwd=repo, capture_output=True, text=True).stdout.strip()
-    if _hub(entry["github"]):
-        try:
-            return str(_hub_version(*_hub(entry["github"]), f"sha256:{entry['commit']}").get("published_at") or "")[:10]
-        except ValueError:
-            return ""
     where, dataset = _github(entry["github"]), _huggingface(entry["github"])
     url = (f"https://api.github.com/repos/{where[0]}/{where[1]}/commits/{entry['commit']}" if where else
            f"https://huggingface.co/api/datasets/{dataset}/revision/{entry['commit']}" if dataset else "")
@@ -328,10 +325,9 @@ LICENSES = (("Apache License", "Apache-2.0"), ("MIT License", "MIT"), ("BSD 3-Cl
 
 def pin(url: str, ref: str = "") -> tuple[str, str]:
     """The release to pin, and its commit: the tag or branch that was named, else the newest tag, else the main branch.
-    For a Harbor Hub dataset: the revision named (or its latest), and that version's content hash."""
+    For a Harbor Hub dataset: the revision named (or latest), and that version's content hash."""
     if _hub(url):
-        version = _hub_version(*_hub(url), ref)
-        return str(version["revision"]), version["content_hash"]
+        return ref or "latest", _hub_version(*_hub(url), ref)
     try:
         out = subprocess.run(["git", "ls-remote", "--symref", url], capture_output=True, text=True, timeout=120)
     except subprocess.TimeoutExpired:
