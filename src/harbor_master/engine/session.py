@@ -83,7 +83,7 @@ class Session:
         self.leaving = False            # the user asked to leave the screen: the screen does it and clears this
         self.started = time.time()
         self.max_containers = cfg.run.max_containers
-        self.containers_used = 0
+        self.containers_used = self.gpu_containers_used = 0
         self.asked_cells = False         # the person said how many cells and containers, once a benchmark's tasks were chosen
         self.on_screen = False           # a screen is there to answer boxes: only then is the person asked for cells
         self._shards: dict[str, Shard] = {}
@@ -239,18 +239,23 @@ class Session:
         if said:
             self.note_recent(STAGES[stage], task.task_id, said)
 
-    async def container(self, coro):
+    async def container(self, coro, gpu: bool = False):
+        """Run `coro`, a trial, once a container is free. A trial whose task asks for a GPU also waits for one of
+        the few GPU places: Docker hands every such container the same GPUs, so too many at once run out of its memory."""
         try:
-            while self.containers_used >= self.max_containers:     # the limit can change while the run goes on
+            while self.containers_used >= self.max_containers or (     # the limit can change while the run goes on
+                    gpu and self.gpu_containers_used >= self.cfg.run.max_gpu_containers):
                 await asyncio.sleep(0.05)
         except asyncio.CancelledError:      # no longer wanted before it started: it never runs
             coro.close()
             raise
         self.containers_used += 1
+        self.gpu_containers_used += gpu
         try:
             return await coro
         finally:
             self.containers_used -= 1
+            self.gpu_containers_used -= gpu
 
     async def ask(self, kind: str, text: str, target: str = "", choices: list[str] | None = None):
         """Raise a request and wait for its answer. Returns None when nothing can prompt."""

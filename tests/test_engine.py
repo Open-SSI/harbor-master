@@ -408,3 +408,17 @@ async def test_a_task_that_resumes_in_a_later_run_is_reported_with_the_evidence_
     assert any(line.startswith("- **difficulty** (pass_rate, an earlier run)") for line in lines)
     assert any(line.startswith("- **trial** (difficulty, an earlier run)") for line in lines)
     assert any(line.startswith("- **verify** (solution, an earlier run)") for line in lines)
+
+
+async def test_trials_that_need_a_gpu_wait_for_one_of_the_gpu_places(session):
+    import asyncio
+    running, most = [0], [0]
+
+    async def trial():
+        running[0] += 1
+        most[0] = max(most[0], running[0])
+        await asyncio.sleep(0.1)
+        running[0] -= 1
+
+    await asyncio.gather(*(session.container(trial(), gpu=True) for _ in range(3)), session.container(trial()))
+    assert session.cfg.run.max_gpu_containers == 1 and most[0] == 2      # one GPU trial, beside the CPU one

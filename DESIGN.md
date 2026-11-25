@@ -51,7 +51,7 @@ So every hand-off can be cached, compared across tiers, and checked by someone e
 | 3 | Verify | W, then D; F and D when unsure; then a person | Is the reference solution valid: does it solve the task without reading the tests, hard-coding answers or faking the work? Nothing is run. The worker agent audits the files and gives its verdict, and the decision model decides from its audit; when that decision is unsure, or goes against the worker's verdict, the frontier agent audits again and the decision model decides from both. A task with no reference solution skips this stage until stage 8 writes one from a passing trial | A person confirms the rejection in a box (or lets the task go on) |
 | 4 | Probe | W, then D; F and D when unsure; then a person | Does the instruction state everything the tests check? The same audit and escalation as verify: the worker agent goes through the tests one check at a time, the decision model decides from its audit, and the frontier agent audits again when that decision is unsure or goes against the worker's verdict | A person confirms the rejection in a box (or lets the task go on) |
 | 5 | Worker tries | The worker agent (Sonnet on Claude Code) | Two tries, side by side, each at most `cheap_agent_hours`; the other stops once one fails | It solves the task both times: too easy |
-| 6 | Audit | W; F when unsure | Reads how the worker agent failed, and says whether it was the task's fault, the agent's, or the infrastructure's. Alignment is judged as in coverage: falling short of a hidden or tight bar on the stated goal is the agent's failure, not a defect to fix | Broken and not repairable |
+| 6 | Audit | W; F when unsure | Reads how the worker agent failed, and says whether it was the task's fault, the agent's, or the infrastructure's. Alignment is judged as in coverage: falling short of a hidden or tight bar on the stated goal is the agent's failure, not a defect to fix. For a task with no reference solution, an audit still unsure after F lets it go on: the frontier trials decide | Broken and not repairable |
 | 7 | Fix | W in round 1, F in round 2 | Repairs the task. The new version goes back to stage 3, through every cheap check again | Still asked for a fix after 2 rounds |
 | 8 | Difficulty | The frontier suite | Last, once per task, outside the loop: 2 frontier agents x 3 trials, one per agent at a time, the agents taking turns; each at most 4 hours; stops once settled. A task with no reference solution also needs at least one pass: the frontier model writes that trial's work as its reference solution, the trials' results carry over to that version (it differs only in solution/), and stage 3 audits the solution | More than 3 of the 6 pass, or none passes for a task with no reference solution |
 | 9 | Report | W | For a kept task only: audits how the frontier agents failed, then one report: evidence, diffs, cost, and a recommendation, reject when the failures are the task's fault. A task the workflow drops gets no report and no box: it is dropped, and its work cell takes the next task | |
@@ -112,7 +112,7 @@ Measured on the 70 tasks of Terminal-Bench-Science: 468 requests, $0.023, 11 sec
 
 - **Once per benchmark**: fetching, the adapter, triage, the brief, ranking and selection. Triage is one batched pass, so a task that fails a gate never takes a cell.
 - **One working cell per task in flight**: verify, probe, difficulty, audit, fix, report. `cells = 4` means four tasks at once. A cell holds one agent session at a time, and runs containers side by side where runs are independent: the worker's tries, and the suite's agents.
-- **Limits**: `cells`, `max_containers`, and a rate limit per provider. One asyncio process holds a semaphore for each. To scale past one machine, run on more machines against the same ledger: claims (Section 7) keep them apart.
+- **Limits**: `cells`, `max_containers`, `max_gpu_containers` (trials whose task asks for a GPU: Docker gives each the same GPUs, so they wait for one of these places), and a rate limit per provider. One asyncio process holds a semaphore for each. To scale past one machine, run on more machines against the same ledger: claims (Section 7) keep them apart.
 
 ## 7. Records
 
@@ -308,7 +308,7 @@ Both are written commented by `hm new`. The index commits `hm.example.toml` and 
 | `difficulty.max_pass_rate`, `trials`, `max_agent_hours` | 0.50, 3, 4 |
 | `difficulty.cheap_solve`, `cheap_trials`, `cheap_agent`, `cheap_agent_hours` | true, 2, claude-code, 1 |
 | `adapt.max_rounds`, `fix.max_rounds`, `fix.frontier_after_round` | 2, 2, 1 |
-| `run.cells`, `max_containers`, `claim_hours` | 4, 16, 12 |
+| `run.cells`, `max_containers`, `max_gpu_containers`, `claim_hours` | 4, 16, 1, 12 |
 
 ### Settings and the version
 

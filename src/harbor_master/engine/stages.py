@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 
 from ..backends import NotImplementedBackend
 from ..backends.base import CHECKS, Decision, TaskDropped, Unreachable
+from ..backends.harbor import own_limit
 from ..core.config import SuiteEntry
 from ..curation import difficulty
 from ..tasks import Task
@@ -182,12 +183,13 @@ async def trial(s: Session, task: Task, purpose: str, agent: str, model: str, in
     prior = s.ledger.trial(task.digest, agent, version, model, index, effort)
     if prior is not None:
         return prior
-    result = await s.container(run())
+    gpu = own_limit(task.path, "environment", "gpus") > 0
+    result = await s.container(run(), gpu)
     s.trial_cost += result.cost
     from .prepare import NO_START, PULL, SLOW
     while result.error and not any(r.search(result.error) for r in (PULL, SLOW, NO_START)) and await s.failed(
             task.name, f"{purpose} trial {index + 1}" + (f" of {agent} with {model}" if model else ""), result.error):
-        result = await s.container(run())       # the person chose to try it again
+        result = await s.container(run(), gpu)       # the person chose to try it again
         s.trial_cost += result.cost
     from . import claims
     with contextlib.suppress(Exception):        # a finished trial is progress: the benchmark's claim is kept alive
@@ -553,8 +555,9 @@ async def adopt(s: Session, cell: CellState, task: Task) -> tuple[str, str]:
 
 async def stage_audit(s: Session, cell: CellState, task: Task, rounds: int):
     prior = s.ledger.decision(task.digest, "audit", "quality", s.protocol)
-    if prior is not None:
-        return {"accept": ("ok", ""), "fix": ("fix", "design")}.get(prior["value"], ("drop", "broken"))
+    if prior is not None and prior["outcome"] != "escalate":
+        return {"accept": ("ok", ""), "fix": ("fix", "design")}.get(
+            prior["value"], ("ok", "") if prior["value"] == "unsure" and not task.has_solution else ("drop", "broken"))
     t0 = enter(cell, STAGE_NO["audit"], "reading how the worker agent failed")
     d = await s.backend.audit(task, rounds)
     tiers = [d.tier]
@@ -564,13 +567,16 @@ async def stage_audit(s: Session, cell: CellState, task: Task, rounds: int):
         enter(cell, STAGE_NO["audit"], "unsure, asking tier F", attention=True)
         d = await s.backend.second_opinion(task, rounds)
         tiers.append(d.tier)
-    outcome = {"accept": "pass", "fix": "fix"}.get(d.value, "drop")
+    # With no reference solution, an audit still unsure of whether the task or the worker agent is at fault decides
+    # nothing: the frontier trials do, as they must pass it anyway.
+    goes_on = d.value == "unsure" and not task.has_solution
+    outcome = {"accept": "pass", "fix": "fix"}.get(d.value, "pass" if goes_on else "drop")
     s.record(task.benchmark, "decision", task, stage="audit", gate="quality", tier=d.tier, model=d.model,
                 value=d.value, probability=d.prob, outcome=outcome, cost=d.cost, rationale=d.rationale,
                 reason="" if outcome != "drop" else "broken")
     s.stage_done(task, STAGE_NO["audit"], t0, verdict=d.value, tiers=tiers, rationale=d.rationale)
     cell.attention = False
-    if d.value == "accept":
+    if d.value == "accept" or goes_on:
         return "ok", ""
     s.board(task)["why"] = d.rationale
     return ("fix", "design") if d.value == "fix" else ("drop", "broken")

@@ -126,6 +126,7 @@ class Fix(BaseModel):
 class Run(BaseModel):
     cells: int = 4
     max_containers: int = 16
+    max_gpu_containers: int = 1    # of them, those whose task asks for a GPU. Docker shares the machine's GPUs, never reserves one
     sandbox: str = "docker"
     claim_hours: float = 12.0      # how long a claim on a benchmark holds. A run that goes on renews it
     watch_minutes: float = 3.0     # how often a running trial's logs are looked at
