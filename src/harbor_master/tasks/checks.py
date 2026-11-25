@@ -129,7 +129,18 @@ def access(entry: dict, source, cfg: Config) -> tuple[str, str]:
     value = entry.get("access", "")
     if value == "held_out":
         return FAIL, "its test tasks are kept private: what can be downloaded is not the benchmark"
-    if value == "gated":
+    root = tasks_root(entry, source)
+    if root is not None:    # its tasks are here: every one that needs credentials from whoever runs it is counted
+        from .intake import find_tasks
+        from .model import needs_from_host
+        tasks = find_tasks(root)
+        gated = sum(bool(needs_from_host(t)) for t in tasks)
+        if tasks and gated == len(tasks):
+            return FAIL, f"every one of its {len(tasks)} tasks needs credentials from whoever runs it: none is public"
+        if gated:
+            return WARN, (f"{gated} of its {len(tasks)} tasks need credentials from whoever runs them, such as a token for a "
+                          "gated dataset: those are dropped one by one, and the public ones are curated")
+    if value == "gated":            # the download itself is behind a request, whatever its tasks read
         return FAIL, "its tasks are downloaded only after asking for access: they are not public"
     if value == "public" or source is not None:
         return PASS, "anyone can download its tasks" + (": its release was downloaded here" if source is not None else "")

@@ -115,6 +115,9 @@ async def find(ws: Path, ident, given: str, entry: dict | None = None, note: str
         raise AddError(f"The agent could not search for it: {str(err)[:200]}") from None
     if hub:         # a Harbor Hub dataset is downloaded from the Hub, at its latest revision: the agent only describes it
         data["repository"], data["release"] = hub, ""
+    named = re.search(r"/(?:tree|releases/tag)/([^/?#\s]+)", given)
+    if named and not entry and _same(data.get("repository", ""), given):     # a link to one branch or tag pins that one
+        data["release"] = named.group(1)
     if not str(data.get("repository", "")).strip():
         read = ", ".join(data.get("sources") or []) or "nothing it could use"
         raise AddError(f"The agent found no repository that holds this benchmark's tasks (it read {read}). Give the link to "

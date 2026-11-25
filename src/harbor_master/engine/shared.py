@@ -276,6 +276,7 @@ WHY_DROPPED = {
     "verifier": "not graded by code: {value}",
     "verifier_cost": "too costly to grade",
     "duplicate": "a duplicate of another task",
+    "credentials": "not public: it needs credentials from whoever runs it, such as a token for a gated dataset",
 }
 
 
@@ -425,6 +426,11 @@ async def triage(s: Session, task: Task) -> bool:
         answers["reported"] = {"value": seen["pass_rate"], "tier": "worker", "model": seen.get("model", "")}
         if seen["pass_rate"] > s.cfg.triage.max_reported_pass_rate:
             return done("reported")
+    from ..tasks.model import needs_from_host
+    needs = needs_from_host(task.path)
+    if needs:                       # credentials only the person running it has: anyone else cannot run it
+        answers["credentials"] = {"value": "needs " + ", ".join(needs[:4]), "tier": "code"}
+        return done("credentials")
     # A task with no reference solution goes on: if it is selected, its work cell writes one (engine/stages.py).
     answers["reference_solution"] = {"value": "present" if task.has_solution else "missing: a frontier trial must pass it", "tier": "code"}
     wanted = {g: choices for g, (choices, _) in gates.D_GATES.items()}

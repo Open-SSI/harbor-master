@@ -430,3 +430,13 @@ def test_a_harbor_hub_dataset_is_named_by_its_page_or_a_harbor_command():
     assert {hub_address(s) for s in ("hub.harborframework.com/datasets/org/data/tasks", "harbor dataset download org/data@7",
                                      "harbor run -a oracle -d org/data")} == {hub}
     assert hub_address("org/data") == ""        # a bare ORG/NAME stays a GitHub repository
+
+
+def test_a_task_that_reads_credentials_from_the_host_is_found(tmp_path):
+    from harbor_master.tasks.model import needs_from_host
+    (tmp_path / "environment").mkdir()
+    (tmp_path / "task.toml").write_text('[verifier.env]\nJUDGE_KEY = "${JUDGE_KEY:-}"  # ${NOT_THIS}\n')
+    (tmp_path / "environment" / "docker-compose.yaml").write_text("services:\n  main:\n    image: ${COMPOSE_PROJECT_NAME}\n")
+    assert needs_from_host(tmp_path) == ["JUDGE_KEY"]
+    (tmp_path / "task.toml").write_text("[task]\n")
+    assert needs_from_host(tmp_path) == []
