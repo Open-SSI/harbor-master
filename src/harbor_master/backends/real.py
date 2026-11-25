@@ -217,6 +217,7 @@ class RealBackend(Backend):
         self.sim = SimulatedBackend(cfg, lambda tier, cost, tokens: None, speed=0)
         self.kept: dict[str, list[dict]] = {}       # each task version's agent trials, by digest: what the audits read
         self.ranked = RankCache(run_dir.parents[1] / "cache" / "ranking.jsonl")     # answers kept for a restart
+        harbor.remove_leftovers(run_dir.parents[1])         # containers an earlier run here left running
         if cfg.tiers.decision.provider != "openrouter":     # a general model states a confidence, not a probability
             raise NotImplementedBackend(
                 f"The decision tier is set to provider {cfg.tiers.decision.provider!r}. It runs on Jev only: "

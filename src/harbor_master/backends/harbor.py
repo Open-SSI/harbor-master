@@ -326,6 +326,24 @@ def remove_containers(job: Path) -> None:
         pass
 
 
+def remove_leftovers(hm_dir: Path) -> int:
+    """Remove the containers that earlier runs in this index left behind: one that was quit or died while a trial
+    was being stopped, or a Harbor that failed before it took its containers down. Only one run goes in an index at
+    a time, so a container whose Compose files lie under its .hm/ belongs to none that is going. Returns how many."""
+    import subprocess
+    try:
+        listed = subprocess.run(["docker", "ps", "-a", "--format",
+                                 '{{.ID}} {{.Label "com.docker.compose.project.working_dir"}}'],
+                                capture_output=True, text=True, timeout=30).stdout.split("\n")
+        ids = [p[0] for p in (line.split(None, 1) for line in listed)
+               if len(p) == 2 and p[1].startswith(f"{hm_dir.resolve()}/")]
+        if ids:
+            subprocess.run(["docker", "rm", "-f", *ids], capture_output=True, timeout=120)
+        return len(ids)
+    except (OSError, subprocess.TimeoutExpired):
+        return 0
+
+
 async def run(task_dir: Path, jobs_dir: Path, agent: str, model: str = "", agent_kwargs: dict | None = None,
               with_keys: bool = False, timeout: float = 3 * 3600, max_agent_seconds: float = 0,
               agent_env: dict[str, str] | None = None, max_build_seconds: float = 0,
@@ -433,6 +451,7 @@ async def _run_once(task_dir, jobs_dir, agent, model, agent_kwargs, with_keys, t
         raise
     finally:
         reader.cancel()
+    await asyncio.to_thread(remove_containers, job)     # Harbor that failed may not have taken its own down
     out = bytes(printed)
     results = [p for p in job.glob("*/result.json")]
     if not results:
