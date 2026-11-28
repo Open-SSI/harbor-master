@@ -206,6 +206,17 @@ DEFECTS = {"solution": "The task has no reference solution. Write solution/solve
                     "gave no answer), change nothing and say fixed is false: the check is run again as it is."}
 
 
+# A reference solution written from a passing frontier trial (`adopt`). Where the answer is a judgment no script
+# computes, such as a ranked list or a classification, that solution can only write the trial's answer out, and the
+# check of it asks whether the answer is the trial's own, not whether it is computed.
+PORTED = ("THIS SOLUTION WAS PORTED FROM THE PASSING FRONTIER TRIAL listed above: the task shipped none. Where the task's "
+          "answer is a judgment no script can compute from its data (a ranked or chosen list, a classification, a written "
+          "assessment), writing that trial's answer out as a literal is the expected form, and hard-coding is not a problem "
+          "in itself. Check instead that the literal is the trial's own: compare it with what the trial wrote and did. It is "
+          "decisive if it differs from the trial's answer in a way that matters, or follows tests/ rather than the trial. "
+          "Where the answer could be computed from the task's data by a script, hard-coding it is still decisive.")
+
+
 class RealBackend(Backend):
     """`assume_after` names the last stage that runs for real. Every later stage is assumed:
     its results come from the simulated backend, cost nothing, and are marked in the ledger."""
@@ -359,10 +370,26 @@ class RealBackend(Backend):
         before = "".join(f"\n\nAN EARLIER AUDIT, by the {e.tier} model, whose verdict was \"{e.value}\". The decision on it was "
                          f"unsure, or went against that verdict. Read the files yourself and take nothing in it on trust:\n{e.rationale}"
                          for e in (earlier or []))
-        prompt = f"{skill.data['agent']}\n\nThe task's files, its solution and tests among them, are in the current directory.{before}\n\n{describe(task)}"
-        r = await self._ask(tier, skill.data["system"], prompt, _audit_schema(c["choices"]), cwd=task.path,
-                            max_turns=40 if tier == "frontier" else 30)
+        ported = self._ported(task, check)
+        if ported:
+            folder, evidence = self._evidence(task, ported)
+            where = f"The task's files, its solution and tests among them, are under task/.\n\n{evidence}\n\n{PORTED}"
+        else:
+            folder, where = None, "The task's files, its solution and tests among them, are in the current directory."
+        prompt = f"{skill.data['agent']}\n\n{where}{before}\n\n{describe(task)}"
+        try:
+            r = await self._ask(tier, skill.data["system"], prompt, _audit_schema(c["choices"]), cwd=folder or task.path,
+                                max_turns=40 if tier == "frontier" else 30)
+        finally:
+            if folder is not None:
+                shutil.rmtree(folder, ignore_errors=True)
         return Decision(r.data["verdict"], 0.0, tier, self.cfg.tier(tier).model, r.cost, r.tokens, r.data["summary"], skill=skill.tag)
+
+    def _ported(self, task: Task, check: str) -> list[dict]:
+        """The passing frontier trial a reference solution was written from (`adopt`), when this check is of that solution."""
+        if check != "solution" or "from_trial" not in task.meta.get("_fixed", []):
+            return []
+        return [t for t in self.kept.get(task.digest, []) if not t["worker"] and t["passed"]][:1]
 
     async def check_decide(self, task: Task, check: str, audits: list[Decision]) -> Decision:
         c = CHECKS[check]
@@ -371,7 +398,7 @@ class RealBackend(Backend):
             d.cost = 0.0
             return d
         skill = skills.load(c["skill"])
-        state = {"task": describe(task, 4000)[:8000],
+        state = {"task": describe(task, 4000)[:8000], **({"note": PORTED} if self._ported(task, check) else {}),
                  "audits": [{"by": f"the {a.tier} model", "verdict": a.value, "found": a.rationale[:8000]} for a in audits]}
         answers, cost, tokens = await jev.decisions(self.cfg.tiers.decision.model, state,
                                                     {check: jev.choice(skill.data["question"], skill.data["criteria"])})
